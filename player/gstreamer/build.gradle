@@ -1,0 +1,10 @@
+dependencies {
+    implementation project(':lib')
+    implementation project(':server')
+
+    implementation 'net.java.dev.jna:jna:5.12.1'
+    implementation 'net.java.dev.jna:jna-platform:5.12.1'
+    implementation 'org.freedesktop.gstreamer:gst1-java-core:1.4.0'
+    implementation "org.slf4j:slf4j-api:$slf4jVersion"
+    // implementation 'org.freedesktop.gstreamer:gst1-java-swing:0.9.0'
+}

@@ -1,0 +1,14 @@
+plugins {
+    id 'org.springframework.boot' version "$springBootVersion"
+    id 'io.spring.dependency-management' version "$springDepMgmtVersion"
+}
+
+dependencies {
+    implementation project(':server')
+    implementation project(':player:gstreamer')
+    implementation project(':player:h264-dump')
+
+    implementation 'org.springframework.boot:spring-boot-starter'
+
+    annotationProcessor 'org.springframework.boot:spring-boot-configuration-processor'
+}

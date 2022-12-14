@@ -1,0 +1,39 @@
+{
+  "properties": [
+    {
+      "name": "player.implementation",
+      "type": "java.lang.String",
+      "description": "Player implementation: gstreamer or h264-dump etc."
+    },
+    {
+      "name": "airplay.serverName",
+      "type": "java.lang.String",
+      "description": "Name of airplay server."
+    },
+    {
+      "name": "airplay.airplayPort",
+      "type": "java.lang.String",
+      "description": "Airplay port."
+    },
+    {
+      "name": "airplay.airtunesPort",
+      "type": "java.lang.String",
+      "description": "Airtunes port."
+    },
+    {
+      "name": "airplay.width",
+      "type": "java.lang.String",
+      "description": "Airplay video width."
+    },
+    {
+      "name": "airplay.height",
+      "type": "java.lang.String",
+      "description": "Airplay video height."
+    },
+    {
+      "name": "airplay.fps",
+      "type": "java.lang.String",
+      "description": "Airplay max fps."
+    }
+  ]
+}
