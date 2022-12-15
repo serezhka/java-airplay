@@ -12,13 +12,13 @@ to publish airplay-server if someone wants to implement a player without Spring 
 
 ## Demo
 
-* Raspberry pi 4 model B (1280 x 720)
+* Raspberry pi 4 model B (1280 x 720 @ 24 fps)
 
-// TODO
+[![RASPBERRY](https://img.youtube.com/vi/uRvgVkLWfSI/hqdefault.jpg)](https://youtu.be/uRvgVkLWfSI)
 
-* Windows laptop (1920 x 1080)
+* Windows laptop (1920 x 1080 @ 30 fps)
 
-// TODO
+[![RASPBERRY](https://img.youtube.com/vi/RT1hVWGJzos/hqdefault.jpg)](https://youtu.be/RT1hVWGJzos)
 
 ## How to Run
 
