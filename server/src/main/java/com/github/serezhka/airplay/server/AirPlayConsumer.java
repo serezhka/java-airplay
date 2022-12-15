@@ -3,7 +3,7 @@ package com.github.serezhka.airplay.server;
 import com.github.serezhka.airplay.lib.AudioStreamInfo;
 import com.github.serezhka.airplay.lib.VideoStreamInfo;
 
-public interface AirplayDataConsumer {
+public interface AirPlayConsumer {
 
     void onVideo(byte[] video);
 

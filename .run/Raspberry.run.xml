@@ -1,0 +1,14 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Raspberry" type="SpringBootApplicationConfigurationType" factoryName="Spring Boot">
+    <option name="ACTIVE_PROFILES" />
+    <envs>
+      <env name="DISPLAY" value=":0" />
+    </envs>
+    <module name="java-airplay.player.app.main" />
+    <target name="kali@192.168.0.25:22" />
+    <option name="SPRING_BOOT_MAIN_CLASS" value="com.github.serezhka.airplay.app.PlayerApp" />
+    <method v="2">
+      <option name="Make" enabled="true" />
+    </method>
+  </configuration>
+</component>

@@ -6,15 +6,13 @@ import com.github.serezhka.airplay.server.internal.ControlServer;
 public class AirPlayServer {
 
     private final AirPlayBonjour airPlayBonjour;
-    private final AirplayDataConsumer airplayDataConsumer;
     private final ControlServer controlServer;
     private final AirPlayConfig airPlayConfig;
 
-    public AirPlayServer(AirPlayConfig airPlayConfig, AirplayDataConsumer airplayDataConsumer) {
+    public AirPlayServer(AirPlayConfig airPlayConfig, AirPlayConsumer airPlayConsumer) {
         this.airPlayConfig = airPlayConfig;
         airPlayBonjour = new AirPlayBonjour(airPlayConfig.getServerName());
-        this.airplayDataConsumer = airplayDataConsumer;
-        controlServer = new ControlServer(airPlayConfig, airplayDataConsumer);
+        controlServer = new ControlServer(airPlayConfig, airPlayConsumer);
     }
 
     public void start() throws Exception {

@@ -3,9 +3,8 @@ package com.github.serezhka.airplay.app.config;
 import com.github.serezhka.airplay.player.gstreamer.GstPlayer;
 import com.github.serezhka.airplay.player.h264dump.H264Dump;
 import com.github.serezhka.airplay.server.AirPlayConfig;
+import com.github.serezhka.airplay.server.AirPlayConsumer;
 import com.github.serezhka.airplay.server.AirPlayServer;
-import com.github.serezhka.airplay.server.AirplayDataConsumer;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -16,13 +15,13 @@ public class PlayerConfig {
 
     @Bean
     @ConditionalOnProperty(value = "player.implementation", havingValue = "gstreamer")
-    public AirplayDataConsumer gstreamer() {
+    public AirPlayConsumer gstreamer() {
         return new GstPlayer();
     }
 
     @Bean
-    @ConditionalOnProperty(value = "player.implementation", havingValue = "h264-dump")
-    public AirplayDataConsumer h264dump() throws Exception {
+    @ConditionalOnProperty(value = "player.implementation", havingValue = "h264-dump", matchIfMissing = true)
+    public AirPlayConsumer h264dump() throws Exception {
         return new H264Dump();
     }
 
@@ -34,8 +33,7 @@ public class PlayerConfig {
 
     @Bean
     public AirPlayServer airPlayServer(AirPlayConfig airPlayConfig,
-                                       AirplayDataConsumer airplayDataConsumer) {
-
-        return new AirPlayServer(airPlayConfig, airplayDataConsumer);
+                                       AirPlayConsumer airPlayConsumer) {
+        return new AirPlayServer(airPlayConfig, airPlayConsumer);
     }
 }

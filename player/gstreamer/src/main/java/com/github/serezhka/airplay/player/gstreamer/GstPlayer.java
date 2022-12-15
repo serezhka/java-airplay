@@ -2,14 +2,14 @@ package com.github.serezhka.airplay.player.gstreamer;
 
 import com.github.serezhka.airplay.lib.AudioStreamInfo;
 import com.github.serezhka.airplay.lib.VideoStreamInfo;
-import com.github.serezhka.airplay.server.AirplayDataConsumer;
+import com.github.serezhka.airplay.server.AirPlayConsumer;
 import lombok.extern.slf4j.Slf4j;
 import org.freedesktop.gstreamer.*;
 import org.freedesktop.gstreamer.elements.AppSrc;
 import org.freedesktop.gstreamer.glib.GLib;
 
 @Slf4j
-public class GstPlayer implements AirplayDataConsumer {
+public class GstPlayer implements AirPlayConsumer {
 
     static {
         GstPlayerUtils.configurePaths();

@@ -1,5 +1,6 @@
 package com.github.serezhka.airplay.server.internal;
 
+import com.github.serezhka.airplay.server.internal.decoder.AudioDecoder;
 import com.github.serezhka.airplay.server.internal.handler.audio.AudioHandler;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.ChannelInitializer;
@@ -10,6 +11,7 @@ import io.netty.channel.epoll.EpollEventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.DatagramChannel;
 import io.netty.channel.socket.nio.NioDatagramChannel;
+import io.netty.handler.codec.DatagramPacketDecoder;
 import lombok.extern.slf4j.Slf4j;
 
 import java.net.InetSocketAddress;
@@ -40,12 +42,13 @@ public class AudioReceiver implements Runnable {
                     .handler(new ChannelInitializer<DatagramChannel>() {
                         @Override
                         public void initChannel(final DatagramChannel ch) {
-                            ch.pipeline().addLast(audioHandler);
+                            ch.pipeline().addLast("audioDecoder", new DatagramPacketDecoder(new AudioDecoder()));
+                            ch.pipeline().addLast("audioHandler", audioHandler);
                         }
                     });
             var channelFuture = bootstrap.bind().sync();
 
-            log.info("Audio receiver listening on port: {}",
+            log.info("AirPlay audio receiver listening on port: {}",
                     port = ((InetSocketAddress) channelFuture.channel().localAddress()).getPort());
 
             synchronized (monitor) {
@@ -54,9 +57,9 @@ public class AudioReceiver implements Runnable {
 
             channelFuture.channel().closeFuture().sync();
         } catch (InterruptedException e) {
-            log.info("Audio receiver interrupted");
+            log.info("AirPlay audio receiver interrupted");
         } finally {
-            log.info("Audio receiver stopped");
+            log.info("AirPlay audio receiver stopped");
             workerGroup.shutdownGracefully();
         }
     }

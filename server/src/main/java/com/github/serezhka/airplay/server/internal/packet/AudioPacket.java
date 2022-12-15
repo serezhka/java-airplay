@@ -1,7 +1,12 @@
-package com.github.serezhka.airplay.server.internal.handler.audio;
+package com.github.serezhka.airplay.server.internal.packet;
+
+import lombok.Builder;
+import lombok.Data;
 
 import java.util.function.Consumer;
 
+@Data
+@Builder
 public class AudioPacket {
 
     private final byte[] encodedAudio = new byte[480 * 4];
@@ -52,37 +57,5 @@ public class AudioPacket {
     public AudioPacket encodedAudio(Consumer<byte[]> writer) {
         writer.accept(encodedAudio);
         return this;
-    }
-
-    public boolean isAvailable() {
-        return available;
-    }
-
-    public int getFlag() {
-        return flag;
-    }
-
-    public int getType() {
-        return type;
-    }
-
-    public int getSequenceNumber() {
-        return sequenceNumber;
-    }
-
-    public long getTimestamp() {
-        return timestamp;
-    }
-
-    public long getSsrc() {
-        return ssrc;
-    }
-
-    public int getEncodedAudioSize() {
-        return encodedAudioSize;
-    }
-
-    public byte[] getEncodedAudio() {
-        return encodedAudio;
     }
 }

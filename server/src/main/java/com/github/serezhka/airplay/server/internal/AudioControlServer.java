@@ -45,7 +45,7 @@ public class AudioControlServer implements Runnable {
 
             var channelFuture = bootstrap.bind().sync();
 
-            log.info("Audio control server listening on port: {}",
+            log.info("AirPlay audio control server listening on port: {}",
                     port = ((InetSocketAddress) channelFuture.channel().localAddress()).getPort());
 
             synchronized (monitor) {
@@ -54,9 +54,9 @@ public class AudioControlServer implements Runnable {
 
             channelFuture.channel().closeFuture().sync();
         } catch (InterruptedException e) {
-            log.info("Audio control server interrupted");
+            log.info("AirPlay audio control server interrupted");
         } finally {
-            log.info("Audio control server stopped");
+            log.info("AirPlay audio control server stopped");
             workerGroup.shutdownGracefully();
         }
     }

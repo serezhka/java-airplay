@@ -30,7 +30,7 @@ public class Session {
         this.audioControlServerThread = audioControlServerThread;
     }
 
-    public boolean isMirroringActive() {
+    public boolean isVideoActive() {
         return airPlayReceiverThread != null;
     }
 
@@ -38,7 +38,7 @@ public class Session {
         return audioReceiverThread != null && audioControlServerThread != null;
     }
 
-    public void stopMirroring() {
+    public void stopVideo() {
         if (airPlayReceiverThread != null) {
             airPlayReceiverThread.interrupt();
             airPlayReceiverThread = null;

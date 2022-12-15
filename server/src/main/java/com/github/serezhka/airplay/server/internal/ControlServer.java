@@ -1,7 +1,7 @@
 package com.github.serezhka.airplay.server.internal;
 
 import com.github.serezhka.airplay.server.AirPlayConfig;
-import com.github.serezhka.airplay.server.AirplayDataConsumer;
+import com.github.serezhka.airplay.server.AirPlayConsumer;
 import com.github.serezhka.airplay.server.internal.handler.control.FairPlayHandler;
 import com.github.serezhka.airplay.server.internal.handler.control.HeartBeatHandler;
 import com.github.serezhka.airplay.server.internal.handler.control.PairingHandler;
@@ -37,12 +37,12 @@ public class ControlServer implements Runnable {
 
     private final int airTunesPort;
 
-    public ControlServer(AirPlayConfig airPlayConfig, AirplayDataConsumer airplayDataConsumer) {
+    public ControlServer(AirPlayConfig airPlayConfig, AirPlayConsumer airPlayConsumer) {
         this.airTunesPort = airPlayConfig.getAirtunesPort();
         SessionManager sessionManager = new SessionManager();
         pairingHandler = new PairingHandler(airPlayConfig, sessionManager);
         fairPlayHandler = new FairPlayHandler(sessionManager);
-        rtspHandler = new RTSPHandler(airPlayConfig.getAirplayPort(), airTunesPort, sessionManager, airplayDataConsumer);
+        rtspHandler = new RTSPHandler(airPlayConfig.getAirplayPort(), airTunesPort, sessionManager, airPlayConsumer);
         heartBeatHandler = new HeartBeatHandler(sessionManager);
     }
 
@@ -74,12 +74,12 @@ public class ControlServer implements Runnable {
                     .childOption(ChannelOption.SO_REUSEADDR, true)
                     .childOption(ChannelOption.SO_KEEPALIVE, true);
             var channelFuture = serverBootstrap.bind().sync();
-            log.info("Control server listening on port: {}", airTunesPort);
+            log.info("AirPlay control server listening on port: {}", airTunesPort);
             channelFuture.channel().closeFuture().sync();
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            log.info("Control server stopped");
+            log.info("AirPlay control server stopped");
             bossGroup.shutdownGracefully();
             workerGroup.shutdownGracefully();
         }

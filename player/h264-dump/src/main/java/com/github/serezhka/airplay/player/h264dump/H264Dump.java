@@ -2,7 +2,7 @@ package com.github.serezhka.airplay.player.h264dump;
 
 import com.github.serezhka.airplay.lib.AudioStreamInfo;
 import com.github.serezhka.airplay.lib.VideoStreamInfo;
-import com.github.serezhka.airplay.server.AirplayDataConsumer;
+import com.github.serezhka.airplay.server.AirPlayConsumer;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 
@@ -13,7 +13,7 @@ import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 
 @Slf4j
-public class H264Dump implements AirplayDataConsumer {
+public class H264Dump implements AirPlayConsumer {
 
     private final FileChannel videoFileChannel;
 

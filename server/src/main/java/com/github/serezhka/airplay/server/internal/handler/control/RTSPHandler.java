@@ -3,14 +3,14 @@ package com.github.serezhka.airplay.server.internal.handler.control;
 import com.github.serezhka.airplay.lib.AudioStreamInfo;
 import com.github.serezhka.airplay.lib.MediaStreamInfo;
 import com.github.serezhka.airplay.lib.VideoStreamInfo;
-import com.github.serezhka.airplay.server.AirplayDataConsumer;
+import com.github.serezhka.airplay.server.AirPlayConsumer;
 import com.github.serezhka.airplay.server.internal.AudioControlServer;
 import com.github.serezhka.airplay.server.internal.AudioReceiver;
-import com.github.serezhka.airplay.server.internal.MirroringReceiver;
+import com.github.serezhka.airplay.server.internal.VideoReceiver;
 import com.github.serezhka.airplay.server.internal.handler.audio.AudioHandler;
-import com.github.serezhka.airplay.server.internal.handler.mirroring.MirroringHandler;
 import com.github.serezhka.airplay.server.internal.handler.session.Session;
 import com.github.serezhka.airplay.server.internal.handler.session.SessionManager;
+import com.github.serezhka.airplay.server.internal.handler.video.VideoHandler;
 import io.netty.buffer.ByteBufInputStream;
 import io.netty.buffer.ByteBufOutputStream;
 import io.netty.channel.ChannelHandler;
@@ -25,14 +25,14 @@ import java.nio.charset.StandardCharsets;
 @ChannelHandler.Sharable
 public class RTSPHandler extends ControlHandler {
 
-    private final AirplayDataConsumer airplayDataConsumer;
+    private final AirPlayConsumer airPlayConsumer;
     private final int airPlayPort;
     private final int airTunesPort;
 
     public RTSPHandler(int airPlayPort, int airTunesPort, SessionManager sessionManager,
-                       AirplayDataConsumer airplayDataConsumer) {
+                       AirPlayConsumer airPlayConsumer) {
         super(sessionManager);
-        this.airplayDataConsumer = airplayDataConsumer;
+        this.airPlayConsumer = airPlayConsumer;
         this.airPlayPort = airPlayPort;
         this.airTunesPort = airTunesPort;
     }
@@ -55,9 +55,9 @@ public class RTSPHandler extends ControlHandler {
                         log.info("Audio compression type is: {}", audioStreamInfo.getCompressionType());
                         log.info("Audio samples per frame is: {}", audioStreamInfo.getSamplesPerFrame());
 
-                        airplayDataConsumer.onAudioFormat(audioStreamInfo);
+                        airPlayConsumer.onAudioFormat(audioStreamInfo);
 
-                        var audioHandler = new AudioHandler(session.getAirPlay(), airplayDataConsumer);
+                        var audioHandler = new AudioHandler(session.getAirPlay(), airPlayConsumer);
                         var audioReceiver = new AudioReceiver(audioHandler, this);
                         var audioReceiverThread = new Thread(audioReceiver);
                         session.setAudioReceiverThread(audioReceiverThread);
@@ -82,13 +82,13 @@ public class RTSPHandler extends ControlHandler {
                     case VIDEO:
                         VideoStreamInfo videoStreamInfo = (VideoStreamInfo) mediaStreamInfo;
 
-                        airplayDataConsumer.onVideoFormat(videoStreamInfo);
+                        airPlayConsumer.onVideoFormat(videoStreamInfo);
 
-                        var mirroringHandler = new MirroringHandler(session.getAirPlay(), airplayDataConsumer);
-                        var airPlayReceiver = new MirroringReceiver(airPlayPort, mirroringHandler);
-                        var airPlayReceiverThread = new Thread(airPlayReceiver);
-                        session.setAirPlayReceiverThread(airPlayReceiverThread);
-                        airPlayReceiverThread.start();
+                        var videoHandler = new VideoHandler(session.getAirPlay(), airPlayConsumer);
+                        var videoReceiver = new VideoReceiver(airPlayPort, videoHandler);
+                        var videoReceiverThread = new Thread(videoReceiver);
+                        session.setAirPlayReceiverThread(videoReceiverThread);
+                        videoReceiverThread.start();
 
                         session.getAirPlay().rtspSetupVideo(new ByteBufOutputStream(response.content()), airPlayPort, airTunesPort, 7011);
                         break;
@@ -115,12 +115,12 @@ public class RTSPHandler extends ControlHandler {
                         session.stopAudio();
                         break;
                     case VIDEO:
-                        session.stopMirroring();
+                        session.stopVideo();
                         break;
                 }
             } else {
                 session.stopAudio();
-                session.stopMirroring();
+                session.stopVideo();
             }
             return sendResponse(ctx, request, response);
         } else if ("POST".equals(request.method().toString()) && request.uri().equals("/audioMode")) {

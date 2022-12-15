@@ -5,7 +5,6 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.builder.SpringApplicationBuilder;
@@ -27,12 +26,10 @@ public class PlayerApp {
     @PostConstruct
     private void postConstruct() throws Exception {
         airPlayServer.start();
-        log.info("AirPlay server started!");
     }
 
     @PreDestroy
     private void preDestroy() {
         airPlayServer.stop();
-        log.info("AirPlay server stopped!");
     }
 }

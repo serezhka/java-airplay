@@ -1,7 +1,7 @@
 package com.github.serezhka.airplay.server.internal;
 
-import com.github.serezhka.airplay.server.internal.decoder.MirroringDecoder;
-import com.github.serezhka.airplay.server.internal.handler.mirroring.MirroringHandler;
+import com.github.serezhka.airplay.server.internal.decoder.VideoDecoder;
+import com.github.serezhka.airplay.server.internal.handler.video.VideoHandler;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
@@ -18,14 +18,14 @@ import lombok.extern.slf4j.Slf4j;
 import java.net.InetSocketAddress;
 
 @Slf4j
-public class MirroringReceiver implements Runnable {
+public class VideoReceiver implements Runnable {
 
     private final int port;
-    private final MirroringHandler mirroringHandler;
+    private final VideoHandler videoHandler;
 
-    public MirroringReceiver(int port, MirroringHandler mirroringHandler) {
+    public VideoReceiver(int port, VideoHandler videoHandler) {
         this.port = port;
-        this.mirroringHandler = mirroringHandler;
+        this.videoHandler = videoHandler;
     }
 
     @Override
@@ -33,7 +33,6 @@ public class MirroringReceiver implements Runnable {
         var serverBootstrap = new ServerBootstrap();
         var bossGroup = eventLoopGroup();
         var workerGroup = eventLoopGroup();
-        // var executorGroup = new DefaultEventExecutorGroup(4);
         try {
             serverBootstrap
                     .group(bossGroup, workerGroup)
@@ -42,19 +41,20 @@ public class MirroringReceiver implements Runnable {
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         public void initChannel(final SocketChannel ch) {
-                            ch.pipeline().addLast(new MirroringDecoder(), mirroringHandler); // executorGroup
+                            ch.pipeline().addLast("videoDecoder", new VideoDecoder());
+                            ch.pipeline().addLast("videoHandler", videoHandler);
                         }
                     })
                     .childOption(ChannelOption.TCP_NODELAY, true)
                     .childOption(ChannelOption.SO_REUSEADDR, true)
                     .childOption(ChannelOption.SO_KEEPALIVE, true);
             var channelFuture = serverBootstrap.bind().sync();
-            log.info("Mirroring receiver listening on port: {}", port);
+            log.info("AirPlay video receiver listening on port: {}", port);
             channelFuture.channel().closeFuture().sync();
         } catch (InterruptedException e) {
-            log.info("Mirroring receiver interrupted");
+            log.info("AirPlay video receiver interrupted");
         } finally {
-            log.info("Mirroring receiver stopped");
+            log.info("AirPlay video receiver stopped");
             bossGroup.shutdownGracefully();
             workerGroup.shutdownGracefully();
         }
