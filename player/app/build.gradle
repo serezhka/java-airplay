@@ -10,5 +10,7 @@ dependencies {
 
     implementation 'org.springframework.boot:spring-boot-starter'
 
+    implementation 'com.dorkbox:SystemTray:4.1'
+
     annotationProcessor 'org.springframework.boot:spring-boot-configuration-processor'
 }

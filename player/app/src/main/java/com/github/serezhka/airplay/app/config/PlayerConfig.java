@@ -1,5 +1,6 @@
 package com.github.serezhka.airplay.app.config;
 
+import com.github.serezhka.airplay.app.menu.SystemTrayMenu;
 import com.github.serezhka.airplay.player.gstreamer.GstPlayer;
 import com.github.serezhka.airplay.player.h264dump.H264Dump;
 import com.github.serezhka.airplay.server.AirPlayConfig;
@@ -7,6 +8,7 @@ import com.github.serezhka.airplay.server.AirPlayConsumer;
 import com.github.serezhka.airplay.server.AirPlayServer;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -29,6 +31,12 @@ public class PlayerConfig {
     @ConfigurationProperties(prefix = "airplay")
     public AirPlayConfig airPlayConfig() {
         return new AirPlayConfig();
+    }
+
+    @Bean
+    @ConditionalOnProperty(value = "player.menu.enabled", havingValue = "true")
+    public SystemTrayMenu systemTrayMenu(ApplicationContext context) {
+        return new SystemTrayMenu(context);
     }
 
     @Bean

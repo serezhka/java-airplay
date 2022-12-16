@@ -5,3 +5,4 @@ out
 local.properties
 dump.h264
 log
+log.*

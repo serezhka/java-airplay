@@ -9,6 +9,7 @@ ext {
     junitVersion = '5.9.1'
     nettyVersion = '4.1.85.Final'
     slf4jVersion = '2.0.5'
+    jnaVersion = '5.12.1'
 }
 
 allprojects {

@@ -1,11 +1,6 @@
 {
   "properties": [
     {
-      "name": "player.implementation",
-      "type": "java.lang.String",
-      "description": "Player implementation: gstreamer or h264-dump etc."
-    },
-    {
       "name": "airplay.serverName",
       "type": "java.lang.String",
       "description": "Name of airplay server."
@@ -34,6 +29,16 @@
       "name": "airplay.fps",
       "type": "java.lang.String",
       "description": "Airplay max fps."
+    },
+    {
+      "name": "player.implementation",
+      "type": "java.lang.String",
+      "description": "Player implementation: gstreamer or h264-dump etc."
+    },
+    {
+      "name": "player.menu.enabled",
+      "type": "java.lang.String",
+      "description": "Enables system tray menu."
     }
   ]
 }
