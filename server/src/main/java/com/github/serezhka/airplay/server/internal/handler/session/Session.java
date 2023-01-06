@@ -6,7 +6,7 @@ public class Session {
 
     private final AirPlay airPlay;
 
-    private Thread airPlayReceiverThread;
+    private Thread videoReceiverThread;
     private Thread audioReceiverThread;
     private Thread audioControlServerThread;
 
@@ -18,8 +18,8 @@ public class Session {
         return airPlay;
     }
 
-    public void setAirPlayReceiverThread(Thread airPlayReceiverThread) {
-        this.airPlayReceiverThread = airPlayReceiverThread;
+    public void setVideoReceiverThread(Thread videoReceiverThread) {
+        this.videoReceiverThread = videoReceiverThread;
     }
 
     public void setAudioReceiverThread(Thread audioReceiverThread) {
@@ -31,7 +31,7 @@ public class Session {
     }
 
     public boolean isVideoActive() {
-        return airPlayReceiverThread != null;
+        return videoReceiverThread != null;
     }
 
     public boolean isAudioActive() {
@@ -39,9 +39,9 @@ public class Session {
     }
 
     public void stopVideo() {
-        if (airPlayReceiverThread != null) {
-            airPlayReceiverThread.interrupt();
-            airPlayReceiverThread = null;
+        if (videoReceiverThread != null) {
+            videoReceiverThread.interrupt();
+            videoReceiverThread = null;
         }
         // TODO destroy fair play video decryptor
     }

@@ -42,6 +42,7 @@ airplay.fps=24
 # player (gstreamer, h264-dump)
 player.implementation=gstreamer
 player.menu.enabled=true
+player.gstreamer.swing=true
 ```
 
 ## Players

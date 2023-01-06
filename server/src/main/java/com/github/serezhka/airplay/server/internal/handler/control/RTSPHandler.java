@@ -87,7 +87,7 @@ public class RTSPHandler extends ControlHandler {
                         var videoHandler = new VideoHandler(session.getAirPlay(), airPlayConsumer);
                         var videoReceiver = new VideoReceiver(airPlayPort, videoHandler);
                         var videoReceiverThread = new Thread(videoReceiver);
-                        session.setAirPlayReceiverThread(videoReceiverThread);
+                        session.setVideoReceiverThread(videoReceiverThread);
                         videoReceiverThread.start();
 
                         session.getAirPlay().rtspSetupVideo(new ByteBufOutputStream(response.content()), airPlayPort, airTunesPort, 7011);
@@ -113,14 +113,18 @@ public class RTSPHandler extends ControlHandler {
                 switch (mediaStreamInfo.getStreamType()) {
                     case AUDIO:
                         session.stopAudio();
+                        airPlayConsumer.onAudioSrcDisconnect();
                         break;
                     case VIDEO:
                         session.stopVideo();
+                        airPlayConsumer.onVideoSrcDisconnect();
                         break;
                 }
             } else {
                 session.stopAudio();
                 session.stopVideo();
+                airPlayConsumer.onAudioSrcDisconnect();
+                airPlayConsumer.onVideoSrcDisconnect();
             }
             return sendResponse(ctx, request, response);
         } else if ("POST".equals(request.method().toString()) && request.uri().equals("/audioMode")) {

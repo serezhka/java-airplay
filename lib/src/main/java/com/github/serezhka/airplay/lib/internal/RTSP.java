@@ -25,7 +25,7 @@ public class RTSP {
     public MediaStreamInfo getMediaStreamInfo(InputStream rtspSetupPayload) throws Exception {
         NSDictionary rtspSetup = (NSDictionary) BinaryPropertyListParser.parse(rtspSetupPayload);
 
-        log.debug("Binary property list parsed:\n{}", rtspSetup.toXMLPropertyList());
+        log.info("Binary property list parsed:\n{}", rtspSetup.toXMLPropertyList());
 
         if (rtspSetup.containsKey("streams")) {
             // assume one stream info per RTSP SETUP request

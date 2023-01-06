@@ -36,9 +36,14 @@
       "description": "Player implementation: gstreamer or h264-dump etc."
     },
     {
-      "name": "player.menu.enabled",
-      "type": "java.lang.String",
+      "name": "player.tray.enabled",
+      "type": "java.lang.Boolean",
       "description": "Enables system tray menu."
+    },
+    {
+      "name": "player.gstreamer.swing",
+      "type": "java.lang.Boolean",
+      "description": "Use swing window instead of GStreamer's default."
     }
   ]
 }

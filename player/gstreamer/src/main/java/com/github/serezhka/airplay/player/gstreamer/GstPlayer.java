@@ -3,13 +3,11 @@ package com.github.serezhka.airplay.player.gstreamer;
 import com.github.serezhka.airplay.lib.AudioStreamInfo;
 import com.github.serezhka.airplay.lib.VideoStreamInfo;
 import com.github.serezhka.airplay.server.AirPlayConsumer;
-import lombok.extern.slf4j.Slf4j;
 import org.freedesktop.gstreamer.*;
 import org.freedesktop.gstreamer.elements.AppSrc;
 import org.freedesktop.gstreamer.glib.GLib;
 
-@Slf4j
-public class GstPlayer implements AirPlayConsumer {
+public abstract class GstPlayer implements AirPlayConsumer {
 
     static {
         GstPlayerUtils.configurePaths();
@@ -17,7 +15,7 @@ public class GstPlayer implements AirPlayConsumer {
         Gst.init(Version.of(1, 10), "BasicPipeline");
     }
 
-    private final Pipeline h264Pipeline;
+    protected final Pipeline h264Pipeline;
     private final Pipeline alacPipeline;
     private final Pipeline aacEldPipeline;
 
@@ -28,7 +26,7 @@ public class GstPlayer implements AirPlayConsumer {
     private AudioStreamInfo.CompressionType audioCompressionType;
 
     public GstPlayer() {
-        h264Pipeline = (Pipeline) Gst.parseLaunch("appsrc name=h264-src ! h264parse ! avdec_h264 ! autovideosink sync=false");
+        h264Pipeline = createH264Pipeline();
 
         h264Src = (AppSrc) h264Pipeline.getElementByName("h264-src");
         h264Src.setStreamType(AppSrc.StreamType.STREAM);
@@ -36,9 +34,6 @@ public class GstPlayer implements AirPlayConsumer {
         h264Src.set("is-live", true);
         h264Src.set("format", Format.TIME);
         h264Src.set("emit-signals", true);
-
-        h264Pipeline.play();
-
 
         alacPipeline = (Pipeline) Gst.parseLaunch("appsrc name=alac-src ! avdec_alac ! audioconvert ! audioresample ! autoaudiosink sync=false"); // +
 
@@ -49,9 +44,6 @@ public class GstPlayer implements AirPlayConsumer {
         alacSrc.set("format", Format.TIME);
         alacSrc.set("emit-signals", true);
 
-        alacPipeline.play();
-
-
         aacEldPipeline = (Pipeline) Gst.parseLaunch("appsrc name=aac-eld-src ! avdec_aac ! audioconvert ! audioresample ! autoaudiosink sync=false"); // +
 
         aacEldSrc = (AppSrc) aacEldPipeline.getElementByName("aac-eld-src");
@@ -60,8 +52,13 @@ public class GstPlayer implements AirPlayConsumer {
         aacEldSrc.set("is-live", true);
         aacEldSrc.set("format", Format.TIME);
         aacEldSrc.set("emit-signals", true);
+    }
 
-        aacEldPipeline.play();
+    protected abstract Pipeline createH264Pipeline();
+
+    @Override
+    public void onVideoFormat(VideoStreamInfo videoStreamInfo) {
+        h264Pipeline.play();
     }
 
     @Override
@@ -69,6 +66,18 @@ public class GstPlayer implements AirPlayConsumer {
         Buffer buf = new Buffer(bytes.length);
         buf.map(true).put(bytes); // ByteBuffer.wrap(bytes)
         h264Src.pushBuffer(buf);
+    }
+
+    @Override
+    public void onVideoSrcDisconnect() {
+        h264Pipeline.stop();
+    }
+
+    @Override
+    public void onAudioFormat(AudioStreamInfo audioStreamInfo) {
+        this.audioCompressionType = audioStreamInfo.getCompressionType();
+        alacPipeline.play();
+        aacEldPipeline.play();
     }
 
     @Override
@@ -88,13 +97,8 @@ public class GstPlayer implements AirPlayConsumer {
     }
 
     @Override
-    public void onVideoFormat(VideoStreamInfo videoStreamInfo) {
-        log.info("onVideoFormat");
-    }
-
-    @Override
-    public void onAudioFormat(AudioStreamInfo audioStreamInfo) {
-        log.info("onAudioFormat: {}", audioStreamInfo.getAudioFormat());
-        this.audioCompressionType = audioStreamInfo.getCompressionType();
+    public void onAudioSrcDisconnect() {
+        alacPipeline.stop();
+        aacEldPipeline.stop();
     }
 }

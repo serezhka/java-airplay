@@ -23,17 +23,24 @@ public class H264Dump implements AirPlayConsumer {
     }
 
     @Override
-    public void onVideo(byte[] video) {
+    public void onVideo(byte[] bytes) {
         try {
-            videoFileChannel.write(ByteBuffer.wrap(video));
+            videoFileChannel.write(ByteBuffer.wrap(bytes));
         } catch (IOException e) {
             e.printStackTrace();
         }
     }
 
     @Override
-    public void onAudio(byte[] audio) {
+    public void onVideoSrcDisconnect() {
+    }
 
+    @Override
+    public void onAudio(byte[] bytes) {
+    }
+
+    @Override
+    public void onAudioSrcDisconnect() {
     }
 
     @Override
@@ -41,7 +48,7 @@ public class H264Dump implements AirPlayConsumer {
     }
 
     @Override
-    public void onAudioFormat(AudioStreamInfo audioInfo) {
+    public void onAudioFormat(AudioStreamInfo audioStreamInfo) {
     }
 
     @PreDestroy

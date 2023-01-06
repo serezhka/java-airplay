@@ -5,11 +5,15 @@ import com.github.serezhka.airplay.lib.VideoStreamInfo;
 
 public interface AirPlayConsumer {
 
-    void onVideo(byte[] video);
-
     void onVideoFormat(VideoStreamInfo videoStreamInfo);
 
-    void onAudio(byte[] audio);
+    void onVideo(byte[] bytes);
 
-    void onAudioFormat(AudioStreamInfo audioInfo);
+    void onVideoSrcDisconnect();
+
+    void onAudioFormat(AudioStreamInfo audioStreamInfo);
+
+    void onAudio(byte[] bytes);
+
+    void onAudioSrcDisconnect();
 }

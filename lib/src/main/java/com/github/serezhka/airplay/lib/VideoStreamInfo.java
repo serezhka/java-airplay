@@ -2,10 +2,10 @@ package com.github.serezhka.airplay.lib;
 
 public class VideoStreamInfo implements MediaStreamInfo {
 
-    private final String streamConnectionID;
+    private final String streamConnectionId;
 
-    public VideoStreamInfo(String streamConnectionID) {
-        this.streamConnectionID = streamConnectionID;
+    public VideoStreamInfo(String streamConnectionId) {
+        this.streamConnectionId = streamConnectionId;
     }
 
     @Override
@@ -13,7 +13,7 @@ public class VideoStreamInfo implements MediaStreamInfo {
         return MediaStreamInfo.StreamType.VIDEO;
     }
 
-    public String getStreamConnectionID() {
-        return streamConnectionID;
+    public String getStreamConnectionId() {
+        return streamConnectionId;
     }
 }
