@@ -14,3 +14,7 @@ dependencies {
 
     annotationProcessor 'org.springframework.boot:spring-boot-configuration-processor'
 }
+
+bootJar {
+    archiveBaseName.set('java-airplay-server')
+}

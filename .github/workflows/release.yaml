@@ -1,0 +1,32 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-java@v3
+        with:
+          java-version: 17
+          distribution: zulu
+      - uses: gradle/gradle-build-action@v2
+        with:
+          gradle-version: 7.6
+          arguments: bootJar
+
+      - run: echo "tag=${REF##*/v}" >> $GITHUB_ENV
+
+      - uses: softprops/action-gh-release@v1
+        env:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ env.tag }}
+          name: ${{ env.tag }}
+          draft: false
+          files: player/app/build/libs/*
