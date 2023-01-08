@@ -1,5 +1,6 @@
 # Java AirPlay Server
 
+[![GitHub release](https://img.shields.io/github/v/release/serezhka/java-airplay)](https://github.com/serezhka/java-airplay/releases)
 [![build](https://github.com/serezhka/java-airplay/actions/workflows/build.yaml/badge.svg)](https://github.com/serezhka/java-airplay/actions/workflows/build.yaml)
 ![ViewCount](https://views.whatilearened.today/views/github/serezhka/java-airplay.svg)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](http://opensource.org/licenses/MIT)
@@ -22,15 +23,28 @@ to publish airplay-server if someone wants to implement their own player.
 
 ## How to Run
 
+### From sources
+
 ```shell
 git clone https://github.com/serezhka/java-airplay
 cd ./java-airplay
 ./gradlew bootRun
 ```
 
+### Pre-built app
+
+Download the latest release
+
+```shell
+java -jar java-airplay-server-{version}.jar
+```
+
 ## Configuration
 
-#### **`application.properties`**
+Create `application.properties` file in working dir
+
+### Available properties
+
 ```properties
 # airplay
 airplay.serverName=srzhka
