@@ -71,7 +71,7 @@ Gstreamer installation is required (see https://github.com/gstreamer-java/gst1-j
 Supports only video stream because playback of aac_eld audio requires ffmpeg compilation with ```--enable-libfdk-aac```  <br>
 FFmpeg installation is required, ffplay must be on PATH
 
-###
+### VLC
 
 Playback stops after few seconds <br>
 VLC installation is required
