@@ -53,7 +53,7 @@ airplay.airtunesPort=5001
 airplay.width=1280
 airplay.height=720
 airplay.fps=24
-# player (gstreamer, h264-dump)
+# player (gstreamer, ffmpeg, vlc, h264-dump)
 player.implementation=gstreamer
 player.menu.enabled=true
 player.gstreamer.swing=true
@@ -65,6 +65,16 @@ player.gstreamer.swing=true
 
 Supports both video and audio (alac + aac_eld) streams <br>
 Gstreamer installation is required (see https://github.com/gstreamer-java/gst1-java-core)
+
+### FFmpeg
+
+Supports only video stream because playback of aac_eld audio requires ffmpeg compilation with ```--enable-libfdk-aac```  <br>
+FFmpeg installation is required, ffplay must be on PATH
+
+###
+
+Playback stops after few seconds <br>
+VLC installation is required
 
 ### h264-dump
 

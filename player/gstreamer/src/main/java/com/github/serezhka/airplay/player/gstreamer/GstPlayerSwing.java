@@ -12,11 +12,11 @@ import java.awt.*;
 
 public class GstPlayerSwing extends GstPlayer {
 
-    private final JFrame window;
-
     static {
         FlatDarkLaf.setup();
     }
+
+    private final JFrame window;
 
     public GstPlayerSwing() {
         AppSink sink = (AppSink) h264Pipeline.getElementByName("sink");

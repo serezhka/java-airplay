@@ -1,9 +1,11 @@
 package com.github.serezhka.airplay.app.config;
 
 import com.github.serezhka.airplay.app.menu.SystemTrayMenu;
+import com.github.serezhka.airplay.player.ffmpeg.FFmpegPlayer;
 import com.github.serezhka.airplay.player.gstreamer.GstPlayerDefault;
 import com.github.serezhka.airplay.player.gstreamer.GstPlayerSwing;
 import com.github.serezhka.airplay.player.h264dump.H264Dump;
+import com.github.serezhka.airplay.player.vlc.VlcPlayer;
 import com.github.serezhka.airplay.server.AirPlayConfig;
 import com.github.serezhka.airplay.server.AirPlayConsumer;
 import com.github.serezhka.airplay.server.AirPlayServer;
@@ -27,6 +29,18 @@ public class PlayerConfig {
     @ConditionalOnProperty(value = "player.implementation", havingValue = "h264-dump", matchIfMissing = true)
     public AirPlayConsumer h264dump() throws Exception {
         return new H264Dump();
+    }
+
+    @Bean
+    @ConditionalOnProperty(value = "player.implementation", havingValue = "vlc")
+    public AirPlayConsumer vlc() {
+        return new VlcPlayer();
+    }
+
+    @Bean
+    @ConditionalOnProperty(value = "player.implementation", havingValue = "ffmpeg")
+    public AirPlayConsumer ffmpeg() {
+        return new FFmpegPlayer();
     }
 
     @Bean

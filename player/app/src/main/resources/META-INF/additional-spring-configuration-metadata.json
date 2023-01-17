@@ -45,5 +45,24 @@
       "type": "java.lang.Boolean",
       "description": "Use swing window instead of GStreamer's default."
     }
+  ],
+  "hints": [
+    {
+      "name": "player.implementation",
+      "values": [
+        {
+          "value": "gstreamer"
+        },
+        {
+          "value": "vlc"
+        },
+        {
+          "value": "h264-dump"
+        },
+        {
+          "value": "ffmpeg"
+        }
+      ]
+    }
   ]
 }
