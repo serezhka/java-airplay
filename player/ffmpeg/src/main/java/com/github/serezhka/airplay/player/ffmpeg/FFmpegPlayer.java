@@ -15,7 +15,7 @@ public class FFmpegPlayer implements AirPlayConsumer {
     @Override
     public void onVideoFormat(VideoStreamInfo videoStreamInfo) {
         try {
-            ProcessBuilder pb = new ProcessBuilder("ffplay", "-f", "h264", "-codec:v", "h264", "-probesize", "32",
+            ProcessBuilder pb = new ProcessBuilder("ffplay", "-fs", "-f", "h264", "-codec:v", "h264", "-probesize", "32",
                     "-analyzeduration", "0", "-vf", "setpts=0", "-flags", "low_delay", "-");
             pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
             pb.redirectError(ProcessBuilder.Redirect.INHERIT);
@@ -31,7 +31,7 @@ public class FFmpegPlayer implements AirPlayConsumer {
             h264Process.getOutputStream().write(bytes);
             h264Process.getOutputStream().flush();
         } catch (IOException e) {
-            e.printStackTrace();
+            log.error(e.getMessage());
         }
     }
 

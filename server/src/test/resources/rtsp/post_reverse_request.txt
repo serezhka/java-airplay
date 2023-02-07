@@ -1,0 +1,9 @@
+POST /reverse HTTP/1.1
+Upgrade: PTTH/1.0
+Connection: Upgrade
+X-Apple-Purpose: event
+X-Apple-Client-Name: srzhka
+Content-Length: 0
+X-Apple-Device-ID: 0xb4197450e18a
+X-Apple-Session-ID: 4cdb62c4-2107-4d9a-bd58-dc2588230b8e
+User-Agent: AirPlay/670.6.2

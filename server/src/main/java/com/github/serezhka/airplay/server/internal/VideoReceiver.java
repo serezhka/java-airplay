@@ -13,20 +13,21 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.ServerSocketChannel;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
+import lombok.Getter;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 import java.net.InetSocketAddress;
 
 @Slf4j
+@RequiredArgsConstructor
 public class VideoReceiver implements Runnable {
 
-    private final int port;
     private final VideoHandler videoHandler;
+    private final Object monitor;
 
-    public VideoReceiver(int port, VideoHandler videoHandler) {
-        this.port = port;
-        this.videoHandler = videoHandler;
-    }
+    @Getter
+    private int port;
 
     @Override
     public void run() {
@@ -37,7 +38,7 @@ public class VideoReceiver implements Runnable {
             serverBootstrap
                     .group(bossGroup, workerGroup)
                     .channel(serverSocketChannelClass())
-                    .localAddress(new InetSocketAddress(port))
+                    .localAddress(new InetSocketAddress(0)) // bind random port
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         public void initChannel(final SocketChannel ch) {
@@ -49,7 +50,14 @@ public class VideoReceiver implements Runnable {
                     .childOption(ChannelOption.SO_REUSEADDR, true)
                     .childOption(ChannelOption.SO_KEEPALIVE, true);
             var channelFuture = serverBootstrap.bind().sync();
-            log.info("AirPlay video receiver listening on port: {}", port);
+
+            log.info("AirPlay video receiver listening on port: {}",
+                    port = ((InetSocketAddress) channelFuture.channel().localAddress()).getPort());
+
+            synchronized (monitor) {
+                monitor.notify();
+            }
+
             channelFuture.channel().closeFuture().sync();
         } catch (InterruptedException e) {
             log.info("AirPlay video receiver interrupted");

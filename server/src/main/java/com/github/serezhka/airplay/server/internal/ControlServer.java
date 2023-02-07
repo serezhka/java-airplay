@@ -42,7 +42,7 @@ public class ControlServer implements Runnable {
         SessionManager sessionManager = new SessionManager();
         pairingHandler = new PairingHandler(airPlayConfig, sessionManager);
         fairPlayHandler = new FairPlayHandler(sessionManager);
-        rtspHandler = new RTSPHandler(airPlayConfig.getAirplayPort(), airTunesPort, sessionManager, airPlayConsumer);
+        rtspHandler = new RTSPHandler(airTunesPort, sessionManager, airPlayConsumer);
         heartBeatHandler = new HeartBeatHandler(sessionManager);
     }
 

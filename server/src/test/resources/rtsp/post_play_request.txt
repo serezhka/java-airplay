@@ -1,0 +1,82 @@
+POST /play HTTP/1.1
+X-Transmit-Date: 2023-02-06T08:47:07.487582Z
+Content-Type: application/x-apple-binary-plist
+Content-Length: 829
+X-Apple-Device-ID: 0xb4197450e18a
+X-Apple-Session-ID: 4cdb62c4-2107-4d9a-bd58-dc2588230b8e
+User-Agent: AirPlay/670.6.2
+
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>mightSupportStorePastisKeyRequests</key>
+	<true/>
+	<key>playbackRestrictions</key>
+	<integer>0</integer>
+	<key>secureConnectionMs</key>
+	<integer>0</integer>
+	<key>volume</key>
+	<real>1.0</real>
+	<key>Start-Position-Seconds</key>
+	<real>45.722738</real>
+	<key>Content-Location</key>
+	<string>mlhls://localhost/master.m3u8</string>
+	<key>uuid</key>
+	<string>BD42AE8F-CA10-4DD2-8B91-2A7C825988DF</string>
+	<key>infoMs</key>
+	<integer>34</integer>
+	<key>streamType</key>
+	<integer>1</integer>
+	<key>connectMs</key>
+	<integer>355</integer>
+	<key>snapTimeToPausePlayback</key>
+	<false/>
+	<key>Start-Position</key>
+	<real>0.0</real>
+	<key>mediaType</key>
+	<string>streaming</string>
+	<key>authMs</key>
+	<integer>0</integer>
+	<key>timeToPausePlayback</key>
+	<dict>
+		<key>flags</key>
+		<integer>0</integer>
+		<key>value</key>
+		<integer>0</integer>
+		<key>timescale</key>
+		<integer>0</integer>
+		<key>epoch</key>
+		<integer>0</integer>
+	</dict>
+	<key>referenceRestrictions</key>
+	<integer>2</integer>
+	<key>bonjourMs</key>
+	<integer>0</integer>
+	<key>model</key>
+	<string>iPhone14,5</string>
+	<key>timeToPauseBuffering</key>
+	<dict>
+		<key>flags</key>
+		<integer>0</integer>
+		<key>value</key>
+		<integer>0</integer>
+		<key>timescale</key>
+		<integer>0</integer>
+		<key>epoch</key>
+		<integer>0</integer>
+	</dict>
+	<key>clientBundleID</key>
+	<string>com.google.ios.youtube</string>
+	<key>postAuthMs</key>
+	<integer>0</integer>
+	<key>SenderMACAddress</key>
+	<string>11:22:33:44:55:66</string>
+	<key>clientProcName</key>
+	<string>YouTube</string>
+	<key>osBuildVersion</key>
+	<string>20C65</string>
+	<key>rate</key>
+	<real>1.0</real>
+</dict>
+</plist>

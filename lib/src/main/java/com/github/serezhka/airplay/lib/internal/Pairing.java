@@ -94,7 +94,7 @@ public class Pairing {
         response.put("displays", displays);
         response.put("features", 130367356919L);
         response.put("keepAliveSendStatsAsBody", 1);
-        response.put("model", "AppleTV2,1");
+        response.put("model", "AppleTV3,2");
         response.put("name", "Apple TV");
         response.put("pi", "b08f5a79-db29-4384-b456-a4784d9e6055");
         response.put("sourceVersion", "220.68");

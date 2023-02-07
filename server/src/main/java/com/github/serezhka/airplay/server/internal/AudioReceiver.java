@@ -12,22 +12,21 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.DatagramChannel;
 import io.netty.channel.socket.nio.NioDatagramChannel;
 import io.netty.handler.codec.DatagramPacketDecoder;
+import lombok.Getter;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 import java.net.InetSocketAddress;
 
 @Slf4j
+@RequiredArgsConstructor
 public class AudioReceiver implements Runnable {
 
     private final AudioHandler audioHandler;
     private final Object monitor;
 
+    @Getter
     private int port;
-
-    public AudioReceiver(AudioHandler audioHandler, Object monitor) {
-        this.audioHandler = audioHandler;
-        this.monitor = monitor;
-    }
 
     @Override
     public void run() {
@@ -62,10 +61,6 @@ public class AudioReceiver implements Runnable {
             log.info("AirPlay audio receiver stopped");
             workerGroup.shutdownGracefully();
         }
-    }
-
-    public int getPort() {
-        return port;
     }
 
     private EventLoopGroup eventLoopGroup() {

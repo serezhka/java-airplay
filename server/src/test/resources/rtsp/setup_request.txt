@@ -1,0 +1,48 @@
+SETUP rtsp://192.168.0.208/9222276591504476320 RTSP/1.0
+Content-Length: 517
+Content-Type: application/x-apple-binary-plist
+CSeq: 6
+DACP-ID: 2C50405DC456F722
+Active-Remote: 4147582535
+User-Agent: AirPlay/670.6.2
+
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>et</key>
+	<integer>32</integer>
+	<key>eiv</key>
+	<data>
+		91IdM6RTh4keicMei2GfQA==
+	</data>
+	<key>statsCollectionEnabled</key>
+	<false/>
+	<key>sessionUUID</key>
+	<string>7FFC1BB2-C106-48A0-9D67-0D9E306F2927</string>
+	<key>timingProtocol</key>
+	<string>NTP</string>
+	<key>osName</key>
+	<string>iPhone OS</string>
+	<key>osBuildVersion</key>
+	<string>20C65</string>
+	<key>sourceVersion</key>
+	<string>670.6.2</string>
+	<key>timingPort</key>
+	<integer>54911</integer>
+	<key>osVersion</key>
+	<string>16.2</string>
+	<key>ekey</key>
+	<data>
+		RlBMWQECAQAAAAA8AAAAAN3zn+8ej9+ZcTT2Z8sqHZMAAAAQ1ZmwOjh+A/vdBCenM5gwz87qZCLmhWL9NwKvRQOP4Tzq+I9W
+	</data>
+	<key>deviceID</key>
+	<string>11:22:33:44:55:66</string>
+	<key>model</key>
+	<string>iPhone14,5</string>
+	<key>name</key>
+	<string>srzhka</string>
+	<key>macAddress</key>
+	<string>11:22:33:44:55:66</string>
+</dict>
+</plist>

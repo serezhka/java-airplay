@@ -26,14 +26,11 @@ import java.nio.charset.StandardCharsets;
 public class RTSPHandler extends ControlHandler {
 
     private final AirPlayConsumer airPlayConsumer;
-    private final int airPlayPort;
     private final int airTunesPort;
 
-    public RTSPHandler(int airPlayPort, int airTunesPort, SessionManager sessionManager,
-                       AirPlayConsumer airPlayConsumer) {
+    public RTSPHandler(int airTunesPort, SessionManager sessionManager, AirPlayConsumer airPlayConsumer) {
         super(sessionManager);
         this.airPlayConsumer = airPlayConsumer;
-        this.airPlayPort = airPlayPort;
         this.airTunesPort = airTunesPort;
     }
 
@@ -85,12 +82,15 @@ public class RTSPHandler extends ControlHandler {
                         airPlayConsumer.onVideoFormat(videoStreamInfo);
 
                         var videoHandler = new VideoHandler(session.getAirPlay(), airPlayConsumer);
-                        var videoReceiver = new VideoReceiver(airPlayPort, videoHandler);
+                        var videoReceiver = new VideoReceiver(videoHandler, this);
                         var videoReceiverThread = new Thread(videoReceiver);
                         session.setVideoReceiverThread(videoReceiverThread);
                         videoReceiverThread.start();
+                        synchronized (this) {
+                            wait();
+                        }
 
-                        session.getAirPlay().rtspSetupVideo(new ByteBufOutputStream(response.content()), airPlayPort, airTunesPort, 7011);
+                        session.getAirPlay().rtspSetupVideo(new ByteBufOutputStream(response.content()), videoReceiver.getPort(), airTunesPort, 7011);
                         break;
                 }
             }

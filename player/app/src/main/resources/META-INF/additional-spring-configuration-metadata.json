@@ -6,11 +6,6 @@
       "description": "Name of airplay server."
     },
     {
-      "name": "airplay.airplayPort",
-      "type": "java.lang.String",
-      "description": "Airplay port."
-    },
-    {
       "name": "airplay.airtunesPort",
       "type": "java.lang.String",
       "description": "Airtunes port."

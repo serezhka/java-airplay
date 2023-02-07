@@ -1,0 +1,20 @@
+RTSP/1.0 200 OK
+Content-Type: text/x-apple-plist+xml
+Content-Length: 428
+
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+<key>deviceid</key>
+<string>14:85:7F:89:79:D4</string>
+<key>features</key>
+<integer>119</integer>
+<key>model</key>
+<string>Kodi,1</string>
+<key>protovers</key>
+<string>1.0</string>
+<key>srcvers</key>
+<string>101.28</string>
+</dict>
+</plist>

@@ -1,0 +1,24 @@
+RTSP/1.0 200 OK
+CSeq: 11
+Server: AirTunes/220.68
+Content-Type: application/x-apple-binary-plist
+Server: AirTunes/220.00
+Content-Length: 104
+
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>streams</key>
+	<array>
+		<dict>
+			<key>type</key>
+			<integer>96</integer>
+			<key>controlPort</key>
+			<integer>50161</integer>
+			<key>dataPort</key>
+			<integer>50163</integer>
+		</dict>
+	</array>
+</dict>
+</plist>

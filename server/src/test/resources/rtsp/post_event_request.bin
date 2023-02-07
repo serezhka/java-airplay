@@ -1,0 +1,35 @@
+POST /event HTTP/1.1
+Content-Type: text/x-apple-plist+xml
+Content-Length: 769
+x-apple-session-id: 4cdb62c4-2107-4d9a-bd58-dc2588230b8e
+
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+
+<plist version="1.0">
+<dict>
+<key>request</key>
+<dict>
+<key>FCUP_Response_ClientInfo</key>
+<integer>0</integer>
+<key>FCUP_Response_ClientRef</key>
+<integer>0</integer>
+<key>FCUP_Response_Headers</key>
+<dict>
+<key>X-Playback-Session-Id</key>
+<string>4cdb62c4-2107-4d9a-bd58-dc2588230b8e</string>
+</dict>
+<key>FCUP_Response_RequestID</key>
+<integer>0</integer>
+<key>FCUP_Response_URL</key>
+<string>mlhls://localhost/master.m3u8</string>
+<key>sessionID</key>
+<integer>1</integer>
+</dict>
+<key>sessionID</key>
+<integer>1</integer>
+<key>type</key>
+<string>unhandledURLRequest</string>
+</dict>
+</plist>

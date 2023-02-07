@@ -7,7 +7,7 @@ ext {
     springBootVersion = '3.0.0'
     springDepMgmtVersion = '1.1.0'
     junitVersion = '5.9.1'
-    nettyVersion = '4.1.85.Final'
+    nettyVersion = '4.1.86.Final'
     slf4jVersion = '2.0.5'
     jnaVersion = '5.12.1'
 }

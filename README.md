@@ -48,7 +48,6 @@ Create `application.properties` file in working dir
 ```properties
 # airplay
 airplay.serverName=srzhka
-airplay.airplayPort=15614
 airplay.airtunesPort=5001
 airplay.width=1280
 airplay.height=720

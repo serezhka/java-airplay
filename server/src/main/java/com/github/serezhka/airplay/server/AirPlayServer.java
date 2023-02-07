@@ -16,7 +16,7 @@ public class AirPlayServer {
     }
 
     public void start() throws Exception {
-        airPlayBonjour.start(airPlayConfig.getAirplayPort(), airPlayConfig.getAirtunesPort());
+        airPlayBonjour.start(airPlayConfig.getAirtunesPort());
         new Thread(controlServer).start();
     }
 

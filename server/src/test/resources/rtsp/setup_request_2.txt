@@ -1,0 +1,41 @@
+SETUP rtsp://192.168.0.208/9222276591504476320 RTSP/1.0
+Content-Length: 243
+Content-Type: application/x-apple-binary-plist
+CSeq: 11
+DACP-ID: 2C50405DC456F722
+Active-Remote: 4147582535
+User-Agent: AirPlay/670.6.2
+
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>streams</key>
+	<array>
+		<dict>
+			<key>latencyMax</key>
+			<integer>88200</integer>
+			<key>sr</key>
+			<integer>44100</integer>
+			<key>audioMode</key>
+			<string>default</string>
+			<key>latencyMin</key>
+			<integer>11025</integer>
+			<key>ct</key>
+			<integer>2</integer>
+			<key>spf</key>
+			<integer>352</integer>
+			<key>controlPort</key>
+			<integer>64524</integer>
+			<key>supportsDynamicStreamID</key>
+			<true/>
+			<key>audioFormat</key>
+			<integer>262144</integer>
+			<key>isMedia</key>
+			<true/>
+			<key>type</key>
+			<integer>96</integer>
+		</dict>
+	</array>
+</dict>
+</plist>
