@@ -1,8 +1,5 @@
 package com.github.serezhka.airplay.lib.internal;
 
-import com.dd.plist.BinaryPropertyListWriter;
-import com.dd.plist.NSArray;
-import com.dd.plist.NSDictionary;
 import lombok.extern.slf4j.Slf4j;
 import net.i2p.crypto.eddsa.EdDSAEngine;
 import net.i2p.crypto.eddsa.EdDSAPublicKey;
@@ -40,68 +37,6 @@ public class Pairing {
 
     public Pairing() {
         this.keyPair = new KeyPairGenerator().generateKeyPair();
-    }
-
-    public void info(int width, int height, int fps, OutputStream out) throws Exception {
-        NSDictionary audioFormat100 = new NSDictionary();
-        audioFormat100.put("audioInputFormats", 67108860);
-        audioFormat100.put("audioOutputFormats", 67108860);
-        audioFormat100.put("type", 100);
-
-        NSDictionary audioFormat101 = new NSDictionary();
-        audioFormat101.put("audioInputFormats", 67108860);
-        audioFormat101.put("audioOutputFormats", 67108860);
-        audioFormat101.put("type", 101);
-
-        NSArray audioFormats = new NSArray(2);
-        audioFormats.setValue(0, audioFormat100);
-        audioFormats.setValue(1, audioFormat101);
-
-        NSDictionary audioLatency100 = new NSDictionary();
-        audioLatency100.put("audioType", "default");
-        audioLatency100.put("inputLatencyMicros", false);
-        audioLatency100.put("type", 100);
-
-        NSDictionary audioLatency101 = new NSDictionary();
-        audioLatency101.put("audioType", "default");
-        audioLatency101.put("inputLatencyMicros", false);
-        audioLatency101.put("type", 101);
-
-        NSArray audioLatencies = new NSArray(2);
-        audioLatencies.setValue(0, audioLatency100);
-        audioLatencies.setValue(1, audioLatency101);
-
-        NSDictionary display = new NSDictionary();
-        display.put("features", 14);
-        display.put("height", height);
-        display.put("heightPhysical", false);
-        display.put("heightPixels", height);
-        display.put("maxFPS", fps);
-        display.put("overscanned", false);
-        display.put("refreshRate", 60);
-        display.put("rotation", false);
-        display.put("uuid", "e5f7a68d-7b0f-4305-984b-974f677a150b");
-        display.put("width", width);
-        display.put("widthPhysical", false);
-        display.put("widthPixels", width);
-
-        NSArray displays = new NSArray(1);
-        displays.setValue(0, display);
-
-        NSDictionary response = new NSDictionary();
-        response.put("audioFormats", audioFormats);
-        response.put("audioLatencies", audioLatencies);
-        response.put("displays", displays);
-        response.put("features", 130367356919L);
-        response.put("keepAliveSendStatsAsBody", 1);
-        response.put("model", "AppleTV3,2");
-        response.put("name", "Apple TV");
-        response.put("pi", "b08f5a79-db29-4384-b456-a4784d9e6055");
-        response.put("sourceVersion", "220.68");
-        response.put("statusFlags", 68);
-        response.put("vv", 2);
-
-        BinaryPropertyListWriter.write(response, out);
     }
 
     public void pairSetup(OutputStream out) throws IOException {

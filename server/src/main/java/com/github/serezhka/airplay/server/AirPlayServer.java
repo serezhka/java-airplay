@@ -7,22 +7,19 @@ public class AirPlayServer {
 
     private final AirPlayBonjour airPlayBonjour;
     private final ControlServer controlServer;
-    private final AirPlayConfig airPlayConfig;
 
     public AirPlayServer(AirPlayConfig airPlayConfig, AirPlayConsumer airPlayConsumer) {
-        this.airPlayConfig = airPlayConfig;
         airPlayBonjour = new AirPlayBonjour(airPlayConfig.getServerName());
         controlServer = new ControlServer(airPlayConfig, airPlayConsumer);
     }
 
     public void start() throws Exception {
-        airPlayBonjour.start(airPlayConfig.getAirtunesPort());
-        new Thread(controlServer).start();
+        controlServer.start();
+        airPlayBonjour.start(controlServer.getPort());
     }
 
     public void stop() {
+        controlServer.stop();
         airPlayBonjour.stop();
     }
-
-    // TODO On client connected / disconnected
 }

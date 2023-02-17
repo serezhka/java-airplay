@@ -2,10 +2,7 @@ package com.github.serezhka.airplay.server.internal;
 
 import com.github.serezhka.airplay.server.AirPlayConfig;
 import com.github.serezhka.airplay.server.AirPlayConsumer;
-import com.github.serezhka.airplay.server.internal.handler.control.FairPlayHandler;
-import com.github.serezhka.airplay.server.internal.handler.control.HeartBeatHandler;
-import com.github.serezhka.airplay.server.internal.handler.control.PairingHandler;
-import com.github.serezhka.airplay.server.internal.handler.control.RTSPHandler;
+import com.github.serezhka.airplay.server.internal.handler.control.ControlHandler;
 import com.github.serezhka.airplay.server.internal.handler.session.SessionManager;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.ChannelInitializer;
@@ -23,27 +20,37 @@ import io.netty.handler.codec.rtsp.RtspDecoder;
 import io.netty.handler.codec.rtsp.RtspEncoder;
 import io.netty.handler.logging.LogLevel;
 import io.netty.handler.logging.LoggingHandler;
+import lombok.Getter;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 import java.net.InetSocketAddress;
 
 @Slf4j
+@RequiredArgsConstructor
 public class ControlServer implements Runnable {
 
-    private final PairingHandler pairingHandler;
-    private final FairPlayHandler fairPlayHandler;
-    private final RTSPHandler rtspHandler;
-    private final HeartBeatHandler heartBeatHandler;
+    private final AirPlayConfig airPlayConfig;
+    private final AirPlayConsumer airPlayConsumer;
 
-    private final int airTunesPort;
+    private Thread thread;
 
-    public ControlServer(AirPlayConfig airPlayConfig, AirPlayConsumer airPlayConsumer) {
-        this.airTunesPort = airPlayConfig.getAirtunesPort();
-        SessionManager sessionManager = new SessionManager();
-        pairingHandler = new PairingHandler(airPlayConfig, sessionManager);
-        fairPlayHandler = new FairPlayHandler(sessionManager);
-        rtspHandler = new RTSPHandler(airTunesPort, sessionManager, airPlayConsumer);
-        heartBeatHandler = new HeartBeatHandler(sessionManager);
+    @Getter
+    private int port;
+
+    public void start() throws InterruptedException {
+        thread = new Thread(this);
+        thread.start();
+        synchronized (this) {
+            wait();
+        }
+    }
+
+    public void stop() {
+        if (thread != null) {
+            thread.interrupt();
+            thread = null;
+        }
     }
 
     @Override
@@ -55,26 +62,30 @@ public class ControlServer implements Runnable {
             serverBootstrap
                     .group(bossGroup, workerGroup)
                     .channel(serverSocketChannelClass())
-                    .localAddress(new InetSocketAddress(airTunesPort))
+                    .localAddress(new InetSocketAddress(0)) // bind random port
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
-                        public void initChannel(final SocketChannel ch) throws Exception {
+                        public void initChannel(final SocketChannel ch) {
                             ch.pipeline().addLast(
                                     new RtspDecoder(),
                                     new RtspEncoder(),
                                     new HttpObjectAggregator(64 * 1024),
                                     new LoggingHandler(LogLevel.DEBUG),
-                                    pairingHandler,
-                                    fairPlayHandler,
-                                    rtspHandler,
-                                    heartBeatHandler);
+                                    new ControlHandler(new SessionManager(), airPlayConfig, airPlayConsumer));
                         }
                     })
                     .childOption(ChannelOption.TCP_NODELAY, true)
                     .childOption(ChannelOption.SO_REUSEADDR, true)
                     .childOption(ChannelOption.SO_KEEPALIVE, true);
             var channelFuture = serverBootstrap.bind().sync();
-            log.info("AirPlay control server listening on port: {}", airTunesPort);
+
+            log.info("AirPlay control server listening on port: {}",
+                    port = ((InetSocketAddress) channelFuture.channel().localAddress()).getPort());
+
+            synchronized (this) {
+                this.notify();
+            }
+
             channelFuture.channel().closeFuture().sync();
         } catch (InterruptedException e) {
             throw new RuntimeException(e);

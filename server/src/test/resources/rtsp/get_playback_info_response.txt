@@ -1,0 +1,41 @@
+RTSP/1.0 200 OK
+Content-Type: text/x-apple-plist+xml
+Content-Length: 798
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>duration</key>
+	<real>0.0</real>
+	<key>loadedTimeRanges</key>
+	<array>
+		<dict>
+			<key>duration</key>
+			<real>0.0</real>
+			<key>start</key>
+			<real>0.0</real>
+		</dict>
+	</array>
+	<key>playbackBufferEmpty</key>
+	<true/>
+	<key>playbackBufferFull</key>
+	<false/>
+	<key>playbackLikelyToKeepUp</key>
+	<true/>
+	<key>position</key>
+	<real>0.0</real>
+	<key>rate</key>
+	<integer>0</integer>
+	<key>readyToPlay</key>
+	<true/>
+	<key>seekableTimeRanges</key>
+	<array>
+		<dict>
+			<key>duration</key>
+			<real>0.0</real>
+			<key>start</key>
+			<real>0.0</real>
+		</dict>
+	</array>
+</dict>
+</plist>

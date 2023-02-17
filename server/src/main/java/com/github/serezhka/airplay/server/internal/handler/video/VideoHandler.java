@@ -32,7 +32,7 @@ public class VideoHandler extends ChannelInboundHandlerAdapter {
                 dataConsumer.onVideo(spsPps);
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error(e.getMessage(), e);
         }
     }
 

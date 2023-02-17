@@ -82,7 +82,7 @@ public class AudioStreamInfo implements MediaStreamInfo {
         OPUS_16000_1(0x10000000),
         OPUS_24000_1(0x20000000),
         OPUS_48000_1(0x40000000),
-        AAC_ELD_44100_1(0x80000000),
+        AAC_ELD_44100_1(0x80000000L), // or int ?
         AAC_ELD_48000_1(0x100000000L);
 
         private final long code;
@@ -124,5 +124,14 @@ public class AudioStreamInfo implements MediaStreamInfo {
         public AudioStreamInfo build() {
             return new AudioStreamInfo(compressionType, audioFormat, samplesPerFrame);
         }
+    }
+
+    @Override
+    public String toString() {
+        return "AudioStreamInfo{" +
+                "compressionType=" + compressionType +
+                ", audioFormat=" + audioFormat +
+                ", samplesPerFrame=" + samplesPerFrame +
+                '}';
     }
 }

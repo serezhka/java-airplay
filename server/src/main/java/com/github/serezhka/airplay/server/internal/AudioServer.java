@@ -1,5 +1,7 @@
 package com.github.serezhka.airplay.server.internal;
 
+import com.github.serezhka.airplay.lib.AirPlay;
+import com.github.serezhka.airplay.server.AirPlayConsumer;
 import com.github.serezhka.airplay.server.internal.decoder.AudioDecoder;
 import com.github.serezhka.airplay.server.internal.handler.audio.AudioHandler;
 import io.netty.bootstrap.Bootstrap;
@@ -20,13 +22,32 @@ import java.net.InetSocketAddress;
 
 @Slf4j
 @RequiredArgsConstructor
-public class AudioReceiver implements Runnable {
+public class AudioServer implements Runnable {
 
-    private final AudioHandler audioHandler;
-    private final Object monitor;
+    private final AirPlay airPlay;
+
+    private Thread thread;
+    private AirPlayConsumer airPlayConsumer;
 
     @Getter
     private int port;
+
+    public void start(AirPlayConsumer airPlayConsumer) throws InterruptedException {
+        this.airPlayConsumer = airPlayConsumer;
+        thread = new Thread(this);
+        thread.start();
+        synchronized (this) {
+            wait();
+        }
+    }
+
+    public void stop() {
+        if (thread != null) {
+            thread.interrupt();
+            thread = null;
+            airPlayConsumer = null;
+        }
+    }
 
     @Override
     public void run() {
@@ -42,23 +63,23 @@ public class AudioReceiver implements Runnable {
                         @Override
                         public void initChannel(final DatagramChannel ch) {
                             ch.pipeline().addLast("audioDecoder", new DatagramPacketDecoder(new AudioDecoder()));
-                            ch.pipeline().addLast("audioHandler", audioHandler);
+                            ch.pipeline().addLast("audioHandler", new AudioHandler(airPlay, airPlayConsumer));
                         }
                     });
             var channelFuture = bootstrap.bind().sync();
 
-            log.info("AirPlay audio receiver listening on port: {}",
+            log.info("AirPlay audio server listening on port: {}",
                     port = ((InetSocketAddress) channelFuture.channel().localAddress()).getPort());
 
-            synchronized (monitor) {
-                monitor.notify();
+            synchronized (this) {
+                this.notify();
             }
 
             channelFuture.channel().closeFuture().sync();
         } catch (InterruptedException e) {
-            log.info("AirPlay audio receiver interrupted");
+            log.info("AirPlay audio server interrupted");
         } finally {
-            log.info("AirPlay audio receiver stopped");
+            log.info("AirPlay audio server stopped");
             workerGroup.shutdownGracefully();
         }
     }

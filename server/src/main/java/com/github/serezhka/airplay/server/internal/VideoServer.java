@@ -1,5 +1,7 @@
 package com.github.serezhka.airplay.server.internal;
 
+import com.github.serezhka.airplay.lib.AirPlay;
+import com.github.serezhka.airplay.server.AirPlayConsumer;
 import com.github.serezhka.airplay.server.internal.decoder.VideoDecoder;
 import com.github.serezhka.airplay.server.internal.handler.video.VideoHandler;
 import io.netty.bootstrap.ServerBootstrap;
@@ -21,13 +23,32 @@ import java.net.InetSocketAddress;
 
 @Slf4j
 @RequiredArgsConstructor
-public class VideoReceiver implements Runnable {
+public class VideoServer implements Runnable {
 
-    private final VideoHandler videoHandler;
-    private final Object monitor;
+    private final AirPlay airPlay;
+
+    private Thread thread;
+    private AirPlayConsumer airPlayConsumer;
 
     @Getter
     private int port;
+
+    public void start(AirPlayConsumer airPlayConsumer) throws InterruptedException {
+        this.airPlayConsumer = airPlayConsumer;
+        thread = new Thread(this);
+        thread.start();
+        synchronized (this) {
+            wait();
+        }
+    }
+
+    public void stop() {
+        if (thread != null) {
+            thread.interrupt();
+            thread = null;
+            airPlayConsumer = null;
+        }
+    }
 
     @Override
     public void run() {
@@ -43,7 +64,7 @@ public class VideoReceiver implements Runnable {
                         @Override
                         public void initChannel(final SocketChannel ch) {
                             ch.pipeline().addLast("videoDecoder", new VideoDecoder());
-                            ch.pipeline().addLast("videoHandler", videoHandler);
+                            ch.pipeline().addLast("videoHandler", new VideoHandler(airPlay, airPlayConsumer));
                         }
                     })
                     .childOption(ChannelOption.TCP_NODELAY, true)
@@ -51,18 +72,18 @@ public class VideoReceiver implements Runnable {
                     .childOption(ChannelOption.SO_KEEPALIVE, true);
             var channelFuture = serverBootstrap.bind().sync();
 
-            log.info("AirPlay video receiver listening on port: {}",
+            log.info("AirPlay video server listening on port: {}",
                     port = ((InetSocketAddress) channelFuture.channel().localAddress()).getPort());
 
-            synchronized (monitor) {
-                monitor.notify();
+            synchronized (this) {
+                this.notify();
             }
 
             channelFuture.channel().closeFuture().sync();
         } catch (InterruptedException e) {
-            log.info("AirPlay video receiver interrupted");
+            log.info("AirPlay video server interrupted");
         } finally {
-            log.info("AirPlay video receiver stopped");
+            log.info("AirPlay video server stopped");
             bossGroup.shutdownGracefully();
             workerGroup.shutdownGracefully();
         }

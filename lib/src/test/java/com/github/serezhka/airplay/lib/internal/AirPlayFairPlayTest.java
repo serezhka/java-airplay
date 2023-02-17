@@ -1,6 +1,5 @@
 package com.github.serezhka.airplay.lib.internal;
 
-import com.dd.plist.BinaryPropertyListParser;
 import com.dd.plist.BinaryPropertyListWriter;
 import com.dd.plist.NSArray;
 import com.dd.plist.NSDictionary;
@@ -9,10 +8,10 @@ import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.HashMap;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -45,8 +44,9 @@ class AirPlayFairPlayTest {
         byte[] encryptedAesKey = new byte[]{70, 80, 76, 89, 1, 2, 1, 0, 0, 0, 0, 60, 0, 0, 0, 0, 63, 121, 70, -69, 3, -8, 117, -13, 83, 72, 105, -51, -11, -43, -1, 17, 0, 0, 0, 16, 24, -109, 13, 105, -32, -125, -73, -128, 21, 29, -31, 72, -41, 112, -36, -75, 57, 110, 71, -72, -25, -59, 102, 22, 19, -43, 35, 74, -20, 86, 15, 16, 126, 5, 15, -45};
         NSDictionary rtspSetup1Request = new NSDictionary();
         rtspSetup1Request.put("ekey", encryptedAesKey);
+        rtspSetup1Request.put("eiv", "91IdM6RTh4keicMei2GfQA==".getBytes(StandardCharsets.UTF_8));
         byte[] rtspSetup1RequestBytes = BinaryPropertyListWriter.writeToArray(rtspSetup1Request);
-        airPlay.rtspSetupEncryption(new ByteArrayInputStream(rtspSetup1RequestBytes));
+        airPlay.rtspSetup(new ByteArrayInputStream(rtspSetup1RequestBytes));
 
         // RSTP SETUP 2 request
         long streamConnectionID = -3907568444900622110L;
@@ -58,16 +58,7 @@ class AirPlayFairPlayTest {
         NSDictionary rtspSetup2Request = new NSDictionary();
         rtspSetup2Request.put("streams", streams);
         byte[] rtspSetup2RequestBytes = BinaryPropertyListWriter.writeToArray(rtspSetup2Request);
-        ByteArrayOutputStream rtspSetup2Response = new ByteArrayOutputStream();
-        airPlay.rtspGetMediaStreamInfo(new ByteArrayInputStream(rtspSetup2RequestBytes));
-        airPlay.rtspSetupVideo(rtspSetup2Response, 7001, 7002, 7003);
-
-        NSDictionary rtsp2Response = (NSDictionary) BinaryPropertyListParser.parse(new ByteArrayInputStream(rtspSetup2Response.toByteArray()));
-        HashMap stream = (HashMap) ((Object[]) rtsp2Response.get("streams").toJavaObject())[0];
-        assertEquals(7001, stream.get("dataPort"));
-        assertEquals(110, stream.get("type"));
-        assertEquals(7002, rtsp2Response.get("eventPort").toJavaObject());
-        assertEquals(7003, rtsp2Response.get("timingPort").toJavaObject());
+        airPlay.rtspSetup(new ByteArrayInputStream(rtspSetup2RequestBytes));
 
         // Decrypt payload
         byte[] sharedSecret = new byte[]{-5, -67, -104, 31, 49, 40, -76, 40, -116, 105, 45, -47, 125, -94, 117, -104, -54, -47, -50, 6, 122, 1, -38, -114, -88, -85, -128, 2, 116, -119, -90, 123};

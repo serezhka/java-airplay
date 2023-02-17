@@ -17,19 +17,28 @@ import java.net.InetSocketAddress;
 @Slf4j
 public class AudioControlServer implements Runnable {
 
-    private final Object monitor;
-
+    private Thread thread;
     private int port;
 
-    public AudioControlServer(Object monitor) {
-        this.monitor = monitor;
+    public void start() throws InterruptedException {
+        thread = new Thread(this);
+        thread.start();
+        synchronized (this) {
+            wait();
+        }
+    }
+
+    public void stop() {
+        if (thread != null) {
+            thread.interrupt();
+            thread = null;
+        }
     }
 
     @Override
     public void run() {
         var bootstrap = new Bootstrap();
         var workerGroup = eventLoopGroup();
-        var audioControlHandler = new AudioControlHandler();
 
         try {
             bootstrap
@@ -39,7 +48,7 @@ public class AudioControlServer implements Runnable {
                     .handler(new ChannelInitializer<DatagramChannel>() {
                         @Override
                         public void initChannel(final DatagramChannel ch) {
-                            ch.pipeline().addLast(audioControlHandler);
+                            ch.pipeline().addLast("audioControlHandler", new AudioControlHandler());
                         }
                     });
 
@@ -48,8 +57,8 @@ public class AudioControlServer implements Runnable {
             log.info("AirPlay audio control server listening on port: {}",
                     port = ((InetSocketAddress) channelFuture.channel().localAddress()).getPort());
 
-            synchronized (monitor) {
-                monitor.notify();
+            synchronized (this) {
+                this.notify();
             }
 
             channelFuture.channel().closeFuture().sync();

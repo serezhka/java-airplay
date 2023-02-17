@@ -4,6 +4,7 @@ import com.github.serezhka.airplay.lib.internal.*;
 
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.Optional;
 
 /**
  * Responds on pairing setup, fairplay setup requests, decrypts data
@@ -21,15 +22,6 @@ public class AirPlay {
         pairing = new Pairing();
         fairplay = new FairPlay();
         rtsp = new RTSP();
-    }
-
-    /**
-     * {@code /info}
-     * <p>
-     * Writes server info to output stream
-     */
-    public void info(int width, int height, int fps, OutputStream out) throws Exception {
-        pairing.info(width, height, fps, out);
     }
 
     /**
@@ -68,57 +60,40 @@ public class AirPlay {
     }
 
     /**
-     * Retrieves information about media stream from RTSP SETUP request
-     *
-     * @return null if there's no stream info
+     * {@code RTSP SETUP}
+     * <p>
+     * Sets encrypted EAS key and IV or retrieves media stream info
      */
-    public MediaStreamInfo rtspGetMediaStreamInfo(InputStream in) throws Exception {
-        return rtsp.getMediaStreamInfo(in);
+    public Optional<MediaStreamInfo> rtspSetup(InputStream in) throws Exception {
+        return rtsp.setup(in);
     }
 
     /**
-     * {@code RTSP SETUP ENCRYPTION}
+     * {@code RTSP TEARDOWN}
      * <p>
-     * Retrieves encrypted EAS key and IV
+     * Retrieves media stream info
      */
-    public void rtspSetupEncryption(InputStream in) throws Exception {
-        rtsp.setup(in);
+    public Optional<MediaStreamInfo> rtspTeardown(InputStream in) throws Exception {
+        return rtsp.teardown(in);
     }
 
-    /**
-     * {@code RTSP SETUP VIDEO}
-     * <p>
-     * Writes video event, data and timing ports info to output stream
-     */
-    public void rtspSetupVideo(OutputStream out, int videoDataPort, int videoEventPort, int videoTimingPort) throws Exception {
-        rtsp.setupVideo(out, videoDataPort, videoEventPort, videoTimingPort);
-    }
-
-    /**
-     * {@code RTSP SETUP AUDIO}
-     * <p>
-     * Writes audio control and data ports info to output stream
-     */
-    public void rtspSetupAudio(OutputStream out, int audioDataPort, int audioControlPort) throws Exception {
-        rtsp.setupAudio(out, audioDataPort, audioControlPort);
-    }
 
     public byte[] getFairPlayAesKey() {
-        return fairplay.decryptAesKey(rtsp.getEncryptedAESKey());
+        return fairplay.decryptAesKey(rtsp.getEkey());
     }
 
     /**
      * @return {@code true} if we got shared secret during pairing, ekey & stream connection id during RTSP SETUP
      */
     public boolean isFairPlayVideoDecryptorReady() {
-        return pairing.getSharedSecret() != null && rtsp.getEncryptedAESKey() != null && rtsp.getStreamConnectionID() != null;
+        return pairing.getSharedSecret() != null && rtsp.getEkey() != null && rtsp.getStreamConnectionID() != null;
     }
 
     /**
      * @return {@code true} if we got shared secret during pairing, ekey & eiv during RTSP SETUP
      */
     public boolean isFairPlayAudioDecryptorReady() {
-        return pairing.getSharedSecret() != null && rtsp.getEncryptedAESKey() != null && rtsp.getEiv() != null;
+        return pairing.getSharedSecret() != null && rtsp.getEkey() != null && rtsp.getEiv() != null;
     }
 
     public void decryptVideo(byte[] video) throws Exception {

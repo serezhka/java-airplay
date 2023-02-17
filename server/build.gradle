@@ -8,5 +8,6 @@ dependencies {
     implementation "io.netty:netty-all:$nettyVersion"
     implementation "org.slf4j:slf4j-api:$slf4jVersion"
 
-    testImplementation 'com.googlecode.plist:dd-plist:1.26'
+    implementation 'net.i2p.crypto:eddsa:0.3.0'
+    implementation 'com.googlecode.plist:dd-plist:1.26'
 }

@@ -1,8 +1,6 @@
 package com.github.serezhka.airplay.lib.internal;
 
 import com.dd.plist.BinaryPropertyListParser;
-import com.dd.plist.BinaryPropertyListWriter;
-import com.dd.plist.NSArray;
 import com.dd.plist.NSDictionary;
 import com.github.serezhka.airplay.lib.AudioStreamInfo;
 import com.github.serezhka.airplay.lib.MediaStreamInfo;
@@ -10,107 +8,93 @@ import com.github.serezhka.airplay.lib.VideoStreamInfo;
 import lombok.extern.slf4j.Slf4j;
 import net.i2p.crypto.eddsa.Utils;
 
-import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.util.HashMap;
+import java.util.Optional;
 
 @Slf4j
 public class RTSP {
 
-    private String streamConnectionID;
-    private byte[] encryptedAESKey;
+    private byte[] ekey;
     private byte[] eiv;
 
-    public MediaStreamInfo getMediaStreamInfo(InputStream rtspSetupPayload) throws Exception {
-        NSDictionary rtspSetup = (NSDictionary) BinaryPropertyListParser.parse(rtspSetupPayload);
+    private String streamConnectionID;
 
-        log.info("Binary property list parsed:\n{}", rtspSetup.toXMLPropertyList());
+    public Optional<MediaStreamInfo> setup(InputStream rtspSetupPayload) throws Exception {
+        var setup = (NSDictionary) BinaryPropertyListParser.parse(rtspSetupPayload);
+        if (setup.containsKey("ekey") || setup.containsKey("eiv")) {
+            ekey = (byte[]) setup.get("ekey").toJavaObject();
+            eiv = (byte[]) setup.get("eiv").toJavaObject();
+            log.info("Encrypted AES key: {}, iv: {}", Utils.bytesToHex(ekey), Utils.bytesToHex(eiv));
+            return Optional.empty();
+        } else if (setup.containsKey("streams")) {
+            log.debug("RTSP SETUP streams:\n{}", setup.toXMLPropertyList());
+            return Optional.ofNullable(getMediaStreamInfo(setup));
+        } else {
+            log.error("Unknown RTSP setup content\n{}", setup.toXMLPropertyList());
+            return Optional.empty();
+        }
+    }
 
-        if (rtspSetup.containsKey("streams")) {
-            // assume one stream info per RTSP SETUP request
-            HashMap stream = (HashMap) ((Object[]) rtspSetup.get("streams").toJavaObject())[0];
-            int type = (int) stream.get("type");
-            switch (type) {
+    public Optional<MediaStreamInfo> teardown(InputStream rtspTeardownPayload) throws Exception {
+        var teardown = (NSDictionary) BinaryPropertyListParser.parse(rtspTeardownPayload);
+        log.debug("RTSP TEARDOWN streams:\n{}", teardown.toXMLPropertyList());
+        if (teardown.containsKey("streams")) {
+            return Optional.ofNullable(getMediaStreamInfo(teardown));
+        }
+        return Optional.empty();
+    }
 
-                // video
-                case 110:
-                    if (stream.containsKey("streamConnectionID")) {
-                        streamConnectionID = Long.toUnsignedString((long) stream.get("streamConnectionID"));
-                    }
-                    return new VideoStreamInfo(streamConnectionID);
+    private MediaStreamInfo getMediaStreamInfo(NSDictionary request) {
+        var streams = ((Object[]) request.get("streams").toJavaObject());
+        if (streams.length > 1) {
+            log.warn("Request contains more than one stream info");
+        }
 
-                // audio
-                case 96:
-                    AudioStreamInfo.AudioStreamInfoBuilder builder = new AudioStreamInfo.AudioStreamInfoBuilder();
-                    if (stream.containsKey("ct")) {
-                        int compressionType = (int) stream.get("ct");
-                        builder.compressionType(AudioStreamInfo.CompressionType.fromCode(compressionType));
-                    }
-                    if (stream.containsKey("audioFormat")) {
-                        long audioFormatCode = (int) stream.get("audioFormat"); // FIXME int or long ?!
-                        builder.audioFormat(AudioStreamInfo.AudioFormat.fromCode(audioFormatCode));
-                    }
-                    if (stream.containsKey("spf")) {
-                        int samplesPerFrame = (int) stream.get("spf");
-                        builder.samplesPerFrame(samplesPerFrame);
-                    }
-                    return builder.build();
+        //noinspection rawtypes
+        HashMap stream = (HashMap) streams[0];
+        int type = (int) stream.get("type");
+        switch (type) {
 
-                default:
-                    log.error("Unknown stream type: {}", type);
+            // video stream
+            case 110 -> {
+                if (stream.containsKey("streamConnectionID")) {
+                    streamConnectionID = Long.toUnsignedString((long) stream.get("streamConnectionID"));
+                }
+                return new VideoStreamInfo(streamConnectionID);
+            }
+
+            // audio stream
+            case 96 -> {
+                AudioStreamInfo.AudioStreamInfoBuilder builder = new AudioStreamInfo.AudioStreamInfoBuilder();
+                if (stream.containsKey("ct")) {
+                    int compressionType = (int) stream.get("ct");
+                    builder.compressionType(AudioStreamInfo.CompressionType.fromCode(compressionType));
+                }
+                if (stream.containsKey("audioFormat")) {
+                    long audioFormatCode = (int) stream.get("audioFormat"); // int or long ?!
+                    builder.audioFormat(AudioStreamInfo.AudioFormat.fromCode(audioFormatCode));
+                }
+                if (stream.containsKey("spf")) {
+                    int samplesPerFrame = (int) stream.get("spf");
+                    builder.samplesPerFrame(samplesPerFrame);
+                }
+                return builder.build();
+            }
+
+            default -> {
+                log.error("Unknown stream type: {}", type);
+                return null;
             }
         }
-        return null;
-    }
-
-    public void setup(InputStream in) throws Exception {
-        NSDictionary request = (NSDictionary) BinaryPropertyListParser.parse(in);
-
-        if (request.containsKey("ekey")) {
-            encryptedAESKey = (byte[]) request.get("ekey").toJavaObject();
-            log.info("Encrypted AES key: " + Utils.bytesToHex(encryptedAESKey));
-        }
-
-        if (request.containsKey("eiv")) {
-            eiv = (byte[]) request.get("eiv").toJavaObject();
-            log.info("AES eiv: " + Utils.bytesToHex(eiv));
-        }
-    }
-
-    public void setupVideo(OutputStream out, int videoDataPort, int videoEventPort, int videoTimingPort) throws IOException {
-        NSArray streams = new NSArray(1);
-        NSDictionary dataStream = new NSDictionary();
-        dataStream.put("dataPort", videoDataPort);
-        dataStream.put("type", 110);
-        streams.setValue(0, dataStream);
-
-        NSDictionary response = new NSDictionary();
-        response.put("streams", streams);
-        response.put("eventPort", videoEventPort);
-        response.put("timingPort", videoTimingPort);
-        BinaryPropertyListWriter.write(response, out);
-    }
-
-    public void setupAudio(OutputStream out, int audioDataPort, int audioControlPort) throws IOException {
-        NSArray streams = new NSArray(1);
-        NSDictionary dataStream = new NSDictionary();
-        dataStream.put("dataPort", audioDataPort);
-        dataStream.put("type", 96);
-        dataStream.put("controlPort", audioControlPort);
-        streams.setValue(0, dataStream);
-
-        NSDictionary response = new NSDictionary();
-        response.put("streams", streams);
-        BinaryPropertyListWriter.write(response, out);
     }
 
     public String getStreamConnectionID() {
         return streamConnectionID;
     }
 
-    public byte[] getEncryptedAESKey() {
-        return encryptedAESKey;
+    public byte[] getEkey() {
+        return ekey;
     }
 
     public byte[] getEiv() {

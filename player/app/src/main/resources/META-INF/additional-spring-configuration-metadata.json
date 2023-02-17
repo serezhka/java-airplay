@@ -6,11 +6,6 @@
       "description": "Name of airplay server."
     },
     {
-      "name": "airplay.airtunesPort",
-      "type": "java.lang.String",
-      "description": "Airtunes port."
-    },
-    {
       "name": "airplay.width",
       "type": "java.lang.String",
       "description": "Airplay video width."
