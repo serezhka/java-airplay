@@ -5,6 +5,8 @@ import com.dd.plist.NSArray;
 import com.dd.plist.NSDictionary;
 import com.github.serezhka.airplay.server.AirPlayConfig;
 
+import java.nio.charset.StandardCharsets;
+
 public class PropertyListUtil {
 
     public static byte[] prepareInfoResponse(AirPlayConfig airPlayConfig) throws Exception {
@@ -92,5 +94,33 @@ public class PropertyListUtil {
         response.put("timingPort", timingPort);
 
         return BinaryPropertyListWriter.writeToArray(response);
+    }
+
+    public static byte[] prepareServerInfoResponse() {
+        NSDictionary response = new NSDictionary();
+        response.put("features", 119);
+        response.put("protovers", 1.0);
+        response.put("srcvers", 101.28);
+        return response.toXMLPropertyList().getBytes(StandardCharsets.UTF_8);
+    }
+
+    public static byte[] preparePlaybackInfoResponse() {
+        NSDictionary response = new NSDictionary();
+        response.put("duration", 0.0);
+        NSDictionary loadedTimeRanges = new NSDictionary();
+        loadedTimeRanges.put("duration", 0.0);
+        loadedTimeRanges.put("start", 0.0);
+        response.put("loadedTimeRanges", new NSArray(loadedTimeRanges));
+        response.put("playbackBufferEmpty", true);
+        response.put("playbackBufferFull", false);
+        response.put("playbackLikelyToKeepUp", true);
+        response.put("position", 0.0);
+        response.put("rate", 0);
+        response.put("readyToPlay", true);
+        NSDictionary seekableTimeRanges = new NSDictionary();
+        seekableTimeRanges.put("duration", 0.0);
+        seekableTimeRanges.put("start", 0.0);
+        response.put("seekableTimeRanges", new NSArray(seekableTimeRanges));
+        return response.toXMLPropertyList().getBytes(StandardCharsets.UTF_8);
     }
 }

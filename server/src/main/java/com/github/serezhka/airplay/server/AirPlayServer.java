@@ -19,7 +19,7 @@ public class AirPlayServer {
     }
 
     public void stop() {
-        controlServer.stop();
         airPlayBonjour.stop();
+        controlServer.stop();
     }
 }

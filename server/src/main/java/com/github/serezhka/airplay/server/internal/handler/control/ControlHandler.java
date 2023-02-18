@@ -1,5 +1,7 @@
 package com.github.serezhka.airplay.server.internal.handler.control;
 
+import com.dd.plist.BinaryPropertyListParser;
+import com.dd.plist.NSDictionary;
 import com.github.serezhka.airplay.lib.AudioStreamInfo;
 import com.github.serezhka.airplay.lib.VideoStreamInfo;
 import com.github.serezhka.airplay.server.AirPlayConfig;
@@ -55,15 +57,15 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             } else if (HttpMethod.POST.equals(request.method()) && "/feedback".equals(request.uri())) {
                 // heartbeat
             } else if (RtspMethods.GET_PARAMETER.equals(request.method())) {
-                handleRtspGetParameter(session, request, response);
+                handleRtspGetParameter(response);
             } else if (RtspMethods.RECORD.equals(request.method())) {
                 handleRtspRecord(response);
             } else if (RtspMethods.SET_PARAMETER.equals(request.method())) {
-                handleRtspSetParameter(session, request, response);
+                handleRtspSetParameter(response);
             } else if ("FLUSH".equals(request.method().toString())) {
                 // stream end
             } else if (RtspMethods.TEARDOWN.equals(request.method())) {
-                handleRtspTeardown(session, request, response);
+                handleRtspTeardown(session, request);
             } else if (HttpMethod.POST.equals(request.method()) && request.uri().equals("/audioMode")) {
                 // audio mode default
             } else {
@@ -71,7 +73,28 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             }
             sendResponse(ctx, request, response);
         } else if (HttpVersion.HTTP_1_1.equals(request.protocolVersion())) {
-            // QueryStringDecoder queryStringDecoder = new QueryStringDecoder(request.uri());
+            var decoder = new QueryStringDecoder(request.uri());
+            var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+            if (HttpMethod.GET.equals(request.method()) && decoder.path().equals("/server-info")) {
+                handleGetServerInfo(response);
+            } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/reverse")) {
+                handleReverse(response);
+            } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/play")) {
+                handlePlay(request);
+            } else if (HttpMethod.PUT.equals(request.method()) && decoder.path().equals("/setProperty")) {
+                handleSetProperty(request, decoder);
+            } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/rate")) {
+                handleRate(decoder);
+            } else if (HttpMethod.GET.equals(request.method()) && decoder.path().equals("/playback-info")) {
+                handlePlaybackInfo(response);
+            } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/action")) {
+                handleAction(request);
+            } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/getProperty")) {
+                handleGetProperty(decoder);
+            } else {
+                log.error("Unknown control request: {} {} {}", request.protocolVersion(), request.method(), request.uri());
+            }
+            sendResponse(ctx, request, response);
         } else {
             log.error("Unknown control request protocol: {}", request.protocolVersion());
         }
@@ -133,7 +156,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         }
     }
 
-    private void handleRtspGetParameter(Session session, FullHttpRequest request, FullHttpResponse response) {
+    private void handleRtspGetParameter(FullHttpResponse response) {
         // TODO get requested param and respond accordingly
         byte[] content = "volume: 0.000000\r\n".getBytes(StandardCharsets.US_ASCII);
         response.content().writeBytes(content);
@@ -144,12 +167,12 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         response.headers().add("Audio-Jack-Status", "connected; type=analog");
     }
 
-    private void handleRtspSetParameter(Session session, FullHttpRequest request, FullHttpResponse response) {
+    private void handleRtspSetParameter(FullHttpResponse response) {
         // TODO get requested param and respond accordingly
         response.headers().add("Apple-Jack-Status", "connected; type=analog");
     }
 
-    private void handleRtspTeardown(Session session, FullHttpRequest request, FullHttpResponse response) throws Exception {
+    private void handleRtspTeardown(Session session, FullHttpRequest request) throws Exception {
         var mediaStreamInfo = session.getAirPlay().rtspTeardown(new ByteBufInputStream(request.content()));
         if (mediaStreamInfo.isPresent()) {
             switch (mediaStreamInfo.get().getStreamType()) {
@@ -170,6 +193,50 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             session.getAudioControlServer().stop();
             session.getVideoServer().stop();
         }
+    }
+
+    private void handleGetServerInfo(FullHttpResponse response) {
+        response.headers().add(HttpHeaderNames.CONTENT_TYPE, "text/x-apple-plist+xml");
+        var serverInfo = PropertyListUtil.prepareServerInfoResponse();
+        response.content().writeBytes(serverInfo);
+    }
+
+    private void handleReverse(FullHttpResponse response) {
+        response.setStatus(HttpResponseStatus.SWITCHING_PROTOCOLS);
+        response.headers().add(HttpHeaderNames.UPGRADE, "PTTH/1.0");
+        response.headers().add(HttpHeaderNames.CONNECTION, HttpHeaderValues.UPGRADE);
+        // TODO Get X-Apple-Purpose
+    }
+
+    private void handlePlay(FullHttpRequest request) throws Exception {
+        NSDictionary play = (NSDictionary) BinaryPropertyListParser.parse(new ByteBufInputStream(request.content()));
+        log.info("Request content:\n{}", play.toXMLPropertyList());
+    }
+
+    private void handleSetProperty(FullHttpRequest request, QueryStringDecoder decoder) throws Exception {
+        log.info("Path: {}, Query params: {}", decoder.path(), decoder.parameters());
+        NSDictionary play = (NSDictionary) BinaryPropertyListParser.parse(new ByteBufInputStream(request.content()));
+        log.info("Request content:\n{}", play.toXMLPropertyList());
+    }
+
+    private void handleRate(QueryStringDecoder decoder) {
+        log.info("Path: {}, Query params: {}", decoder.path(), decoder.parameters());
+    }
+
+    private void handlePlaybackInfo(FullHttpResponse response) {
+        response.headers().add(HttpHeaderNames.CONTENT_TYPE, "text/x-apple-plist+xml");
+        var playbackInfo = PropertyListUtil.preparePlaybackInfoResponse();
+        response.content().writeBytes(playbackInfo);
+    }
+
+    private void handleAction(FullHttpRequest request) throws Exception {
+        NSDictionary action = (NSDictionary) BinaryPropertyListParser.parse(new ByteBufInputStream(request.content()));
+        log.info("Request content:\n{}", action.toXMLPropertyList());
+    }
+
+    private void handleGetProperty(QueryStringDecoder decoder) {
+        // TODO get requested param and respond accordingly
+        log.info("Path: {}, Query params: {}", decoder.path(), decoder.parameters());
     }
 
     private DefaultFullHttpResponse createRtspResponse(FullHttpRequest request) {
@@ -193,68 +260,3 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         }
     }
 }
-
-/* else if (HttpMethod.GET.equals(request.method()) && request.uri().equals("/server-info")) {
-DefaultFullHttpResponse httpResponse = createResponseForHttpRequest();
-httpResponse.headers().add(HttpHeaderNames.CONTENT_TYPE, "text/x-apple-plist+xml");
-NSDictionary serverInfo = new NSDictionary();
-serverInfo.put("features", 119);
-serverInfo.put("protovers", 1.0);
-serverInfo.put("srcvers", 101.28);
-BinaryPropertyListWriter.write(serverInfo, new ByteBufOutputStream(httpResponse.content()));
-return sendResponse(ctx, request, httpResponse);
-} else if (HttpMethod.POST.equals(request.method()) && request.uri().equals("/reverse")) {
-DefaultFullHttpResponse httpResponse = createResponseForHttpRequest();
-httpResponse.setStatus(HttpResponseStatus.SWITCHING_PROTOCOLS);
-httpResponse.headers().add(HttpHeaderNames.UPGRADE, "PTTH/1.0");
-httpResponse.headers().add(HttpHeaderNames.CONNECTION, HttpHeaderValues.UPGRADE);
-return sendResponse(ctx, request, httpResponse);
-} else if (HttpMethod.POST.equals(request.method()) && request.uri().equals("/play")) {
-NSDictionary play = (NSDictionary) BinaryPropertyListParser.parse(new ByteBufInputStream(request.content()));
-log.info("Binary property list parsed:\n{}", play.toXMLPropertyList());
-DefaultFullHttpResponse httpResponse = createResponseForHttpRequest();
-return sendResponse(ctx, request, httpResponse);
-} else if (HttpMethod.PUT.equals(request.method()) && request.uri().startsWith("/setProperty")) {
-QueryStringDecoder queryStringDecoder = new QueryStringDecoder(request.uri());
-log.info("Path: {}, Query params: {}", queryStringDecoder.path(), queryStringDecoder.parameters());
-NSDictionary play = (NSDictionary) BinaryPropertyListParser.parse(new ByteBufInputStream(request.content()));
-log.info("Binary property list parsed:\n{}", play.toXMLPropertyList());
-DefaultFullHttpResponse httpResponse = createResponseForHttpRequest();
-return sendResponse(ctx, request, httpResponse);
-} else if (HttpMethod.POST.equals(request.method()) && request.uri().startsWith("/rate")) {
-QueryStringDecoder queryStringDecoder = new QueryStringDecoder(request.uri());
-log.info("Path: {}, Query params: {}", queryStringDecoder.path(), queryStringDecoder.parameters());
-DefaultFullHttpResponse httpResponse = createResponseForHttpRequest();
-return sendResponse(ctx, request, httpResponse);
-} else if (HttpMethod.GET.equals(request.method()) && request.uri().equals("/playback-info")) {
-DefaultFullHttpResponse httpResponse = createResponseForHttpRequest();
-httpResponse.headers().add(HttpHeaderNames.CONTENT_TYPE, "text/x-apple-plist+xml");
-NSDictionary playbackInfo = new NSDictionary();
-playbackInfo.put("duration", 0.0);
-NSDictionary loadedTimeRanges = new NSDictionary();
-loadedTimeRanges.put("duration", 0.0);
-loadedTimeRanges.put("start", 0.0);
-playbackInfo.put("loadedTimeRanges", new NSArray(loadedTimeRanges));
-playbackInfo.put("playbackBufferEmpty", true);
-playbackInfo.put("playbackBufferFull", false);
-playbackInfo.put("playbackLikelyToKeepUp", true);
-playbackInfo.put("position", 0.0);
-playbackInfo.put("rate", 0);
-playbackInfo.put("readyToPlay", true);
-NSDictionary seekableTimeRanges = new NSDictionary();
-seekableTimeRanges.put("duration", 0.0);
-seekableTimeRanges.put("start", 0.0);
-playbackInfo.put("seekableTimeRanges", new NSArray(seekableTimeRanges));
-BinaryPropertyListWriter.write(playbackInfo, new ByteBufOutputStream(httpResponse.content()));
-return sendResponse(ctx, request, httpResponse);
-} else if (HttpMethod.POST.equals(request.method()) && request.uri().equals("/action")) {
-NSDictionary action = (NSDictionary) BinaryPropertyListParser.parse(new ByteBufInputStream(request.content()));
-log.info("Binary property list parsed:\n{}", action.toXMLPropertyList());
-DefaultFullHttpResponse httpResponse = createResponseForHttpRequest();
-return sendResponse(ctx, request, httpResponse);
-} else if (HttpMethod.GET.equals(request.method()) && request.uri().startsWith("/getProperty")) {
-QueryStringDecoder queryStringDecoder = new QueryStringDecoder(request.uri());
-log.info("Path: {}, Query params: {}", queryStringDecoder.path(), queryStringDecoder.parameters());
-DefaultFullHttpResponse httpResponse = createResponseForHttpRequest();
-return sendResponse(ctx, request, httpResponse);
-}*/
