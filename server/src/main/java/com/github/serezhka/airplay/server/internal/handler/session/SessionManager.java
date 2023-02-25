@@ -14,7 +14,7 @@ public class SessionManager {
         synchronized (sessions) {
             Session session;
             if ((session = sessions.get(sessionId)) == null) {
-                session = new Session();
+                session = new Session(sessionId);
                 sessions.put(sessionId, session);
             }
             return session;

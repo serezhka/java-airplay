@@ -1,6 +1,7 @@
 package com.github.serezhka.airplay.server.internal.handler.control;
 
 import com.dd.plist.BinaryPropertyListParser;
+import com.dd.plist.NSData;
 import com.dd.plist.NSDictionary;
 import com.github.serezhka.airplay.lib.AudioStreamInfo;
 import com.github.serezhka.airplay.lib.VideoStreamInfo;
@@ -9,6 +10,13 @@ import com.github.serezhka.airplay.server.AirPlayConsumer;
 import com.github.serezhka.airplay.server.internal.handler.session.Session;
 import com.github.serezhka.airplay.server.internal.handler.session.SessionManager;
 import com.github.serezhka.airplay.server.internal.handler.util.PropertyListUtil;
+import io.lindstrom.m3u8.model.MediaPlaylist;
+import io.lindstrom.m3u8.model.MediaSegment;
+import io.lindstrom.m3u8.model.Resolution;
+import io.lindstrom.m3u8.model.Variant;
+import io.lindstrom.m3u8.parser.MasterPlaylistParser;
+import io.lindstrom.m3u8.parser.MediaPlaylistParser;
+import io.lindstrom.m3u8.parser.ParsingMode;
 import io.netty.buffer.ByteBufInputStream;
 import io.netty.buffer.ByteBufOutputStream;
 import io.netty.channel.ChannelFutureListener;
@@ -24,7 +32,12 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Base64;
 import java.util.Optional;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 @Slf4j
 @RequiredArgsConstructor
@@ -34,69 +47,70 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     private final AirPlayConfig airPlayConfig;
     private final AirPlayConsumer airPlayConsumer;
 
+    private static CallbackHandler reverse;
+
     @Override
     public final void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-        if (!(msg instanceof FullHttpRequest request)) {
-            log.error("Unknown control request type: {}", msg);
-            return;
-        }
-
-        var session = resolveSession(request);
-        if (RtspVersions.RTSP_1_0.equals(request.protocolVersion())) {
-            var response = createRtspResponse(request);
-            if (HttpMethod.GET.equals(request.method()) && "/info".equals(request.uri())) {
-                handleGetInfo(response);
-            } else if (HttpMethod.POST.equals(request.method()) && "/pair-setup".equals(request.uri())) {
-                handlePairSetup(session, response);
-            } else if (HttpMethod.POST.equals(request.method()) && "/pair-verify".equals(request.uri())) {
-                handlePairVerify(session, request, response);
-            } else if (HttpMethod.POST.equals(request.method()) && "/fp-setup".equals(request.uri())) {
-                handleFairPlaySetup(session, request, response);
-            } else if (RtspMethods.SETUP.equals(request.method())) {
-                handleRtspSetup(ctx, session, request, response);
-            } else if (HttpMethod.POST.equals(request.method()) && "/feedback".equals(request.uri())) {
-                // heartbeat
-            } else if (RtspMethods.GET_PARAMETER.equals(request.method())) {
-                handleRtspGetParameter(response);
-            } else if (RtspMethods.RECORD.equals(request.method())) {
-                handleRtspRecord(response);
-            } else if (RtspMethods.SET_PARAMETER.equals(request.method())) {
-                handleRtspSetParameter(response);
-            } else if ("FLUSH".equals(request.method().toString())) {
-                // stream end
-            } else if (RtspMethods.TEARDOWN.equals(request.method())) {
-                handleRtspTeardown(session, request);
-            } else if (HttpMethod.POST.equals(request.method()) && request.uri().equals("/audioMode")) {
-                // audio mode default
+        if (msg instanceof FullHttpRequest request) {
+            var session = resolveSession(request);
+            if (RtspVersions.RTSP_1_0.equals(request.protocolVersion())) {
+                var response = createRtspResponse(request);
+                if (HttpMethod.GET.equals(request.method()) && "/info".equals(request.uri())) {
+                    handleGetInfo(response);
+                } else if (HttpMethod.POST.equals(request.method()) && "/pair-setup".equals(request.uri())) {
+                    handlePairSetup(session, response);
+                } else if (HttpMethod.POST.equals(request.method()) && "/pair-verify".equals(request.uri())) {
+                    handlePairVerify(session, request, response);
+                } else if (HttpMethod.POST.equals(request.method()) && "/fp-setup".equals(request.uri())) {
+                    handleFairPlaySetup(session, request, response);
+                } else if (RtspMethods.SETUP.equals(request.method())) {
+                    handleRtspSetup(ctx, session, request, response);
+                } else if (HttpMethod.POST.equals(request.method()) && "/feedback".equals(request.uri())) {
+                    // heartbeat
+                } else if (RtspMethods.GET_PARAMETER.equals(request.method())) {
+                    handleRtspGetParameter(response);
+                } else if (RtspMethods.RECORD.equals(request.method())) {
+                    handleRtspRecord(response);
+                } else if (RtspMethods.SET_PARAMETER.equals(request.method())) {
+                    handleRtspSetParameter(response);
+                } else if ("FLUSH".equals(request.method().toString())) {
+                    // stream end
+                } else if (RtspMethods.TEARDOWN.equals(request.method())) {
+                    handleRtspTeardown(session, request);
+                } else if (HttpMethod.POST.equals(request.method()) && request.uri().equals("/audioMode")) {
+                    // audio mode default
+                } else {
+                    log.error("Unknown control request: {} {} {}", request.protocolVersion(), request.method(), request.uri());
+                }
+                sendResponse(ctx, request, response);
+            } else if (HttpVersion.HTTP_1_1.equals(request.protocolVersion())) {
+                var decoder = new QueryStringDecoder(request.uri());
+                var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+                if (HttpMethod.GET.equals(request.method()) && decoder.path().equals("/server-info")) {
+                    handleGetServerInfo(response);
+                } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/reverse")) {
+                    handleReverse(ctx, session, request, response);
+                } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/play")) {
+                    handlePlay(session, request);
+                } else if (HttpMethod.PUT.equals(request.method()) && decoder.path().equals("/setProperty")) {
+                    handleSetProperty(request, decoder);
+                } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/rate")) {
+                    handleRate(decoder);
+                } else if (HttpMethod.GET.equals(request.method()) && decoder.path().equals("/playback-info")) {
+                    handlePlaybackInfo(response);
+                } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/action")) {
+                    handleAction(session, request);
+                } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/getProperty")) {
+                    handleGetProperty(decoder);
+                } else {
+                    log.error("Unknown control request: {} {} {}", request.protocolVersion(), request.method(), request.uri());
+                }
+                sendResponse(ctx, request, response);
             } else {
-                log.error("Unknown control request: {} {} {}", request.protocolVersion(), request.method(), request.uri());
+                log.error("Unknown control request protocol: {}", request.protocolVersion());
             }
-            sendResponse(ctx, request, response);
-        } else if (HttpVersion.HTTP_1_1.equals(request.protocolVersion())) {
-            var decoder = new QueryStringDecoder(request.uri());
-            var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
-            if (HttpMethod.GET.equals(request.method()) && decoder.path().equals("/server-info")) {
-                handleGetServerInfo(response);
-            } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/reverse")) {
-                handleReverse(response);
-            } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/play")) {
-                handlePlay(request);
-            } else if (HttpMethod.PUT.equals(request.method()) && decoder.path().equals("/setProperty")) {
-                handleSetProperty(request, decoder);
-            } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/rate")) {
-                handleRate(decoder);
-            } else if (HttpMethod.GET.equals(request.method()) && decoder.path().equals("/playback-info")) {
-                handlePlaybackInfo(response);
-            } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/action")) {
-                handleAction(request);
-            } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/getProperty")) {
-                handleGetProperty(decoder);
-            } else {
-                log.error("Unknown control request: {} {} {}", request.protocolVersion(), request.method(), request.uri());
-            }
-            sendResponse(ctx, request, response);
         } else {
-            log.error("Unknown control request protocol: {}", request.protocolVersion());
+            log.error("Unknown control request type: {}", msg);
         }
     }
 
@@ -201,21 +215,42 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         response.content().writeBytes(serverInfo);
     }
 
-    private void handleReverse(FullHttpResponse response) {
+    private void handleReverse(ChannelHandlerContext ctx, Session session, FullHttpRequest request, FullHttpResponse response) {
         response.setStatus(HttpResponseStatus.SWITCHING_PROTOCOLS);
         response.headers().add(HttpHeaderNames.UPGRADE, "PTTH/1.0");
         response.headers().add(HttpHeaderNames.CONNECTION, HttpHeaderValues.UPGRADE);
         // TODO Get X-Apple-Purpose
+
+        CallbackHandler callback = new CallbackHandler(ctx);
+        // ctx.pipeline().replace(this, "callback", callback);
+        // session.setCallbackHandler(callback);
+        reverse = callback;
     }
 
-    private void handlePlay(FullHttpRequest request) throws Exception {
-        NSDictionary play = (NSDictionary) BinaryPropertyListParser.parse(new ByteBufInputStream(request.content()));
+    private void handlePlay(Session session, FullHttpRequest request) throws Exception {
+        var play = (NSDictionary) BinaryPropertyListParser.parse(new ByteBufInputStream(request.content()));
         log.info("Request content:\n{}", play.toXMLPropertyList());
+
+        //session.getCallbackHandler().sendEvent(session.getId());
+
+        // TODO Get Content-Location
+
+        reverse.sendEvent(session.getId(), "mlhls://localhost/master.m3u8");
+
+        //var requestContent = PropertyListUtil.prepareEventRequest(session.getId());
+
+        /*DefaultFullHttpRequest event = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.POST, "/event");
+        event.headers().add(HttpHeaderNames.CONTENT_TYPE, "text/x-apple-plist+xml");
+        event.headers().add(HttpHeaderNames.CONTENT_LENGTH, requestContent.length);
+        event.headers().add("X-Apple-Session-ID", session.getId());
+        event.content().writeBytes(requestContent);
+
+        session.getContext().writeAndFlush(event);*/
     }
 
     private void handleSetProperty(FullHttpRequest request, QueryStringDecoder decoder) throws Exception {
         log.info("Path: {}, Query params: {}", decoder.path(), decoder.parameters());
-        NSDictionary play = (NSDictionary) BinaryPropertyListParser.parse(new ByteBufInputStream(request.content()));
+        var play = (NSDictionary) BinaryPropertyListParser.parse(new ByteBufInputStream(request.content()));
         log.info("Request content:\n{}", play.toXMLPropertyList());
     }
 
@@ -229,9 +264,46 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         response.content().writeBytes(playbackInfo);
     }
 
-    private void handleAction(FullHttpRequest request) throws Exception {
-        NSDictionary action = (NSDictionary) BinaryPropertyListParser.parse(new ByteBufInputStream(request.content()));
+    private void handleAction(Session session, FullHttpRequest request) throws Exception {
+        var action = (NSDictionary) BinaryPropertyListParser.parse(new ByteBufInputStream(request.content()));
         log.info("Request content:\n{}", action.toXMLPropertyList());
+
+        var params = (NSDictionary) action.get("params");
+        var fcupResponseURL = params.get("FCUP_Response_URL").toJavaObject(String.class);
+        var fcupResponseBase64 = ((NSData) (params.get("FCUP_Response_Data"))).getBase64EncodedData();
+        var fcupResponse = new String(Base64.getDecoder().decode(fcupResponseBase64));
+
+        log.info("\n{}", fcupResponse);
+
+        if (fcupResponseURL.contains("master.m3u8")) {
+            var parser = new MasterPlaylistParser(ParsingMode.LENIENT);
+            var masterPlaylist = parser.readPlaylist(fcupResponse);
+
+            masterPlaylist.variants().stream()
+                    .filter(variant -> variant.resolution().isPresent() &&
+                            variant.resolution().get().equals(Resolution.of(1920, 1080)))
+                    .findFirst()
+                    .map(Variant::uri)
+                    .ifPresent(listUri -> reverse.sendEvent(session.getId(), listUri));
+        } else {
+            var parser = new MediaPlaylistParser(ParsingMode.LENIENT);
+            var mediaPlaylist = parser.readPlaylist(fcupResponse);
+
+            var condensedUrl = mediaPlaylist.comments().stream()
+                    .filter(comment -> comment.startsWith("YT-EXT-CONDENSED-URL:"))
+                    .map(comment -> comment.replace("YT-EXT-CONDENSED-URL:", ""))
+                    .flatMap(attributes -> Pattern.compile("([A-Z0-9\\-]+)=(?:\"([^\"]+)\"|([^,]+))").matcher(attributes).results())
+                    .collect(Collectors.toMap(matcher -> matcher.group(1), matcher -> matcher.group(2) != null ? matcher.group(2) : matcher.group(3)));
+
+            mediaPlaylist = MediaPlaylist.builder()
+                    .from(mediaPlaylist)
+                    .mediaSegments(mediaPlaylist.mediaSegments().stream()
+                            .map(old -> MediaSegment.builder().from(old).uri(condensedUrl.get("BASE-URI") + "/" + old.uri()).build())
+                            .toList())
+                    .build();
+
+            Files.writeString(Path.of("test.m3u8"), parser.writePlaylistAsString(mediaPlaylist));
+        }
     }
 
     private void handleGetProperty(QueryStringDecoder decoder) {

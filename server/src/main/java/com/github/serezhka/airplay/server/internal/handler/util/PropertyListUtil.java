@@ -123,4 +123,24 @@ public class PropertyListUtil {
         response.put("seekableTimeRanges", new NSArray(seekableTimeRanges));
         return response.toXMLPropertyList().getBytes(StandardCharsets.UTF_8);
     }
+
+    public static byte[] prepareEventRequest(String sessionId, String listUri) {
+        NSDictionary headers = new NSDictionary();
+        headers.put("X-Playback-Session-Id", sessionId);
+
+        NSDictionary request = new NSDictionary();
+        request.put("FCUP_Response_ClientInfo", 0);
+        request.put("FCUP_Response_ClientRef", 0);
+        request.put("FCUP_Response_Headers", headers);
+        request.put("FCUP_Response_RequestID", 0);
+        request.put("FCUP_Response_URL", listUri);
+        request.put("sessionID", 1);
+
+        NSDictionary wrapper = new NSDictionary();
+        wrapper.put("request", request);
+        wrapper.put("sessionID", 1);
+        wrapper.put("type", "unhandledURLRequest");
+
+        return wrapper.toXMLPropertyList().getBytes(StandardCharsets.UTF_8);
+    }
 }
