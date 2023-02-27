@@ -7,6 +7,8 @@ import org.freedesktop.gstreamer.*;
 import org.freedesktop.gstreamer.elements.AppSrc;
 import org.freedesktop.gstreamer.glib.GLib;
 
+import java.nio.file.Path;
+
 public abstract class GstPlayer implements AirPlayConsumer {
 
     static {
@@ -18,6 +20,8 @@ public abstract class GstPlayer implements AirPlayConsumer {
     protected final Pipeline h264Pipeline;
     private final Pipeline alacPipeline;
     private final Pipeline aacEldPipeline;
+
+    private final Pipeline hlsPipeline;
 
     private final AppSrc h264Src;
     private final AppSrc alacSrc;
@@ -35,7 +39,7 @@ public abstract class GstPlayer implements AirPlayConsumer {
         h264Src.set("format", Format.TIME);
         h264Src.set("emit-signals", true);
 
-        alacPipeline = (Pipeline) Gst.parseLaunch("appsrc name=alac-src ! avdec_alac ! audioconvert ! audioresample ! autoaudiosink sync=false"); // +
+        alacPipeline = (Pipeline) Gst.parseLaunch("appsrc name=alac-src ! avdec_alac ! audioconvert ! audioresample ! autoaudiosink sync=false");
 
         alacSrc = (AppSrc) alacPipeline.getElementByName("alac-src");
         alacSrc.setStreamType(AppSrc.StreamType.STREAM);
@@ -44,7 +48,7 @@ public abstract class GstPlayer implements AirPlayConsumer {
         alacSrc.set("format", Format.TIME);
         alacSrc.set("emit-signals", true);
 
-        aacEldPipeline = (Pipeline) Gst.parseLaunch("appsrc name=aac-eld-src ! avdec_aac ! audioconvert ! audioresample ! autoaudiosink sync=false"); // +
+        aacEldPipeline = (Pipeline) Gst.parseLaunch("appsrc name=aac-eld-src ! avdec_aac ! audioconvert ! audioresample ! autoaudiosink sync=false");
 
         aacEldSrc = (AppSrc) aacEldPipeline.getElementByName("aac-eld-src");
         aacEldSrc.setStreamType(AppSrc.StreamType.STREAM);
@@ -52,6 +56,8 @@ public abstract class GstPlayer implements AirPlayConsumer {
         aacEldSrc.set("is-live", true);
         aacEldSrc.set("format", Format.TIME);
         aacEldSrc.set("emit-signals", true);
+
+        hlsPipeline = (Pipeline) Gst.parseLaunch("filesrc location=media.m3u8 ! hlsdemux ! queue ! decodebin ! autovideosink");
     }
 
     protected abstract Pipeline createH264Pipeline();
@@ -100,5 +106,10 @@ public abstract class GstPlayer implements AirPlayConsumer {
     public void onAudioSrcDisconnect() {
         alacPipeline.stop();
         aacEldPipeline.stop();
+    }
+
+    @Override
+    public void onMediaPlaylist(Path path) {
+        hlsPipeline.play();
     }
 }

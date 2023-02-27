@@ -9,6 +9,7 @@ import lombok.extern.slf4j.Slf4j;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 
@@ -54,5 +55,9 @@ public class H264Dump implements AirPlayConsumer {
     @PreDestroy
     public void save() throws IOException {
         videoFileChannel.close();
+    }
+
+    @Override
+    public void onMediaPlaylist(Path path) {
     }
 }

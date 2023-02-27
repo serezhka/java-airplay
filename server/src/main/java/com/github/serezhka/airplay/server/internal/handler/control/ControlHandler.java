@@ -105,7 +105,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 log.error("Unknown control request protocol: {}", request.protocolVersion());
             }
         } else {
-            log.error("Unknown control request type: {}", msg);
+            log.error("Unknown control message type: {}", msg);
         }
     }
 
@@ -338,11 +338,22 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             mediaPlaylist = MediaPlaylist.builder()
                     .from(mediaPlaylist)
                     .mediaSegments(mediaPlaylist.mediaSegments().stream()
-                            .map(old -> MediaSegment.builder().from(old).uri(condensedUrl.get("BASE-URI") + "/" + old.uri()).build())
+                            .map(old -> {
+                                var prefix = condensedUrl.get("PREFIX");
+                                var paramNames = condensedUrl.get("PARAMS").split(",");
+                                var paramValues = old.uri().replaceFirst(prefix, "").split("/");
+                                var paramResult = new StringBuilder();
+                                for (int i = 0; i < paramNames.length; i++) {
+                                    paramResult.append("/").append(paramNames[i]).append("/").append(paramValues[i]);
+                                }
+                                return MediaSegment.builder().from(old).uri(condensedUrl.get("BASE-URI") + paramResult).build();
+                            })
                             .toList())
                     .build();
 
-            Files.writeString(Path.of("test.m3u8"), parser.writePlaylistAsString(mediaPlaylist));
+            Path path = Path.of("media.m3u8");
+            Files.writeString(path, parser.writePlaylistAsString(mediaPlaylist));
+            airPlayConsumer.onMediaPlaylist(path);
         }
 
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);

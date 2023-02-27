@@ -17,6 +17,7 @@ import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Path;
 
 @Slf4j
 public class VlcPlayer implements AirPlayConsumer {
@@ -108,5 +109,9 @@ public class VlcPlayer implements AirPlayConsumer {
 
     @Override
     public void onAudioSrcDisconnect() {
+    }
+
+    @Override
+    public void onMediaPlaylist(Path path) {
     }
 }
