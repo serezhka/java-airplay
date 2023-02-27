@@ -30,6 +30,8 @@ import java.net.InetSocketAddress;
 @RequiredArgsConstructor
 public class ControlServer implements Runnable {
 
+    private final SessionManager sessionManager = new SessionManager();
+
     private final AirPlayConfig airPlayConfig;
     private final AirPlayConsumer airPlayConsumer;
 
@@ -70,8 +72,8 @@ public class ControlServer implements Runnable {
                                     new RtspDecoder(),
                                     new RtspEncoder(),
                                     new HttpObjectAggregator(64 * 1024),
-                                    new LoggingHandler(LogLevel.DEBUG),
-                                    new ControlHandler(new SessionManager(), airPlayConfig, airPlayConsumer));
+                                    new LoggingHandler(LogLevel.INFO),
+                                    new ControlHandler(sessionManager, airPlayConfig, airPlayConsumer));
                         }
                     })
                     .childOption(ChannelOption.TCP_NODELAY, true)

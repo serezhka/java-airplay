@@ -4,10 +4,11 @@ import com.github.serezhka.airplay.lib.AirPlay;
 import com.github.serezhka.airplay.server.internal.AudioControlServer;
 import com.github.serezhka.airplay.server.internal.AudioServer;
 import com.github.serezhka.airplay.server.internal.VideoServer;
-import com.github.serezhka.airplay.server.internal.handler.control.CallbackHandler;
 import io.netty.channel.ChannelHandlerContext;
 import lombok.Getter;
-import lombok.Setter;
+
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Getter
 public class Session {
@@ -18,12 +19,7 @@ public class Session {
     private final VideoServer videoServer;
     private final AudioServer audioServer;
     private final AudioControlServer audioControlServer;
-
-    @Setter
-    private ChannelHandlerContext context;
-
-    @Setter
-    private CallbackHandler callbackHandler;
+    private final Map<String, ChannelHandlerContext> reverseContexts;
 
     Session(String id) {
         this.id = id;
@@ -31,5 +27,6 @@ public class Session {
         videoServer = new VideoServer(airPlay);
         audioServer = new AudioServer(airPlay);
         audioControlServer = new AudioControlServer();
+        reverseContexts = new ConcurrentHashMap<>();
     }
 }

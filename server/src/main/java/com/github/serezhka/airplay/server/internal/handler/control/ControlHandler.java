@@ -24,10 +24,7 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.socket.ServerSocketChannel;
 import io.netty.handler.codec.http.*;
-import io.netty.handler.codec.rtsp.RtspHeaderNames;
-import io.netty.handler.codec.rtsp.RtspMethods;
-import io.netty.handler.codec.rtsp.RtspResponseStatuses;
-import io.netty.handler.codec.rtsp.RtspVersions;
+import io.netty.handler.codec.rtsp.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
@@ -47,65 +44,63 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     private final AirPlayConfig airPlayConfig;
     private final AirPlayConsumer airPlayConsumer;
 
-    private static CallbackHandler reverse;
-
     @Override
     public final void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
         if (msg instanceof FullHttpRequest request) {
-            var session = resolveSession(request);
             if (RtspVersions.RTSP_1_0.equals(request.protocolVersion())) {
-                var response = createRtspResponse(request);
                 if (HttpMethod.GET.equals(request.method()) && "/info".equals(request.uri())) {
-                    handleGetInfo(response);
+                    handleGetInfo(ctx, request);
                 } else if (HttpMethod.POST.equals(request.method()) && "/pair-setup".equals(request.uri())) {
-                    handlePairSetup(session, response);
+                    handlePairSetup(ctx, request);
                 } else if (HttpMethod.POST.equals(request.method()) && "/pair-verify".equals(request.uri())) {
-                    handlePairVerify(session, request, response);
+                    handlePairVerify(ctx, request);
                 } else if (HttpMethod.POST.equals(request.method()) && "/fp-setup".equals(request.uri())) {
-                    handleFairPlaySetup(session, request, response);
+                    handleFairPlaySetup(ctx, request);
                 } else if (RtspMethods.SETUP.equals(request.method())) {
-                    handleRtspSetup(ctx, session, request, response);
+                    handleRtspSetup(ctx, request);
                 } else if (HttpMethod.POST.equals(request.method()) && "/feedback".equals(request.uri())) {
-                    // heartbeat
+                    handleRtspFeedback(ctx, request);
                 } else if (RtspMethods.GET_PARAMETER.equals(request.method())) {
-                    handleRtspGetParameter(response);
+                    handleRtspGetParameter(ctx, request);
                 } else if (RtspMethods.RECORD.equals(request.method())) {
-                    handleRtspRecord(response);
+                    handleRtspRecord(ctx, request);
                 } else if (RtspMethods.SET_PARAMETER.equals(request.method())) {
-                    handleRtspSetParameter(response);
+                    handleRtspSetParameter(ctx, request);
                 } else if ("FLUSH".equals(request.method().toString())) {
-                    // stream end
+                    handleRtspFlush(ctx, request);
                 } else if (RtspMethods.TEARDOWN.equals(request.method())) {
-                    handleRtspTeardown(session, request);
+                    handleRtspTeardown(ctx, request);
                 } else if (HttpMethod.POST.equals(request.method()) && request.uri().equals("/audioMode")) {
-                    // audio mode default
+                    handleRstpAudioMode(ctx, request);
                 } else {
                     log.error("Unknown control request: {} {} {}", request.protocolVersion(), request.method(), request.uri());
+                    var response = createRtspResponse(request);
+                    response.setStatus(HttpResponseStatus.NOT_FOUND);
+                    sendResponse(ctx, request, response);
                 }
-                sendResponse(ctx, request, response);
             } else if (HttpVersion.HTTP_1_1.equals(request.protocolVersion())) {
                 var decoder = new QueryStringDecoder(request.uri());
-                var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
                 if (HttpMethod.GET.equals(request.method()) && decoder.path().equals("/server-info")) {
-                    handleGetServerInfo(response);
+                    handleGetServerInfo(ctx, request);
                 } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/reverse")) {
-                    handleReverse(ctx, session, request, response);
+                    handleReverse(ctx, request);
                 } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/play")) {
-                    handlePlay(session, request);
+                    handlePlay(ctx, request);
                 } else if (HttpMethod.PUT.equals(request.method()) && decoder.path().equals("/setProperty")) {
-                    handleSetProperty(request, decoder);
+                    handleSetProperty(ctx, request);
                 } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/rate")) {
-                    handleRate(decoder);
+                    handleRate(ctx, request);
                 } else if (HttpMethod.GET.equals(request.method()) && decoder.path().equals("/playback-info")) {
-                    handlePlaybackInfo(response);
+                    handlePlaybackInfo(ctx, request);
                 } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/action")) {
-                    handleAction(session, request);
+                    handleAction(ctx, request);
                 } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/getProperty")) {
-                    handleGetProperty(decoder);
+                    handleGetProperty(ctx, request);
                 } else {
                     log.error("Unknown control request: {} {} {}", request.protocolVersion(), request.method(), request.uri());
+                    var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.NOT_FOUND);
+                    sendResponse(ctx, request, response);
                 }
-                sendResponse(ctx, request, response);
             } else {
                 log.error("Unknown control request protocol: {}", request.protocolVersion());
             }
@@ -128,26 +123,39 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         return sessionManager.getSession(sessionId);
     }
 
-    private void handleGetInfo(FullHttpResponse response) throws Exception {
+    private void handleGetInfo(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
         var info = PropertyListUtil.prepareInfoResponse(airPlayConfig);
+        var response = createRtspResponse(request);
         response.content().writeBytes(info);
+        sendResponse(ctx, request, response);
     }
 
-    private void handlePairSetup(Session session, FullHttpResponse response) throws Exception {
+    private void handlePairSetup(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
+        var session = resolveSession(request);
+        var response = createRtspResponse(request);
         session.getAirPlay().pairSetup(new ByteBufOutputStream(response.content()));
+        sendResponse(ctx, request, response);
     }
 
-    private void handlePairVerify(Session session, FullHttpRequest request, FullHttpResponse response) throws Exception {
+    private void handlePairVerify(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
+        var session = resolveSession(request);
+        var response = createRtspResponse(request);
         session.getAirPlay().pairVerify(new ByteBufInputStream(request.content()),
                 new ByteBufOutputStream(response.content()));
+        sendResponse(ctx, request, response);
     }
 
-    private void handleFairPlaySetup(Session session, FullHttpRequest request, FullHttpResponse response) throws Exception {
+    private void handleFairPlaySetup(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
+        var session = resolveSession(request);
+        var response = createRtspResponse(request);
         session.getAirPlay().fairPlaySetup(new ByteBufInputStream(request.content()),
                 new ByteBufOutputStream(response.content()));
+        sendResponse(ctx, request, response);
     }
 
-    private void handleRtspSetup(ChannelHandlerContext ctx, Session session, FullHttpRequest request, FullHttpResponse response) throws Exception {
+    private void handleRtspSetup(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
+        var session = resolveSession(request);
+        var response = createRtspResponse(request);
         var mediaStreamInfo = session.getAirPlay().rtspSetup(new ByteBufInputStream(request.content()));
         if (mediaStreamInfo.isPresent()) {
             switch (mediaStreamInfo.get().getStreamType()) {
@@ -168,25 +176,43 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 }
             }
         }
+        sendResponse(ctx, request, response);
     }
 
-    private void handleRtspGetParameter(FullHttpResponse response) {
+    private void handleRtspFeedback(ChannelHandlerContext ctx, FullHttpRequest request) {
+        var response = createRtspResponse(request);
+        sendResponse(ctx, request, response);
+    }
+
+    private void handleRtspGetParameter(ChannelHandlerContext ctx, FullHttpRequest request) {
         // TODO get requested param and respond accordingly
         byte[] content = "volume: 0.000000\r\n".getBytes(StandardCharsets.US_ASCII);
+        var response = createRtspResponse(request);
         response.content().writeBytes(content);
+        sendResponse(ctx, request, response);
     }
 
-    private void handleRtspRecord(FullHttpResponse response) {
+    private void handleRtspRecord(ChannelHandlerContext ctx, FullHttpRequest request) {
+        var response = createRtspResponse(request);
         response.headers().add("Audio-Latency", "11025");
         response.headers().add("Audio-Jack-Status", "connected; type=analog");
+        sendResponse(ctx, request, response);
     }
 
-    private void handleRtspSetParameter(FullHttpResponse response) {
+    private void handleRtspSetParameter(ChannelHandlerContext ctx, FullHttpRequest request) {
         // TODO get requested param and respond accordingly
+        var response = createRtspResponse(request);
         response.headers().add("Apple-Jack-Status", "connected; type=analog");
+        sendResponse(ctx, request, response);
     }
 
-    private void handleRtspTeardown(Session session, FullHttpRequest request) throws Exception {
+    private void handleRtspFlush(ChannelHandlerContext ctx, FullHttpRequest request) {
+        var response = createRtspResponse(request);
+        sendResponse(ctx, request, response);
+    }
+
+    private void handleRtspTeardown(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
+        var session = resolveSession(request);
         var mediaStreamInfo = session.getAirPlay().rtspTeardown(new ByteBufInputStream(request.content()));
         if (mediaStreamInfo.isPresent()) {
             switch (mediaStreamInfo.get().getStreamType()) {
@@ -207,64 +233,77 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             session.getAudioControlServer().stop();
             session.getVideoServer().stop();
         }
+        var response = createRtspResponse(request);
+        sendResponse(ctx, request, response);
     }
 
-    private void handleGetServerInfo(FullHttpResponse response) {
-        response.headers().add(HttpHeaderNames.CONTENT_TYPE, "text/x-apple-plist+xml");
+    private void handleRstpAudioMode(ChannelHandlerContext ctx, FullHttpRequest request) {
+        var response = createRtspResponse(request);
+        sendResponse(ctx, request, response);
+    }
+
+    private void handleGetServerInfo(ChannelHandlerContext ctx, FullHttpRequest request) {
         var serverInfo = PropertyListUtil.prepareServerInfoResponse();
+        var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+        response.headers().add(HttpHeaderNames.CONTENT_TYPE, "text/x-apple-plist+xml");
         response.content().writeBytes(serverInfo);
+        sendResponse(ctx, request, response);
     }
 
-    private void handleReverse(ChannelHandlerContext ctx, Session session, FullHttpRequest request, FullHttpResponse response) {
-        response.setStatus(HttpResponseStatus.SWITCHING_PROTOCOLS);
-        response.headers().add(HttpHeaderNames.UPGRADE, "PTTH/1.0");
+    private void handleReverse(ChannelHandlerContext ctx, FullHttpRequest request) {
+        var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.SWITCHING_PROTOCOLS);
+        response.headers().add(HttpHeaderNames.UPGRADE, request.headers().get(HttpHeaderNames.UPGRADE));
         response.headers().add(HttpHeaderNames.CONNECTION, HttpHeaderValues.UPGRADE);
-        // TODO Get X-Apple-Purpose
+        sendResponse(ctx, request, response);
 
-        CallbackHandler callback = new CallbackHandler(ctx);
-        // ctx.pipeline().replace(this, "callback", callback);
-        // session.setCallbackHandler(callback);
-        reverse = callback;
+        var purpose = request.headers().get("X-Apple-Purpose");
+        ctx.pipeline().remove(RtspDecoder.class);
+        ctx.pipeline().remove(RtspEncoder.class);
+        ctx.pipeline().remove(HttpObjectAggregator.class);
+        ctx.pipeline().addFirst(new HttpClientCodec());
+        var session = resolveSession(request);
+        session.getReverseContexts().put(purpose, ctx);
     }
 
-    private void handlePlay(Session session, FullHttpRequest request) throws Exception {
+    private void handlePlay(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
         var play = (NSDictionary) BinaryPropertyListParser.parse(new ByteBufInputStream(request.content()));
         log.info("Request content:\n{}", play.toXMLPropertyList());
 
-        //session.getCallbackHandler().sendEvent(session.getId());
+        var session = resolveSession(request);
+        var listUri = play.get("Content-Location").toJavaObject(String.class);
+        sendEventRequest(session, listUri); // mlhls://localhost/master.m3u8
 
-        // TODO Get Content-Location
-
-        reverse.sendEvent(session.getId(), "mlhls://localhost/master.m3u8");
-
-        //var requestContent = PropertyListUtil.prepareEventRequest(session.getId());
-
-        /*DefaultFullHttpRequest event = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.POST, "/event");
-        event.headers().add(HttpHeaderNames.CONTENT_TYPE, "text/x-apple-plist+xml");
-        event.headers().add(HttpHeaderNames.CONTENT_LENGTH, requestContent.length);
-        event.headers().add("X-Apple-Session-ID", session.getId());
-        event.content().writeBytes(requestContent);
-
-        session.getContext().writeAndFlush(event);*/
+        var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+        sendResponse(ctx, request, response);
     }
 
-    private void handleSetProperty(FullHttpRequest request, QueryStringDecoder decoder) throws Exception {
+    private void handleSetProperty(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
+        var decoder = new QueryStringDecoder(request.uri());
         log.info("Path: {}, Query params: {}", decoder.path(), decoder.parameters());
         var play = (NSDictionary) BinaryPropertyListParser.parse(new ByteBufInputStream(request.content()));
         log.info("Request content:\n{}", play.toXMLPropertyList());
+
+        var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+        sendResponse(ctx, request, response);
     }
 
-    private void handleRate(QueryStringDecoder decoder) {
+    private void handleRate(ChannelHandlerContext ctx, FullHttpRequest request) {
+        var decoder = new QueryStringDecoder(request.uri());
         log.info("Path: {}, Query params: {}", decoder.path(), decoder.parameters());
+
+        var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+        sendResponse(ctx, request, response);
     }
 
-    private void handlePlaybackInfo(FullHttpResponse response) {
+    private void handlePlaybackInfo(ChannelHandlerContext ctx, FullHttpRequest request) {
+        var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
         response.headers().add(HttpHeaderNames.CONTENT_TYPE, "text/x-apple-plist+xml");
         var playbackInfo = PropertyListUtil.preparePlaybackInfoResponse();
         response.content().writeBytes(playbackInfo);
+        sendResponse(ctx, request, response);
     }
 
-    private void handleAction(Session session, FullHttpRequest request) throws Exception {
+    private void handleAction(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
         var action = (NSDictionary) BinaryPropertyListParser.parse(new ByteBufInputStream(request.content()));
         log.info("Request content:\n{}", action.toXMLPropertyList());
 
@@ -276,6 +315,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         log.info("\n{}", fcupResponse);
 
         if (fcupResponseURL.contains("master.m3u8")) {
+            var session = resolveSession(request);
             var parser = new MasterPlaylistParser(ParsingMode.LENIENT);
             var masterPlaylist = parser.readPlaylist(fcupResponse);
 
@@ -284,7 +324,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                             variant.resolution().get().equals(Resolution.of(1920, 1080)))
                     .findFirst()
                     .map(Variant::uri)
-                    .ifPresent(listUri -> reverse.sendEvent(session.getId(), listUri));
+                    .ifPresent(listUri -> sendEventRequest(session, listUri));
         } else {
             var parser = new MediaPlaylistParser(ParsingMode.LENIENT);
             var mediaPlaylist = parser.readPlaylist(fcupResponse);
@@ -304,11 +344,17 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
 
             Files.writeString(Path.of("test.m3u8"), parser.writePlaylistAsString(mediaPlaylist));
         }
+
+        var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+        sendResponse(ctx, request, response);
     }
 
-    private void handleGetProperty(QueryStringDecoder decoder) {
+    private void handleGetProperty(ChannelHandlerContext ctx, FullHttpRequest request) {
         // TODO get requested param and respond accordingly
+        var decoder = new QueryStringDecoder(request.uri());
         log.info("Path: {}, Query params: {}", decoder.path(), decoder.parameters());
+        var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+        sendResponse(ctx, request, response);
     }
 
     private DefaultFullHttpResponse createRtspResponse(FullHttpRequest request) {
@@ -330,5 +376,17 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         if (!HttpUtil.isKeepAlive(request)) {
             future.addListener(ChannelFutureListener.CLOSE);
         }
+    }
+
+    private void sendEventRequest(Session session, String listUri) {
+        var requestContent = PropertyListUtil.prepareEventRequest(session.getId(), listUri);
+
+        DefaultFullHttpRequest event = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.POST, "/event");
+        event.headers().add(HttpHeaderNames.CONTENT_TYPE, "text/x-apple-plist+xml");
+        event.headers().add(HttpHeaderNames.CONTENT_LENGTH, requestContent.length);
+        event.headers().add("X-Apple-Session-ID", session.getId());
+        event.content().writeBytes(requestContent);
+
+        session.getReverseContexts().get("event").writeAndFlush(event);
     }
 }

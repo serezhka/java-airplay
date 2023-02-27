@@ -68,7 +68,7 @@ public class AirPlayBonjour {
     private Map<String, String> airPlayMDNSProps(String deviceId) {
         HashMap<String, String> airPlayMDNSProps = new HashMap<>();
         airPlayMDNSProps.put("deviceid", deviceId);
-        airPlayMDNSProps.put("features", "0x5A7FFFE4,0x1E"); // 0x5A7FFFF7 E4
+        airPlayMDNSProps.put("features", "0x5A7FFFF7,0x1E"); // 0x5A7FFFF7 E4
         airPlayMDNSProps.put("srcvers", "220.68");
         airPlayMDNSProps.put("flags", "0x44");
         airPlayMDNSProps.put("vv", "2");
@@ -92,7 +92,7 @@ public class AirPlayBonjour {
         airTunesMDNSProps.put("et", "0,3,5");
         airTunesMDNSProps.put("ek", "1");
         //airTunesMDNSProps.put("vv", "2");
-        airTunesMDNSProps.put("ft", "0x5A7FFFE4,0x1E");
+        airTunesMDNSProps.put("ft", "0x5A7FFFF7,0x1E");
         airTunesMDNSProps.put("am", "AppleTV3,2C");
         airTunesMDNSProps.put("md", "0,1,2");
         //airTunesMDNSProps.put("rhd", "5.6.0.0");
