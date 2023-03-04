@@ -21,11 +21,11 @@ public abstract class GstPlayer implements AirPlayConsumer {
     private final Pipeline alacPipeline;
     private final Pipeline aacEldPipeline;
 
-    private final Pipeline hlsPipeline;
-
     private final AppSrc h264Src;
     private final AppSrc alacSrc;
     private final AppSrc aacEldSrc;
+
+    private Pipeline hlsPipeline;
 
     private AudioStreamInfo.CompressionType audioCompressionType;
 
@@ -57,7 +57,7 @@ public abstract class GstPlayer implements AirPlayConsumer {
         aacEldSrc.set("format", Format.TIME);
         aacEldSrc.set("emit-signals", true);
 
-        hlsPipeline = (Pipeline) Gst.parseLaunch("filesrc location=media.m3u8 ! hlsdemux ! queue ! decodebin ! autovideosink");
+        // hlsPipeline = (Pipeline) Gst.parseLaunch("filesrc location=media.m3u8 ! hlsdemux ! decodebin ! videoconvert ! videoscale ! autovideosink sync=false");
     }
 
     protected abstract Pipeline createH264Pipeline();
@@ -110,6 +110,12 @@ public abstract class GstPlayer implements AirPlayConsumer {
 
     @Override
     public void onMediaPlaylist(Path path) {
+        hlsPipeline.play();
+    }
+
+    @Override
+    public void onMediaPlaylist(String playlistUri) {
+        hlsPipeline = (Pipeline) Gst.parseLaunch("playbin3 uri=" + playlistUri);
         hlsPipeline.play();
     }
 }

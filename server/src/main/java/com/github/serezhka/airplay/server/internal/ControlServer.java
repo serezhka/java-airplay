@@ -18,6 +18,7 @@ import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.rtsp.RtspDecoder;
 import io.netty.handler.codec.rtsp.RtspEncoder;
+import io.netty.handler.logging.ByteBufFormat;
 import io.netty.handler.logging.LogLevel;
 import io.netty.handler.logging.LoggingHandler;
 import lombok.Getter;
@@ -72,7 +73,7 @@ public class ControlServer implements Runnable {
                                     new RtspDecoder(),
                                     new RtspEncoder(),
                                     new HttpObjectAggregator(64 * 1024),
-                                    new LoggingHandler(LogLevel.INFO),
+                                    new LoggingHandler(LogLevel.INFO, ByteBufFormat.SIMPLE),
                                     new ControlHandler(sessionManager, airPlayConfig, airPlayConsumer));
                         }
                     })
