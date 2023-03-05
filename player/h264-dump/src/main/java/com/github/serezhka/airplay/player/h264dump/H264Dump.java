@@ -56,8 +56,4 @@ public class H264Dump implements AirPlayConsumer {
     public void save() throws IOException {
         videoFileChannel.close();
     }
-
-    @Override
-    public void onMediaPlaylist(Path path) {
-    }
 }

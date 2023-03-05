@@ -19,8 +19,6 @@ public interface AirPlayConsumer {
 
     void onAudioSrcDisconnect();
 
-    void onMediaPlaylist(Path path);
-
-    default void onMediaPlaylist(String path) {
+    default void onMediaPlaylist(String playlistUri) {
     }
 }

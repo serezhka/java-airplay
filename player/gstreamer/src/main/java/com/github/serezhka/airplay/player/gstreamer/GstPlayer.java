@@ -91,14 +91,10 @@ public abstract class GstPlayer implements AirPlayConsumer {
         Buffer buf = new Buffer(bytes.length);
         buf.map(true).put(bytes); // ByteBuffer.wrap(bytes)
         switch (audioCompressionType) {
-            case ALAC:
-                alacSrc.pushBuffer(buf);
-                break;
-            case AAC_ELD:
-                aacEldSrc.pushBuffer(buf);
-                break;
-            default:
-                break;
+            case ALAC -> alacSrc.pushBuffer(buf);
+            case AAC_ELD -> aacEldSrc.pushBuffer(buf);
+            default -> {
+            }
         }
     }
 
@@ -106,11 +102,6 @@ public abstract class GstPlayer implements AirPlayConsumer {
     public void onAudioSrcDisconnect() {
         alacPipeline.stop();
         aacEldPipeline.stop();
-    }
-
-    @Override
-    public void onMediaPlaylist(Path path) {
-        hlsPipeline.play();
     }
 
     @Override

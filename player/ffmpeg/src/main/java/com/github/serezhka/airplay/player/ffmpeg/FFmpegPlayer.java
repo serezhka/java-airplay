@@ -52,8 +52,4 @@ public class FFmpegPlayer implements AirPlayConsumer {
     @Override
     public void onAudioSrcDisconnect() {
     }
-
-    @Override
-    public void onMediaPlaylist(Path path) {
-    }
 }
