@@ -4,12 +4,13 @@ import com.github.serezhka.airplay.server.internal.packet.VideoPacket;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.ReplayingDecoder;
-import lombok.extern.slf4j.Slf4j;
 
 import java.util.List;
 
-@Slf4j
+import android.util.Log;
+
 public class VideoDecoder extends ReplayingDecoder<VideoDecoder.DecoderState> {
+    private static String TAG = "VideoDecoder";
 
     public enum DecoderState {
         READ_HEADER,
@@ -43,7 +44,7 @@ public class VideoDecoder extends ReplayingDecoder<VideoDecoder.DecoderState> {
                     checkpoint(DecoderState.READ_HEADER);
                     out.add(new VideoPacket(payloadType, payloadSize, payloadBytes));
                 } else {
-                    log.info("Video packet with type: {}, length: {} bytes is skipped", payloadType, payloadSize);
+                    Log.i(TAG, String.format("Video packet with type: %d, length: %d bytes is skipped", payloadType, payloadSize));
                     in.skipBytes(payloadSize);
                     checkpoint(DecoderState.READ_HEADER);
                 }

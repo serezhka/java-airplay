@@ -1,6 +1,5 @@
 package com.github.serezhka.airplay.lib.internal;
 
-import lombok.extern.slf4j.Slf4j;
 import net.i2p.crypto.eddsa.EdDSAEngine;
 import net.i2p.crypto.eddsa.EdDSAPublicKey;
 import net.i2p.crypto.eddsa.KeyPairGenerator;
@@ -23,8 +22,10 @@ import java.nio.charset.StandardCharsets;
 import java.security.*;
 import java.util.Arrays;
 
-@Slf4j
+import android.util.Log;
+
 public class Pairing {
+    private static String TAG = "Pairing";
 
     private final KeyPair keyPair;
 
@@ -56,7 +57,7 @@ public class Pairing {
 
             ecdhOurs = curve25519KeyPair.getPublicKey();
             ecdhSecret = curve25519.calculateAgreement(ecdhTheirs, curve25519KeyPair.getPrivateKey());
-            log.info("Shared secret: " + Utils.bytesToHex(ecdhSecret));
+            Log.i(TAG, "Shared secret: " + Utils.bytesToHex(ecdhSecret));
 
             Cipher aesCtr128Encrypt = initCipher();
 
@@ -94,7 +95,7 @@ public class Pairing {
             edDSAEngine.initVerify(edDSAPublicKey);
 
             pairVerified = edDSAEngine.verifyOneShot(sigMessage, sigBuffer);
-            log.info("Pair verified: " + pairVerified);
+            Log.i(TAG, "Pair verified: " + pairVerified);
         }
     }
 

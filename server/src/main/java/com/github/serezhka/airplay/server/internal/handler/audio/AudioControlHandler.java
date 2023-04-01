@@ -4,10 +4,11 @@ import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.socket.DatagramPacket;
-import lombok.extern.slf4j.Slf4j;
 
-@Slf4j
+import android.util.Log;
+
 public class AudioControlHandler extends SimpleChannelInboundHandler<DatagramPacket> {
+    private static String TAG = "AudioControlHandler";
 
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, DatagramPacket msg) {
@@ -16,6 +17,6 @@ public class AudioControlHandler extends SimpleChannelInboundHandler<DatagramPac
         byte[] contentBytes = new byte[contentLength];
         content.readBytes(contentBytes);
         int type = contentBytes[1] & ~0x80;
-        log.debug("Got audio control packet, type: {}, length: {}", type, contentLength);
+        Log.d(TAG, String.format("Got audio control packet, type: %d, length: %d", type, contentLength));
     }
 }

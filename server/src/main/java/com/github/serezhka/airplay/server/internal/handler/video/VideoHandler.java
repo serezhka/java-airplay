@@ -9,12 +9,13 @@ import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 
-@Slf4j
+import android.util.Log;
+
 @RequiredArgsConstructor
 @ChannelHandler.Sharable
 public class VideoHandler extends ChannelInboundHandlerAdapter {
+    private static String TAG = "VideoHandler";
 
     private final AirPlay airPlay;
     private final AirPlayConsumer dataConsumer;
@@ -32,7 +33,7 @@ public class VideoHandler extends ChannelInboundHandlerAdapter {
                 dataConsumer.onVideo(spsPps);
             }
         } catch (Exception e) {
-            log.error(e.getMessage(), e);
+            Log.e(TAG, e.getMessage(), e);
         }
     }
 
@@ -48,7 +49,7 @@ public class VideoHandler extends ChannelInboundHandlerAdapter {
                 idx += naluSize + 4;
             }
             if (payload.length - naluSize > 4) {
-                log.error("Video packet contains corrupted NAL unit. It might be decrypt error");
+                Log.e(TAG, "Video packet contains corrupted NAL unit. It might be decrypt error");
                 return;
             }
         }
@@ -69,7 +70,7 @@ public class VideoHandler extends ChannelInboundHandlerAdapter {
         payloadBuf.readBytes(pictureParameterSet);
 
         int spsPpsLen = spsLen + ppsLen + 8;
-        log.info("SPS PPS length: {}", spsPpsLen);
+        Log.i(TAG, String.format("SPS PPS length: %d", spsPpsLen));
         byte[] spsPps = new byte[spsPpsLen];
         spsPps[0] = 0;
         spsPps[1] = 0;

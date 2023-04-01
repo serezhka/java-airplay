@@ -10,12 +10,13 @@ import io.netty.channel.epoll.EpollEventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.DatagramChannel;
 import io.netty.channel.socket.nio.NioDatagramChannel;
-import lombok.extern.slf4j.Slf4j;
 
 import java.net.InetSocketAddress;
 
-@Slf4j
+import android.util.Log;
+
 public class AudioControlServer implements Runnable {
+    private static String TAG = "AudioControlServer";
 
     private Thread thread;
     private int port;
@@ -54,8 +55,8 @@ public class AudioControlServer implements Runnable {
 
             var channelFuture = bootstrap.bind().sync();
 
-            log.info("AirPlay audio control server listening on port: {}",
-                    port = ((InetSocketAddress) channelFuture.channel().localAddress()).getPort());
+            Log.i(TAG, String.format("AirPlay audio control server listening on port: %d",
+                    port = ((InetSocketAddress) channelFuture.channel().localAddress()).getPort()));
 
             synchronized (this) {
                 this.notify();
@@ -63,9 +64,9 @@ public class AudioControlServer implements Runnable {
 
             channelFuture.channel().closeFuture().sync();
         } catch (InterruptedException e) {
-            log.info("AirPlay audio control server interrupted");
+            Log.i(TAG, "AirPlay audio control server interrupted");
         } finally {
-            log.info("AirPlay audio control server stopped");
+            Log.i(TAG, "AirPlay audio control server stopped");
             workerGroup.shutdownGracefully();
         }
     }

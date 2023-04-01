@@ -5,15 +5,16 @@ import com.dd.plist.NSDictionary;
 import com.github.serezhka.airplay.lib.AudioStreamInfo;
 import com.github.serezhka.airplay.lib.MediaStreamInfo;
 import com.github.serezhka.airplay.lib.VideoStreamInfo;
-import lombok.extern.slf4j.Slf4j;
 import net.i2p.crypto.eddsa.Utils;
 
 import java.io.InputStream;
 import java.util.HashMap;
 import java.util.Optional;
 
-@Slf4j
+import android.util.Log;
+
 public class RTSP {
+    private static String TAG = "RTSP";
 
     private byte[] ekey;
     private byte[] eiv;
@@ -25,20 +26,20 @@ public class RTSP {
         if (setup.containsKey("ekey") || setup.containsKey("eiv")) {
             ekey = (byte[]) setup.get("ekey").toJavaObject();
             eiv = (byte[]) setup.get("eiv").toJavaObject();
-            log.info("Encrypted AES key: {}, iv: {}", Utils.bytesToHex(ekey), Utils.bytesToHex(eiv));
+            Log.i(TAG, String.format("Encrypted AES key: %s, iv: %s", Utils.bytesToHex(ekey), Utils.bytesToHex(eiv)));
             return Optional.empty();
         } else if (setup.containsKey("streams")) {
-            log.debug("RTSP SETUP streams:\n{}", setup.toXMLPropertyList());
+            Log.d(TAG, String.format("RTSP SETUP streams:\n%s", setup.toXMLPropertyList()));
             return Optional.ofNullable(getMediaStreamInfo(setup));
         } else {
-            log.error("Unknown RTSP setup content\n{}", setup.toXMLPropertyList());
+            Log.e(TAG, String.format("Unknown RTSP setup content\n%s", setup.toXMLPropertyList()));
             return Optional.empty();
         }
     }
 
     public Optional<MediaStreamInfo> teardown(InputStream rtspTeardownPayload) throws Exception {
         var teardown = (NSDictionary) BinaryPropertyListParser.parse(rtspTeardownPayload);
-        log.debug("RTSP TEARDOWN streams:\n{}", teardown.toXMLPropertyList());
+        Log.d(TAG, String.format("RTSP TEARDOWN streams:\n%s", teardown.toXMLPropertyList()));
         if (teardown.containsKey("streams")) {
             return Optional.ofNullable(getMediaStreamInfo(teardown));
         }
@@ -48,24 +49,23 @@ public class RTSP {
     private MediaStreamInfo getMediaStreamInfo(NSDictionary request) {
         var streams = ((Object[]) request.get("streams").toJavaObject());
         if (streams.length > 1) {
-            log.warn("Request contains more than one stream info");
+            Log.w(TAG, "Request contains more than one stream info");
         }
 
-        //noinspection rawtypes
+        @SuppressWarnings("rawtypes")
         HashMap stream = (HashMap) streams[0];
         int type = (int) stream.get("type");
         switch (type) {
 
             // video stream
-            case 110 -> {
+            case 110:
                 if (stream.containsKey("streamConnectionID")) {
                     streamConnectionID = Long.toUnsignedString((long) stream.get("streamConnectionID"));
                 }
                 return new VideoStreamInfo(streamConnectionID);
-            }
 
-            // audio stream
-            case 96 -> {
+                // audio stream
+            case 96:
                 AudioStreamInfo.AudioStreamInfoBuilder builder = new AudioStreamInfo.AudioStreamInfoBuilder();
                 if (stream.containsKey("ct")) {
                     int compressionType = (int) stream.get("ct");
@@ -80,12 +80,10 @@ public class RTSP {
                     builder.samplesPerFrame(samplesPerFrame);
                 }
                 return builder.build();
-            }
 
-            default -> {
-                log.error("Unknown stream type: {}", type);
+            default:
+                Log.e(TAG, String.format("Unknown stream type: %d", type));
                 return null;
-            }
         }
     }
 

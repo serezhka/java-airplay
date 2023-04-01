@@ -17,13 +17,14 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 
 import java.net.InetSocketAddress;
 
-@Slf4j
+import android.util.Log;
+
 @RequiredArgsConstructor
 public class VideoServer implements Runnable {
+    private static String TAG = "VideoServer";
 
     private final AirPlay airPlay;
 
@@ -72,8 +73,8 @@ public class VideoServer implements Runnable {
                     .childOption(ChannelOption.SO_KEEPALIVE, true);
             var channelFuture = serverBootstrap.bind().sync();
 
-            log.info("AirPlay video server listening on port: {}",
-                    port = ((InetSocketAddress) channelFuture.channel().localAddress()).getPort());
+            Log.i(TAG, String.format("AirPlay video server listening on port: %d",
+                    port = ((InetSocketAddress) channelFuture.channel().localAddress()).getPort()));
 
             synchronized (this) {
                 this.notify();
@@ -81,9 +82,9 @@ public class VideoServer implements Runnable {
 
             channelFuture.channel().closeFuture().sync();
         } catch (InterruptedException e) {
-            log.info("AirPlay video server interrupted");
+            Log.i(TAG, "AirPlay video server interrupted");
         } finally {
-            log.info("AirPlay video server stopped");
+            Log.i(TAG, "AirPlay video server stopped");
             bossGroup.shutdownGracefully();
             workerGroup.shutdownGracefully();
         }

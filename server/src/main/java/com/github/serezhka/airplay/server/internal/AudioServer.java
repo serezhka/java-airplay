@@ -16,13 +16,14 @@ import io.netty.channel.socket.nio.NioDatagramChannel;
 import io.netty.handler.codec.DatagramPacketDecoder;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 
 import java.net.InetSocketAddress;
 
-@Slf4j
+import android.util.Log;
+
 @RequiredArgsConstructor
 public class AudioServer implements Runnable {
+    private static String TAG = "AudioServer";
 
     private final AirPlay airPlay;
 
@@ -68,8 +69,8 @@ public class AudioServer implements Runnable {
                     });
             var channelFuture = bootstrap.bind().sync();
 
-            log.info("AirPlay audio server listening on port: {}",
-                    port = ((InetSocketAddress) channelFuture.channel().localAddress()).getPort());
+            Log.i(TAG, String.format("AirPlay audio server listening on port: %d",
+                    port = ((InetSocketAddress) channelFuture.channel().localAddress()).getPort()));
 
             synchronized (this) {
                 this.notify();
@@ -77,9 +78,9 @@ public class AudioServer implements Runnable {
 
             channelFuture.channel().closeFuture().sync();
         } catch (InterruptedException e) {
-            log.info("AirPlay audio server interrupted");
+            Log.i(TAG, "AirPlay audio server interrupted");
         } finally {
-            log.info("AirPlay audio server stopped");
+            Log.i(TAG, "AirPlay audio server stopped");
             workerGroup.shutdownGracefully();
         }
     }

@@ -37,8 +37,6 @@ dependencies {
     implementation project(':lib')
 
     implementation 'io.netty:netty-all:4.1.66.Final'
-    implementation 'org.slf4j:slf4j-api:2.0.5'
-
     implementation 'net.i2p.crypto:eddsa:0.3.0'
     implementation 'com.googlecode.plist:dd-plist:1.26'
     implementation 'io.lindstrom:m3u8-parser:0.24'

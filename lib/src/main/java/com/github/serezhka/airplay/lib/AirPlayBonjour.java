@@ -1,18 +1,18 @@
 package com.github.serezhka.airplay.lib;
 
-import lombok.extern.slf4j.Slf4j;
-
 import android.content.Context;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WifiInfo;
 import android.net.nsd.NsdManager;
 import android.net.nsd.NsdServiceInfo;
+import android.util.Log;
 
 /**
  * Registers airplay/airtunes service mdns
  */
-@Slf4j
 public class AirPlayBonjour {
+    private static String TAG = "AirPlayBonjour";
+
     private static final String AIRPLAY_SERVICE_TYPE = "_airplay._tcp.local";
     private static final String AIRTUNES_SERVICE_TYPE = "_raop._tcp.local";
 
@@ -102,7 +102,7 @@ public class AirPlayBonjour {
     }
 
     public void initializeRegistrationListener() {
-        log.debug("Creating registration listener");
+        Log.d(TAG, "Creating registration listener");
         registrationListener = new NsdManager.RegistrationListener() {
 
             @Override
@@ -111,26 +111,26 @@ public class AirPlayBonjour {
                 // resolve a conflict, so update the name you initially requested
                 // with the name Android actually used.
                 serverName = NsdServiceInfo.getServiceName();
-                log.debug(String.format("Service registered as %s", serverName));
+                Log.d(TAG, String.format("Service registered as %s", serverName));
             }
 
             @Override
             public void onRegistrationFailed(NsdServiceInfo serviceInfo, int errorCode) {
                 // Registration failed! Put debugging code here to determine why.
-                log.error(String.format("Service registration failed with error %d", errorCode));
+                Log.e(TAG, String.format("Service registration failed with error %d", errorCode));
             }
 
             @Override
             public void onServiceUnregistered(NsdServiceInfo arg0) {
                 // Service has been unregistered. This only happens when you call
                 // NsdManager.unregisterService() and pass in this listener.
-                log.debug(String.format("Service %s was unregistered", serverName));
+                Log.d(TAG, String.format("Service %s was unregistered", serverName));
             }
 
             @Override
             public void onUnregistrationFailed(NsdServiceInfo serviceInfo, int errorCode) {
                 // Unregistration failed. Put debugging code here to determine why.
-                log.error(String.format("Service unregistration failed with error %d", errorCode));
+                Log.e(TAG, String.format("Service unregistration failed with error %d", errorCode));
             }
         };
     }

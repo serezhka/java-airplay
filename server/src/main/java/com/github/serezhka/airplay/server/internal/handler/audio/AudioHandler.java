@@ -6,13 +6,14 @@ import com.github.serezhka.airplay.server.internal.packet.AudioPacket;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 
 import java.util.Arrays;
 
-@Slf4j
+import android.util.Log;
+
 @RequiredArgsConstructor
 public class AudioHandler extends ChannelInboundHandlerAdapter {
+    private static String TAG = "AudioHandler";
 
     private final AirPlay airPlay;
     private final AirPlayConsumer dataConsumer;

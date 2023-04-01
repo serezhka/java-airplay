@@ -24,7 +24,6 @@ import io.netty.channel.socket.ServerSocketChannel;
 import io.netty.handler.codec.http.*;
 import io.netty.handler.codec.rtsp.*;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
@@ -32,9 +31,11 @@ import java.util.Optional;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
-@Slf4j
+import android.util.Log;
+
 @RequiredArgsConstructor
 public class ControlHandler extends ChannelInboundHandlerAdapter {
+    private static String TAG = "ControlHandler";
 
     private final SessionManager sessionManager;
     private final AirPlayConfig airPlayConfig;
@@ -69,7 +70,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 } else if (HttpMethod.POST.equals(request.method()) && request.uri().equals("/audioMode")) {
                     handleRtspAudioMode(ctx, request);
                 } else {
-                    log.error("Unknown control request: {} {} {}", request.protocolVersion(), request.method(), request.uri());
+                    Log.e(TAG, String.format("Unknown control request: %s %s %s", request.protocolVersion(), request.method(), request.uri()));
                     var response = createRtspResponse(request);
                     response.setStatus(HttpResponseStatus.NOT_FOUND);
                     sendResponse(ctx, request, response);
@@ -95,7 +96,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 } else if (HttpMethod.GET.equals(request.method()) && decoder.path().startsWith("/playlist")) {
                     handleGetPlaylist(ctx, request);
                 } else {
-                    log.error("Unknown control request: {} {} {}", request.protocolVersion(), request.method(), request.uri());
+                    Log.e(TAG, String.format("Unknown control request: %s %s %s", request.protocolVersion(), request.method(), request.uri()));
                     var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.NOT_FOUND);
                     sendResponse(ctx, request, response);
                 }
@@ -103,7 +104,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         } else if (msg instanceof FullHttpResponse response) {
             // reverse connection response
         } else {
-            log.error("Unknown control message type: {}", msg);
+            Log.e(TAG, String.format("Unknown control message type: %s", msg));
         }
     }
 
@@ -117,7 +118,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
      */
     private Session resolveSession(FullHttpRequest request) {
         var sessionId = Optional.ofNullable(request.headers().get("Active-Remote"))
-                .orElseGet(() -> request.headers().get("X-Apple-Session-ID"));
+            .orElseGet(() -> request.headers().get("X-Apple-Session-ID"));
         return sessionManager.getSession(sessionId);
     }
 
@@ -155,23 +156,24 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         var session = resolveSession(request);
         var response = createRtspResponse(request);
         var mediaStreamInfo = session.getAirPlay().rtspSetup(new ByteBufInputStream(request.content()));
+        byte[] setup;
         if (mediaStreamInfo.isPresent()) {
             switch (mediaStreamInfo.get().getStreamType()) {
-                case AUDIO -> {
+                case AUDIO:
                     airPlayConsumer.onAudioFormat((AudioStreamInfo) mediaStreamInfo.get());
                     session.getAudioServer().start(airPlayConsumer);
                     session.getAudioControlServer().start();
-                    var setup = PropertyListUtil.prepareSetupAudioResponse(session.getAudioServer().getPort(),
+                    setup = PropertyListUtil.prepareSetupAudioResponse(session.getAudioServer().getPort(),
                             session.getAudioControlServer().getPort());
                     response.content().writeBytes(setup);
-                }
-                case VIDEO -> {
+                    break;
+                case VIDEO:
                     airPlayConsumer.onVideoFormat((VideoStreamInfo) mediaStreamInfo.get());
                     session.getVideoServer().start(airPlayConsumer);
-                    var setup = PropertyListUtil.prepareSetupVideoResponse(session.getVideoServer().getPort(),
+                    setup = PropertyListUtil.prepareSetupVideoResponse(session.getVideoServer().getPort(),
                             ((ServerSocketChannel) ctx.channel().parent()).localAddress().getPort(), 0);
                     response.content().writeBytes(setup);
-                }
+                    break;
             }
         }
         sendResponse(ctx, request, response);
@@ -214,15 +216,15 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         var mediaStreamInfo = session.getAirPlay().rtspTeardown(new ByteBufInputStream(request.content()));
         if (mediaStreamInfo.isPresent()) {
             switch (mediaStreamInfo.get().getStreamType()) {
-                case AUDIO -> {
+                case AUDIO:
                     airPlayConsumer.onAudioSrcDisconnect();
                     session.getAudioServer().stop();
                     session.getAudioControlServer().stop();
-                }
-                case VIDEO -> {
+                    break;
+                case VIDEO:
                     airPlayConsumer.onVideoSrcDisconnect();
                     session.getVideoServer().stop();
-                }
+                    break;
             }
         } else {
             airPlayConsumer.onAudioSrcDisconnect();
@@ -264,7 +266,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
 
     private void handlePlay(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
         var play = (NSDictionary) BinaryPropertyListParser.parse(new ByteBufInputStream(request.content()));
-        log.info("Request content:\n{}", play.toXMLPropertyList());
+        Log.i(TAG, String.format("Request content:\n%s", play.toXMLPropertyList()));
 
         var clientProcName = play.get("clientProcName").toJavaObject(String.class);
         if ("YouTube".equals(clientProcName)) {
@@ -277,7 +279,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
             sendResponse(ctx, request, response);
         } else {
-            log.error("Client proc name [{}] is not supported!", clientProcName);
+            Log.e(TAG, String.format("Client proc name [%s] is not supported!", clientProcName));
             var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.NOT_IMPLEMENTED);
             sendResponse(ctx, request, response);
         }
@@ -285,9 +287,9 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
 
     private void handleSetProperty(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
         var decoder = new QueryStringDecoder(request.uri());
-        log.info("Path: {}, Query params: {}", decoder.path(), decoder.parameters());
+        Log.i(TAG, String.format("Path: %s, Query params: %s", decoder.path(), decoder.parameters()));
         var play = (NSDictionary) BinaryPropertyListParser.parse(new ByteBufInputStream(request.content()));
-        log.info("Request content:\n{}", play.toXMLPropertyList());
+        Log.i(TAG, String.format("Request content:\n%s", play.toXMLPropertyList()));
 
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
         sendResponse(ctx, request, response);
@@ -295,7 +297,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
 
     private void handleRate(ChannelHandlerContext ctx, FullHttpRequest request) {
         var decoder = new QueryStringDecoder(request.uri());
-        log.info("Path: {}, Query params: {}", decoder.path(), decoder.parameters());
+        Log.i(TAG, String.format("Path: %s, Query params: %s", decoder.path(), decoder.parameters()));
 
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
         sendResponse(ctx, request, response);
@@ -311,7 +313,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
 
     private void handleAction(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
         var action = (NSDictionary) BinaryPropertyListParser.parse(new ByteBufInputStream(request.content()));
-        log.info("Request content:\n{}", action.toXMLPropertyList());
+        Log.i(TAG, String.format("Request content:\n%s", action.toXMLPropertyList()));
 
         var type = action.get("type").toJavaObject(String.class);
         if ("unhandledURLResponse".equals(type)) {
@@ -374,13 +376,13 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     private void handleGetProperty(ChannelHandlerContext ctx, FullHttpRequest request) {
         // TODO get requested param and respond accordingly
         var decoder = new QueryStringDecoder(request.uri());
-        log.info("Path: {}, Query params: {}", decoder.path(), decoder.parameters());
+        Log.i(TAG, String.format("Path: %s, Query params: %s", decoder.path(), decoder.parameters()));
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
         sendResponse(ctx, request, response);
     }
 
     private void handleGetPlaylist(ChannelHandlerContext ctx, FullHttpRequest request) {
-        log.warn("Playlist request: {}", request.uri());
+        Log.w(TAG, String.format("Playlist request: %s", request.uri()));
         var playlistUriRemote = playlistPathToRemote(request.uri());
         var decoder = new QueryStringDecoder(request.uri());
         var session = sessionManager.getSession(decoder.parameters().get("session").get(0));

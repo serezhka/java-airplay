@@ -23,13 +23,14 @@ import io.netty.handler.logging.LogLevel;
 import io.netty.handler.logging.LoggingHandler;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 
 import java.net.InetSocketAddress;
 
-@Slf4j
+import android.util.Log;
+
 @RequiredArgsConstructor
 public class ControlServer implements Runnable {
+    private static String TAG = "ControlServer";
 
     private final SessionManager sessionManager = new SessionManager();
 
@@ -82,8 +83,8 @@ public class ControlServer implements Runnable {
                     .childOption(ChannelOption.SO_KEEPALIVE, true);
             var channelFuture = serverBootstrap.bind().sync();
 
-            log.info("AirPlay control server listening on port: {}",
-                    port = ((InetSocketAddress) channelFuture.channel().localAddress()).getPort());
+            Log.i(TAG, String.format("AirPlay control server listening on port: %d",
+                    port = ((InetSocketAddress) channelFuture.channel().localAddress()).getPort()));
 
             synchronized (this) {
                 this.notify();
@@ -93,7 +94,7 @@ public class ControlServer implements Runnable {
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            log.info("AirPlay control server stopped");
+            Log.i(TAG, "AirPlay control server stopped");
             bossGroup.shutdownGracefully();
             workerGroup.shutdownGracefully();
         }
