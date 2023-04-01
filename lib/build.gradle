@@ -1,11 +1,42 @@
 plugins {
-    id 'java-library'
+    id 'com.android.library'
+}
+
+android {
+    namespace 'com.github.serezhka.lib'
+    compileSdk 33
+
+    defaultConfig {
+        minSdk 27
+        targetSdk 33
+        versionCode 1
+        versionName '1.0.7'
+
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    buildFeatures {
+        viewBinding true
+    }
 }
 
 dependencies {
+    compileOnly 'org.projectlombok:lombok:1.18.26'
+    annotationProcessor 'org.projectlombok:lombok:1.18.26'
+
     implementation 'org.jmdns:jmdns:3.5.8'
     implementation 'net.i2p.crypto:eddsa:0.3.0'
     implementation 'org.whispersystems:curve25519-java:0.5.0'
     implementation 'com.googlecode.plist:dd-plist:1.26'
-    implementation "org.slf4j:slf4j-api:$slf4jVersion"
+    implementation 'org.slf4j:slf4j-api:2.0.5'
 }

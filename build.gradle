@@ -1,43 +1,4 @@
 plugins {
-    id 'io.freefair.lombok' version '6.6'
-    id 'com.adarshr.test-logger' version '3.2.0'
-}
-
-ext {
-    springBootVersion = '3.0.0'
-    springDepMgmtVersion = '1.1.0'
-    junitVersion = '5.9.1'
-    nettyVersion = '4.1.86.Final'
-    slf4jVersion = '2.0.5'
-    jnaVersion = '5.12.1'
-}
-
-allprojects {
-    apply plugin: 'java'
-
-    group 'com.github.serezhka'
-    version '1.0.7'
-
-    repositories {
-        mavenCentral()
-    }
-}
-
-subprojects {
-    apply plugin: 'io.freefair.lombok'
-    apply plugin: 'com.adarshr.test-logger'
-
-    dependencies {
-        testImplementation(platform "org.junit:junit-bom:$junitVersion")
-        testImplementation 'org.junit.jupiter:junit-jupiter'
-    }
-
-    tasks.named('test') {
-        useJUnitPlatform()
-    }
-}
-
-wrapper {
-    gradleVersion = '7.6'
-    distributionType = Wrapper.DistributionType.ALL
+    id 'com.android.application' version '7.4.2' apply false
+    id 'com.android.library' version '7.4.2' apply false
 }
