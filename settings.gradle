@@ -1,8 +1,3 @@
 rootProject.name = 'java-airplay'
 include('lib')
 include('server')
-include('player:app')
-include('player:gstreamer')
-include('player:h264-dump')
-include('player:vlc')
-include('player:ffmpeg')
