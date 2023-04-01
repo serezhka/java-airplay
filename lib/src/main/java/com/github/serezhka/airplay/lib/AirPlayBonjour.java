@@ -13,8 +13,9 @@ import android.util.Log;
 public class AirPlayBonjour {
     private static String TAG = "AirPlayBonjour";
 
-    private static final String AIRPLAY_SERVICE_TYPE = "_airplay._tcp.local";
-    private static final String AIRTUNES_SERVICE_TYPE = "_raop._tcp.local";
+    // service type ending with .local will fail on registration
+    private static final String AIRPLAY_SERVICE_TYPE = "_airplay._tcp.";
+    private static final String AIRTUNES_SERVICE_TYPE = "_raop._tcp.";
 
     private final Context context;
     private String serverName;
