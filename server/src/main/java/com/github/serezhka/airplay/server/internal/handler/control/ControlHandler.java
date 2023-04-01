@@ -312,63 +312,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     }
 
     private void handleAction(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
-        var action = (NSDictionary) BinaryPropertyListParser.parse(new ByteBufInputStream(request.content()));
-        Log.i(TAG, String.format("Request content:\n%s", action.toXMLPropertyList()));
-
-        var type = action.get("type").toJavaObject(String.class);
-        if ("unhandledURLResponse".equals(type)) {
-            var params = (NSDictionary) action.get("params");
-            var fcupResponseURL = params.get("FCUP_Response_URL").toJavaObject(String.class);
-            var fcupResponseBase64 = ((NSData) (params.get("FCUP_Response_Data"))).getBase64EncodedData();
-            var fcupResponse = new String(Base64.getDecoder().decode(fcupResponseBase64));
-            var session = resolveSession(request);
-
-            if (session.getPlaylistRequestContexts().containsKey(fcupResponseURL)) {
-                if (fcupResponseURL.contains("master.m3u8")) {
-                    var context = session.getPlaylistRequestContexts().get(fcupResponseURL);
-                    var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
-                    response.content().writeCharSequence(masterPlaylistToLocalUrls(fcupResponse, playlistBaseUrl(ctx), session.getId()), StandardCharsets.UTF_8);
-                    HttpUtil.setContentLength(response, response.content().readableBytes());
-                    context.writeAndFlush(response);
-                    session.getPlaylistRequestContexts().remove(fcupResponseURL);
-                } else if (fcupResponseURL.contains("mediadata.m3u8")) {
-                    var parser = new MediaPlaylistParser(ParsingMode.LENIENT);
-                    var mediaPlaylist = parser.readPlaylist(fcupResponse);
-
-                    var condensedUrl = mediaPlaylist.comments().stream()
-                            .filter(comment -> comment.startsWith("YT-EXT-CONDENSED-URL:"))
-                            .map(comment -> comment.replace("YT-EXT-CONDENSED-URL:", ""))
-                            .flatMap(attributes -> Pattern.compile("([A-Z0-9\\-]+)=(?:\"([^\"]+)\"|([^,]+))").matcher(attributes).results())
-                            .collect(Collectors.toMap(matcher -> matcher.group(1), matcher -> matcher.group(2) != null ? matcher.group(2) : matcher.group(3)));
-
-                    if (!condensedUrl.isEmpty()) {
-                        mediaPlaylist = MediaPlaylist.builder()
-                                .from(mediaPlaylist)
-                                .mediaSegments(mediaPlaylist.mediaSegments().stream()
-                                        .map(segment -> {
-                                            var prefix = condensedUrl.get("PREFIX");
-                                            var paramNames = condensedUrl.get("PARAMS").split(",");
-                                            var paramValues = segment.uri().replaceFirst(prefix, "").split("/");
-                                            var paramResult = new StringBuilder();
-                                            for (int i = 0; i < paramNames.length; i++) {
-                                                paramResult.append("/").append(paramNames[i]).append("/").append(paramValues[i]);
-                                            }
-                                            return MediaSegment.builder().from(segment).uri(condensedUrl.get("BASE-URI") + paramResult).build();
-                                        })
-                                        .toList())
-                                .build();
-                    }
-
-                    var context = session.getPlaylistRequestContexts().get(fcupResponseURL);
-                    var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
-                    response.content().writeCharSequence(parser.writePlaylistAsString(mediaPlaylist), StandardCharsets.UTF_8);
-                    HttpUtil.setContentLength(response, response.content().readableBytes());
-                    context.writeAndFlush(response);
-                    session.getPlaylistRequestContexts().remove(fcupResponseURL);
-                }
-            }
-        }
-
+        // TODO: reimplement handleAction function
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
         sendResponse(ctx, request, response);
     }
@@ -405,22 +349,6 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     private String playlistBaseUrl(ChannelHandlerContext ctx) {
         var port = ((ServerSocketChannel) ctx.channel().parent()).localAddress().getPort();
         return String.format("http://localhost:%s/playlist", port);
-    }
-
-    private String masterPlaylistToLocalUrls(String masterPlaylist, String baseUrl, String sessionId) throws PlaylistParserException {
-        var parser = new MasterPlaylistParser();
-        var playlist = parser.readPlaylist(masterPlaylist);
-
-        playlist = MasterPlaylist.builder().from(playlist)
-                .alternativeRenditions(playlist.alternativeRenditions().stream()
-                        .map(rendition -> AlternativeRendition.builder().from(rendition)
-                                .uri(playlistUriToLocal(rendition.uri().get(), baseUrl, sessionId)).build()).toList())
-                .variants(playlist.variants().stream()
-                        .map(variant -> Variant.builder().from(variant)
-                                .uri(playlistUriToLocal(variant.uri(), baseUrl, sessionId)).build()).toList())
-                .build();
-
-        return parser.writePlaylistAsString(playlist);
     }
 
     private DefaultFullHttpResponse createRtspResponse(FullHttpRequest request) {
