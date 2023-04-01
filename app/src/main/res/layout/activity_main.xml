@@ -1,0 +1,15 @@
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+   xmlns:tools="http://schemas.android.com/tools"
+   android:layout_width="match_parent"
+   android:layout_height="match_parent"
+   android:keepScreenOn="true"
+   tools:context=".NativeActivity" >
+   
+   <SurfaceView
+      android:id="@+id/video_layout"
+      android:layout_width="wrap_content"
+      android:layout_height="wrap_content"
+      android:fitsSystemWindows="false"
+      tools:context=".MainActivity" />
+
+</FrameLayout>

@@ -17,3 +17,4 @@ dependencyResolutionManagement {
 rootProject.name = 'DroidPlay'
 include('lib')
 include('server')
+include('app');
