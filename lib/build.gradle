@@ -34,7 +34,6 @@ dependencies {
     compileOnly 'org.projectlombok:lombok:1.18.26'
     annotationProcessor 'org.projectlombok:lombok:1.18.26'
 
-    implementation 'org.jmdns:jmdns:3.5.8'
     implementation 'net.i2p.crypto:eddsa:0.3.0'
     implementation 'org.whispersystems:curve25519-java:0.5.0'
     implementation 'com.googlecode.plist:dd-plist:1.26'

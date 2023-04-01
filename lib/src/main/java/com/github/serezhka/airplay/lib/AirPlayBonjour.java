@@ -1,134 +1,137 @@
 package com.github.serezhka.airplay.lib;
 
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
-import javax.jmdns.JmDNS;
-import javax.jmdns.ServiceInfo;
-import java.io.IOException;
-import java.net.Inet4Address;
-import java.net.InetAddress;
-import java.net.NetworkInterface;
-import java.net.SocketException;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.function.Predicate;
+import android.content.Context;
+import android.net.wifi.WifiManager;
+import android.net.wifi.WifiInfo;
+import android.net.nsd.NsdManager;
+import android.net.nsd.NsdServiceInfo;
 
 /**
  * Registers airplay/airtunes service mdns
  */
 @Slf4j
-@RequiredArgsConstructor
 public class AirPlayBonjour {
+    private static final String AIRPLAY_SERVICE_TYPE = "_airplay._tcp.local";
+    private static final String AIRTUNES_SERVICE_TYPE = "_raop._tcp.local";
 
-    private static final String AIRPLAY_SERVICE_TYPE = "._airplay._tcp.local";
-    private static final String AIRTUNES_SERVICE_TYPE = "._raop._tcp.local";
+    private final Context context;
+    private String serverName;
+    private NsdManager.RegistrationListener registrationListener;
 
-    private final String serverName;
+    public AirPlayBonjour(Context context, String serverName) {
+        this.context = context;
+        this.serverName = serverName;
+        initializeRegistrationListener();
+    }
 
-    private final List<JmDNS> jmDNSList = new ArrayList<>();
+    public void start(int airPlayPort) {
+        String macAddress = getMacAddress();
+        NsdManager nsdManager = (NsdManager) context.getSystemService(Context.NSD_SERVICE);
 
-    public void start(int airTunesPort) throws Exception {
-        NetworkInterface.networkInterfaces()
-                .filter(networkInterfaceFilter())
-                .flatMap(NetworkInterface::inetAddresses)
-                .filter(inetAddressFilter())
-                .forEach(inetAddress -> {
-                    try {
-                        byte[] hardwareAddress = NetworkInterface.getByInetAddress(inetAddress).getHardwareAddress();
-                        String mac = hardwareAddressBytesToString(hardwareAddress);
+        // register airplay mdns service
+        nsdManager.registerService(
+                airPlayMDNSProps(macAddress, airPlayPort),
+                NsdManager.PROTOCOL_DNS_SD,
+                registrationListener);
 
-                        JmDNS jmDNS = JmDNS.create(inetAddress);
-                        jmDNS.registerService(ServiceInfo.create(serverName + AIRPLAY_SERVICE_TYPE,
-                                serverName, airTunesPort, 0, 0, airPlayMDNSProps(mac)));
-                        log.info("{} service is registered on address {}, port {}", serverName + AIRPLAY_SERVICE_TYPE,
-                                inetAddress.getHostAddress(), airTunesPort);
-
-                        String airTunesServerName = mac.replaceAll(":", "") + "@" + serverName;
-                        jmDNS.registerService(ServiceInfo.create(airTunesServerName + AIRTUNES_SERVICE_TYPE,
-                                airTunesServerName, airTunesPort, 0, 0, airTunesMDNSProps()));
-                        log.info("{} service is registered on address {}, port {}", airTunesServerName + AIRTUNES_SERVICE_TYPE,
-                                inetAddress.getHostAddress(), airTunesPort);
-
-                        jmDNSList.add(jmDNS);
-                    } catch (IOException e) {
-                        log.error(e.getMessage());
-                    }
-                });
+        // TODO: register airtunes service
     }
 
     public void stop() {
-        for (final JmDNS jmDNS : jmDNSList) {
-            jmDNS.unregisterAllServices();
-        }
+        NsdManager nsdManager = (NsdManager) context.getSystemService(Context.NSD_SERVICE);
+        nsdManager.unregisterService(registrationListener);
     }
 
-    private Map<String, String> airPlayMDNSProps(String deviceId) {
-        HashMap<String, String> airPlayMDNSProps = new HashMap<>();
-        airPlayMDNSProps.put("deviceid", deviceId);
-        airPlayMDNSProps.put("features", "0x5A7FFFF7,0x1E"); // 0x5A7FFFF7 E4
-        airPlayMDNSProps.put("srcvers", "220.68");
-        airPlayMDNSProps.put("flags", "0x44");
-        airPlayMDNSProps.put("vv", "2");
-        airPlayMDNSProps.put("model", "AppleTV3,2C");
-        airPlayMDNSProps.put("rhd", "5.6.0.0");
-        airPlayMDNSProps.put("pw", "false");
-        airPlayMDNSProps.put("pk", "f3769a660475d27b4f6040381d784645e13e21c53e6d2da6a8c3d757086fc336");
-        //airPlayMDNSProps.put("pi", "2e388006-13ba-4041-9a67-25dd4a43d536");
-        airPlayMDNSProps.put("rmodel", "PC1.0");
-        airPlayMDNSProps.put("rrv", "1.01");
-        airPlayMDNSProps.put("rsv", "1.00");
-        airPlayMDNSProps.put("pcversion", "1715");
-        return airPlayMDNSProps;
+    // FIXME: deprecated function
+    @SuppressWarnings("deprecation")
+    private String getMacAddress() {
+        WifiManager manager = (WifiManager) context.getSystemService(Context.WIFI_SERVICE);
+        WifiInfo info = manager.getConnectionInfo();
+        return info.getMacAddress();
     }
 
-    private Map<String, String> airTunesMDNSProps() {
-        HashMap<String, String> airTunesMDNSProps = new HashMap<>();
-        airTunesMDNSProps.put("ch", "2");
-        airTunesMDNSProps.put("cn", "1,3");
-        airTunesMDNSProps.put("da", "true");
-        airTunesMDNSProps.put("et", "0,3,5");
-        airTunesMDNSProps.put("ek", "1");
-        //airTunesMDNSProps.put("vv", "2");
-        airTunesMDNSProps.put("ft", "0x5A7FFFF7,0x1E");
-        airTunesMDNSProps.put("am", "AppleTV3,2C");
-        airTunesMDNSProps.put("md", "0,1,2");
-        //airTunesMDNSProps.put("rhd", "5.6.0.0");
-        //airTunesMDNSProps.put("pw", "false");
-        airTunesMDNSProps.put("sr", "44100");
-        airTunesMDNSProps.put("ss", "16");
-        airTunesMDNSProps.put("sv", "false");
-        airTunesMDNSProps.put("sm", "false");
-        airTunesMDNSProps.put("tp", "UDP");
-        airTunesMDNSProps.put("txtvers", "1");
-        airTunesMDNSProps.put("sf", "0x44");
-        airTunesMDNSProps.put("vs", "220.68");
-        airTunesMDNSProps.put("vn", "65537");
-        airTunesMDNSProps.put("pk", "f3769a660475d27b4f6040381d784645e13e21c53e6d2da6a8c3d757086fc336");
-        return airTunesMDNSProps;
+    private NsdServiceInfo airPlayMDNSProps(String deviceId, int port) {
+        NsdServiceInfo serviceInfo = new NsdServiceInfo();
+
+        serviceInfo.setServiceName(serverName);
+        serviceInfo.setServiceType(AIRPLAY_SERVICE_TYPE);
+        serviceInfo.setPort(port);
+        serviceInfo.setAttribute("deviceid", deviceId);
+        serviceInfo.setAttribute("features", "0x5A7FFFF7,0x1E"); // 0x5A7FFFF7 E4
+        serviceInfo.setAttribute("srcvers", "220.68");
+        serviceInfo.setAttribute("flags", "0x44");
+        serviceInfo.setAttribute("vv", "2");
+        serviceInfo.setAttribute("model", "AppleTV3,2C");
+        serviceInfo.setAttribute("rhd", "5.6.0.0");
+        serviceInfo.setAttribute("pw", "false");
+        serviceInfo.setAttribute("pk", "f3769a660475d27b4f6040381d784645e13e21c53e6d2da6a8c3d757086fc336");
+        serviceInfo.setAttribute("rmodel", "PC1.0");
+        serviceInfo.setAttribute("rrv", "1.01");
+        serviceInfo.setAttribute("rsv", "1.00");
+        serviceInfo.setAttribute("pcversion", "1715");
+        return serviceInfo;
     }
 
-    private Predicate<NetworkInterface> networkInterfaceFilter() {
-        return networkInterface -> {
-            try {
-                return !networkInterface.isLoopback() && !networkInterface.isPointToPoint() && networkInterface.isUp();
-            } catch (SocketException e) {
-                return false;
+    private NsdServiceInfo airTunesMDNSProps() {
+        NsdServiceInfo serviceInfo = new NsdServiceInfo();
+
+        serviceInfo.setAttribute("ch", "2");
+        serviceInfo.setAttribute("cn", "1,3");
+        serviceInfo.setAttribute("da", "true");
+        serviceInfo.setAttribute("et", "0,3,5");
+        serviceInfo.setAttribute("ek", "1");
+        //serviceInfo.setAttribute("vv", "2");
+        serviceInfo.setAttribute("ft", "0x5A7FFFF7,0x1E");
+        serviceInfo.setAttribute("am", "AppleTV3,2C");
+        serviceInfo.setAttribute("md", "0,1,2");
+        //serviceInfo.setAttribute("rhd", "5.6.0.0");
+        //serviceInfo.setAttribute("pw", "false");
+        serviceInfo.setAttribute("sr", "44100");
+        serviceInfo.setAttribute("ss", "16");
+        serviceInfo.setAttribute("sv", "false");
+        serviceInfo.setAttribute("sm", "false");
+        serviceInfo.setAttribute("tp", "UDP");
+        serviceInfo.setAttribute("txtvers", "1");
+        serviceInfo.setAttribute("sf", "0x44");
+        serviceInfo.setAttribute("vs", "220.68");
+        serviceInfo.setAttribute("vn", "65537");
+        serviceInfo.setAttribute("pk", "f3769a660475d27b4f6040381d784645e13e21c53e6d2da6a8c3d757086fc336");
+        return serviceInfo;
+    }
+
+    public void initializeRegistrationListener() {
+        log.debug("Creating registration listener");
+        registrationListener = new NsdManager.RegistrationListener() {
+
+            @Override
+            public void onServiceRegistered(NsdServiceInfo NsdServiceInfo) {
+                // Save the service name. Android may have changed it in order to
+                // resolve a conflict, so update the name you initially requested
+                // with the name Android actually used.
+                serverName = NsdServiceInfo.getServiceName();
+                log.debug(String.format("Service registered as %s", serverName));
+            }
+
+            @Override
+            public void onRegistrationFailed(NsdServiceInfo serviceInfo, int errorCode) {
+                // Registration failed! Put debugging code here to determine why.
+                log.error(String.format("Service registration failed with error %d", errorCode));
+            }
+
+            @Override
+            public void onServiceUnregistered(NsdServiceInfo arg0) {
+                // Service has been unregistered. This only happens when you call
+                // NsdManager.unregisterService() and pass in this listener.
+                log.debug(String.format("Service %s was unregistered", serverName));
+            }
+
+            @Override
+            public void onUnregistrationFailed(NsdServiceInfo serviceInfo, int errorCode) {
+                // Unregistration failed. Put debugging code here to determine why.
+                log.error(String.format("Service unregistration failed with error %d", errorCode));
             }
         };
-    }
-
-    private Predicate<InetAddress> inetAddressFilter() {
-        return inetAddress -> inetAddress instanceof Inet4Address /*|| inetAddress instanceof Inet6Address*/;
-    }
-
-    private String hardwareAddressBytesToString(byte[] mac) {
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < mac.length; i++) {
-            sb.append(String.format("%02X%s", mac[i], (i < mac.length - 1) ? ":" : ""));
-        }
-        return sb.toString().toUpperCase();
     }
 }
