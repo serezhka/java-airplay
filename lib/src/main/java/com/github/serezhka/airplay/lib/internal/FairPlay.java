@@ -16,7 +16,11 @@ public class FairPlay {
     private final byte[] keyMsg = new byte[164];
 
     public void fairPlaySetup(InputStream request, OutputStream response) throws IOException {
-        byte[] data = request.readAllBytes();
+        // request.readAllBytes not available for API level < 33
+        int streamSize = request.available();
+        byte[] data = new byte[streamSize];
+        request.read(data, 0, streamSize);
+
         if (data[4] != 3) {
             Log.e(TAG, String.format("FairPlay version %d is not supported!", data[4]));
             return;
