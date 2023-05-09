@@ -1,0 +1,7 @@
+RTSP/1.0 200 OK
+Server: AirTunes/220.00
+CSeq: 7
+Content-Type: text/parameters
+Content-Length: 18
+
+volume: 0.000000

@@ -4,9 +4,12 @@ import com.dd.plist.BinaryPropertyListWriter;
 import com.dd.plist.NSArray;
 import com.dd.plist.NSDictionary;
 import com.github.serezhka.airplay.server.AirPlayConfig;
+import com.github.serezhka.airplay.server.AirPlayConsumer;
+import lombok.extern.slf4j.Slf4j;
 
 import java.nio.charset.StandardCharsets;
 
+@Slf4j
 public class PropertyListUtil {
 
     public static byte[] prepareInfoResponse(AirPlayConfig airPlayConfig) throws Exception {
@@ -98,29 +101,30 @@ public class PropertyListUtil {
 
     public static byte[] prepareServerInfoResponse() {
         NSDictionary response = new NSDictionary();
-        response.put("features", 119);
+        response.put("features", 119); // 130367356919L -> leads to HTTP fp-setup, fp-setup2
         response.put("protovers", 1.0);
         response.put("srcvers", 101.28);
         return response.toXMLPropertyList().getBytes(StandardCharsets.UTF_8);
     }
 
-    public static byte[] preparePlaybackInfoResponse() {
+    public static byte[] preparePlaybackInfoResponse(AirPlayConsumer.PlaybackInfo playbackInfo) {
         NSDictionary response = new NSDictionary();
-        response.put("duration", 0.0);
+        response.put("duration", playbackInfo.duration());
         NSDictionary loadedTimeRanges = new NSDictionary();
-        loadedTimeRanges.put("duration", 0.0);
+        loadedTimeRanges.put("duration", playbackInfo.duration());
         loadedTimeRanges.put("start", 0.0);
         response.put("loadedTimeRanges", new NSArray(loadedTimeRanges));
         response.put("playbackBufferEmpty", true);
         response.put("playbackBufferFull", false);
         response.put("playbackLikelyToKeepUp", true);
-        response.put("position", 0.0);
-        response.put("rate", 0);
+        response.put("position", playbackInfo.position());
+        response.put("rate", 1);
         response.put("readyToPlay", true);
         NSDictionary seekableTimeRanges = new NSDictionary();
-        seekableTimeRanges.put("duration", 0.0);
+        seekableTimeRanges.put("duration", playbackInfo.duration());
         seekableTimeRanges.put("start", 0.0);
         response.put("seekableTimeRanges", new NSArray(seekableTimeRanges));
+        log.error("Playback info:\n{}", response.toXMLPropertyList());
         return response.toXMLPropertyList().getBytes(StandardCharsets.UTF_8);
     }
 

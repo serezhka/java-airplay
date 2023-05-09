@@ -1,0 +1,21 @@
+plugins {
+    id 'java-library'
+}
+
+dependencies {
+    implementation project(':lib')
+
+    implementation "org.jmdns:jmdns:$jmdnsVersion"
+    implementation "io.netty:netty-all:$nettyVersion"
+    implementation "net.i2p.crypto:eddsa:$eddsaVersion"
+    implementation "org.whispersystems:curve25519-java:$curve25519Version"
+
+    implementation "net.java.dev.jna:jna:$jnaVersion"
+    implementation "net.java.dev.jna:jna-platform:$jnaVersion"
+
+    implementation "org.freedesktop.gstreamer:gst1-java-core:$gstreamerCoreVersion"
+    implementation "org.freedesktop.gstreamer:gst1-java-swing:$gstreamerSwingVersion"
+
+    implementation "ch.qos.logback:logback-core:$logbackVersion"
+    implementation "ch.qos.logback:logback-classic:$logbackVersion"
+}

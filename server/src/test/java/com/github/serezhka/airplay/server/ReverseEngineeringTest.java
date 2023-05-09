@@ -1,14 +1,19 @@
 package com.github.serezhka.airplay.server;
 
+import com.dd.plist.BinaryPropertyListParser;
+import com.dd.plist.NSDictionary;
+import com.dd.plist.PropertyListParser;
 import io.lindstrom.m3u8.model.MediaPlaylist;
 import io.lindstrom.m3u8.model.MediaSegment;
 import io.lindstrom.m3u8.model.Resolution;
 import io.lindstrom.m3u8.parser.MasterPlaylistParser;
 import io.lindstrom.m3u8.parser.MediaPlaylistParser;
 import io.lindstrom.m3u8.parser.ParsingMode;
+import io.netty.buffer.ByteBufInputStream;
 import io.netty.buffer.Unpooled;
+import io.netty.handler.codec.http.HttpContent;
 import io.netty.handler.codec.http.HttpMessage;
-import io.netty.handler.codec.rtsp.RtspDecoder;
+import io.netty.handler.codec.http.HttpResponseDecoder;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
@@ -22,9 +27,9 @@ class ReverseEngineeringTest {
 
     @Test
     void testParsePropertyListContent() throws Exception {
-        new RtspDecoder() {
+        new HttpResponseDecoder() { /* RtspDecoder */
             {
-                var resource = Paths.get(ReverseEngineeringTest.class.getResource("/reverse_engineering/get_playback_info_response.bin").toURI());
+                var resource = Paths.get(ReverseEngineeringTest.class.getResource("/one_mirroring_app/12_HTTP_GET_server_info_response.bin").toURI());
                 var bytes = Files.readAllBytes(resource);
                 var byteBuf = Unpooled.wrappedBuffer(bytes);
 
@@ -35,17 +40,35 @@ class ReverseEngineeringTest {
                 var message = (HttpMessage) result.get(0);
                 System.out.println(message);
 
-                // var content = (HttpContent) result.get(1);
-                // var parsedContent = (NSDictionary) BinaryPropertyListParser.parse(new ByteBufInputStream(content.content()));
-                // var parsedContent = (NSDictionary) PropertyListParser.parse(new ByteBufInputStream(content.content()));
-                // System.out.println(parsedContent.toXMLPropertyList());
+                if (result.size() > 1) {
+                    var content = (HttpContent) result.get(1);
+                    NSDictionary parsedContent = null;
+                    try {
+                        parsedContent = (NSDictionary) BinaryPropertyListParser.parse(new ByteBufInputStream(content.content()));
+                    } catch (Exception ignored) {
+                    } finally {
+                        content.content().resetReaderIndex();
+                    }
 
-                // x-dmap-tagged
-                // var buf = content.content();
-                // System.out.println("Tag: " + buf.readCharSequence(4, StandardCharsets.UTF_8));
-                // var size = buf.readInt();
-                // System.out.println("Size: " + size);
-                // System.out.println("Bytes left: " + buf.readableBytes());
+                    try {
+                        parsedContent = (NSDictionary) PropertyListParser.parse(new ByteBufInputStream(content.content()));
+                    } catch (Exception ignored) {
+                    }
+
+                    if (parsedContent != null) {
+                        System.out.println(parsedContent.toXMLPropertyList());
+                    }
+                    // var parsedContent = (NSDictionary) BinaryPropertyListParser.parse(new ByteBufInputStream(content.content()));
+                    // var parsedContent = (NSDictionary) PropertyListParser.parse(new ByteBufInputStream(content.content()));
+                    // System.out.println(parsedContent.toXMLPropertyList());
+
+                    // x-dmap-tagged
+                    // var buf = content.content();
+                    // System.out.println("Tag: " + buf.readCharSequence(4, StandardCharsets.UTF_8));
+                    // var size = buf.readInt();
+                    // System.out.println("Size: " + size);
+                    // System.out.println("Bytes left: " + buf.readableBytes());
+                }
             }
         };
     }

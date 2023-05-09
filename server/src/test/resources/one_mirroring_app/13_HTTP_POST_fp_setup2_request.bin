@@ -1,0 +1,7 @@
+POST /fp-setup2 HTTP/1.1
+Content-Type: application/octet-stream
+Content-Length: 120
+X-Apple-Device-ID: 0xb4197450e18a
+X-Apple-Session-ID: bfd9ef08-6a73-493a-b853-aa0968f2d58f
+User-Agent: AirPlay/670.6.2
+

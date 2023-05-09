@@ -3,5 +3,4 @@ dependencies {
     implementation project(':server')
 
     implementation 'jakarta.annotation:jakarta.annotation-api:2.1.1'
-    implementation "org.slf4j:slf4j-api:$slf4jVersion"
 }

@@ -40,6 +40,9 @@ public class VideoHandler extends ChannelInboundHandlerAdapter {
         int idx = 0;
         while (idx < payload.length) {
             int naluSize = (payload[idx + 3] & 0xFF) | ((payload[idx + 2] & 0xFF) << 8) | ((payload[idx + 1] & 0xFF) << 16) | ((payload[idx] & 0xFF) << 24);
+            if (naluSize == 1) {
+                return;
+            }
             if (naluSize > 0) {
                 payload[idx] = 0;
                 payload[idx + 1] = 0;

@@ -8,5 +8,4 @@ dependencies {
     implementation 'org.spf4j:spf4j-core:8.9.7'
     implementation 'com.formdev:flatlaf:3.0'
     implementation 'org.apache.avro:avro:1.11.1'
-    implementation "org.slf4j:slf4j-api:$slf4jVersion"
 }

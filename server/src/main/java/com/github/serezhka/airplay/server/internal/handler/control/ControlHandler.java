@@ -78,6 +78,10 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 var decoder = new QueryStringDecoder(request.uri());
                 if (HttpMethod.GET.equals(request.method()) && decoder.path().equals("/server-info")) {
                     handleGetServerInfo(ctx, request);
+                } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/fp-setup")) {
+                    // TODO handleFairPlaySetup(ctx, request);
+                } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/fp-setup2")) {
+                    // TODO handleFairPlaySetup2(ctx, request);
                 } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/reverse")) {
                     handleReverse(ctx, request);
                 } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/play")) {
@@ -92,6 +96,10 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                     handleAction(ctx, request);
                 } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/getProperty")) {
                     handleGetProperty(ctx, request);
+                } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/scrub")) {
+                    log.info(request.uri()); // TODO
+                } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/stop")) {
+                    log.info(request.uri()); // TODO
                 } else if (HttpMethod.GET.equals(request.method()) && decoder.path().startsWith("/playlist")) {
                     handleGetPlaylist(ctx, request);
                 } else {
@@ -150,6 +158,11 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 new ByteBufOutputStream(response.content()));
         sendResponse(ctx, request, response);
     }
+
+    /*private void handleFairPlaySetup2(ChannelHandlerContext ctx, FullHttpRequest request) {
+        var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+        sendResponse(ctx, request, response);
+    }*/
 
     private void handleRtspSetup(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
         var session = resolveSession(request);
@@ -272,6 +285,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             var playlistUri = play.get("Content-Location").toJavaObject(String.class);
             var playlistUriLocal = playlistUriToLocal(playlistUri, playlistBaseUrl(ctx), session.getId());
 
+            // TODO Create MediaPlaylist record with UUID
             airPlayConsumer.onMediaPlaylist(playlistUriLocal);
 
             var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
@@ -295,7 +309,13 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
 
     private void handleRate(ChannelHandlerContext ctx, FullHttpRequest request) {
         var decoder = new QueryStringDecoder(request.uri());
-        log.info("Path: {}, Query params: {}", decoder.path(), decoder.parameters());
+        var rate = (int) Double.parseDouble(decoder.parameters().get("value").get(0));
+
+        if (rate == 0) {
+            airPlayConsumer.onMediaPlaylistPause();
+        } else {
+            airPlayConsumer.onMediaPlaylistResume();
+        }
 
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
         sendResponse(ctx, request, response);
@@ -304,7 +324,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     private void handlePlaybackInfo(ChannelHandlerContext ctx, FullHttpRequest request) {
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
         response.headers().add(HttpHeaderNames.CONTENT_TYPE, "text/x-apple-plist+xml");
-        var playbackInfo = PropertyListUtil.preparePlaybackInfoResponse();
+        var playbackInfo = PropertyListUtil.preparePlaybackInfoResponse(airPlayConsumer.playbackInfo());
         response.content().writeBytes(playbackInfo);
         sendResponse(ctx, request, response);
     }
@@ -365,6 +385,22 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                     session.getPlaylistRequestContexts().remove(fcupResponseURL);
                 }
             }
+        } else if ("playlistRemove".equals(type)) {
+            /*<plist version="1.0">
+            <dict>
+            	<key>type</key>
+            	<string>playlistRemove</string>
+            	<key>params</key>
+            	<dict>
+            		<key>item</key>
+            		<dict>
+            			<key>uuid</key>
+            			<string>59F93E62-4E79-4A8F-A55A-D7DA65247AF1</string>
+            		</dict>
+            	</dict>
+            </dict>
+            </plist>*/
+            airPlayConsumer.onMediaPlaylistRemove();
         }
 
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
@@ -380,7 +416,6 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     }
 
     private void handleGetPlaylist(ChannelHandlerContext ctx, FullHttpRequest request) {
-        log.warn("Playlist request: {}", request.uri());
         var playlistUriRemote = playlistPathToRemote(request.uri());
         var decoder = new QueryStringDecoder(request.uri());
         var session = sessionManager.getSession(decoder.parameters().get("session").get(0));

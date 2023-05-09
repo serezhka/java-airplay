@@ -113,7 +113,7 @@ public class AirPlayBonjour {
     private Predicate<NetworkInterface> networkInterfaceFilter() {
         return networkInterface -> {
             try {
-                return !networkInterface.isLoopback() && !networkInterface.isPointToPoint() && networkInterface.isUp();
+                return /*!networkInterface.isLoopback() &&*/ !networkInterface.isPointToPoint() && networkInterface.isUp();
             } catch (SocketException e) {
                 return false;
             }
@@ -125,6 +125,9 @@ public class AirPlayBonjour {
     }
 
     private String hardwareAddressBytesToString(byte[] mac) {
+        if (mac == null) {
+            return "00:00:00:00:00:00"; // loopback
+        }
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < mac.length; i++) {
             sb.append(String.format("%02X%s", mac[i], (i < mac.length - 1) ? ":" : ""));

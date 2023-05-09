@@ -1,7 +1,7 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="Local" type="SpringBootApplicationConfigurationType" factoryName="Spring Boot">
     <option name="ACTIVE_PROFILES" />
-    <module name="java-airplay.player.app.main" />
+    <module name="com.github.serezhka.java-airplay.player.app.main" />
     <option name="SPRING_BOOT_MAIN_CLASS" value="com.github.serezhka.airplay.app.PlayerApp" />
     <method v="2">
       <option name="Make" enabled="true" />

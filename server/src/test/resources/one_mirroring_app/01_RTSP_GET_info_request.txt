@@ -1,0 +1,18 @@
+GET /info RTSP/1.0
+X-Apple-ProtocolVersion: 1
+Content-Length: 70
+Content-Type: application/x-apple-binary-plist
+CSeq: 0
+DACP-ID: 184F380D0A5B7139
+Active-Remote: 1589992423
+User-Agent: AirPlay/670.6.2
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>qualifier</key>
+	<array>
+		<string>txtAirPlay</string>
+	</array>
+</dict>
+</plist>

@@ -1,0 +1,8 @@
+GET /server-info HTTP/1.1
+X-Apple-Client-Name: srzhka
+X-Apple-VV: 16777984
+Content-Length: 0
+X-Apple-Device-ID: 0xb4197450e18a
+X-Apple-Session-ID: bfd9ef08-6a73-493a-b853-aa0968f2d58f
+User-Agent: AirPlay/670.6.2
+

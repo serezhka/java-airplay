@@ -1,0 +1,55 @@
+14857F8979D4@BE2BS201._raop._tcp.local: type TXT, class IN, cache flush
+Name: 14857F8979D4@BE2BS201._raop._tcp.local
+Type: TXT (Text strings) (16)
+.000 0000 0000 0001 = Class: IN (0x0001)
+1... .... .... .... = Cache flush: True
+Time to live: 4500 (1 hour, 15 minutes)
+Data length: 177
+TXT Length: 13
+TXT: am=AppleTV3,2
+TXT Length: 4
+TXT: ch=2
+TXT Length: 6
+TXT: cn=1,3
+TXT Length: 7
+TXT: da=true
+TXT Length: 8
+TXT: et=0,3,5
+TXT Length: 18
+TXT: ft=0x5E7FFFF7,0x1E
+TXT Length: 8
+TXT: md=0,1,2
+TXT Length: 6
+TXT: tp=UDP
+TXT Length: 8
+TXT: vn=65537
+TXT Length: 9
+TXT: vs=220.00
+TXT Length: 4
+TXT: vv=2
+TXT Length: 6
+TXT: sf=0x4
+TXT Length: 67
+TXT: pk=a9f496a386e951692f1d830d3030b5592710190c1774b8b2626fee8154ebf6cc <-- every time is different
+
+BE2BS201._airplay._tcp.local: type TXT, class IN, cache flush
+Name: BE2BS201._airplay._tcp.local
+Type: TXT (Text strings) (16)
+.000 0000 0000 0001 = Class: IN (0x0001)
+1... .... .... .... = Cache flush: True
+Time to live: 4500 (1 hour, 15 minutes)
+Data length: 167
+TXT Length: 26
+TXT: deviceid=14:85:7F:89:79:D4
+TXT Length: 24
+TXT: features=0x5E7FFFF7,0x1E
+TXT Length: 16
+TXT: model=AppleTV3,2
+TXT Length: 14
+TXT: srcvers=220.00
+TXT Length: 4
+TXT: vv=2
+TXT Length: 9
+TXT: flags=0x4
+TXT Length: 67
+TXT: pk=a9f496a386e951692f1d830d3030b5592710190c1774b8b2626fee8154ebf6cc <-- every time is different

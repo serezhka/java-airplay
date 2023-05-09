@@ -9,7 +9,14 @@ ext {
     junitVersion = '5.9.1'
     nettyVersion = '4.1.86.Final'
     slf4jVersion = '2.0.5'
+    logbackVersion = '1.4.6'
     jnaVersion = '5.12.1'
+    jmdnsVersion = '3.5.8'
+    plistVersion = '1.26'
+    eddsaVersion = '0.3.0'
+    curve25519Version = '0.5.0'
+    gstreamerCoreVersion = '1.4.0'
+    gstreamerSwingVersion = '0.9.0'
 }
 
 allprojects {
@@ -28,6 +35,9 @@ subprojects {
     apply plugin: 'com.adarshr.test-logger'
 
     dependencies {
+        implementation "org.slf4j:slf4j-api:$slf4jVersion"
+        implementation "com.googlecode.plist:dd-plist:$plistVersion"
+
         testImplementation(platform "org.junit:junit-bom:$junitVersion")
         testImplementation 'org.junit.jupiter:junit-jupiter'
     }
@@ -38,6 +48,6 @@ subprojects {
 }
 
 wrapper {
-    gradleVersion = '7.6'
+    gradleVersion = '8.0.2'
     distributionType = Wrapper.DistributionType.ALL
 }

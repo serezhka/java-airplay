@@ -1,0 +1,10 @@
+SET_PARAMETER rtsp://2a02:1388:4092:ee25:ca70:80ec:e133:144f/12304426294006337347 RTSP/1.0
+RTP-Info: rtptime=3445239162
+Content-Length: 43
+Content-Type: text/parameters
+CSeq: 15
+DACP-ID: 184F380D0A5B7139
+Active-Remote: 1589992423
+User-Agent: AirPlay/670.6.2
+
+progress: 3444084843/3445239162/3483520518

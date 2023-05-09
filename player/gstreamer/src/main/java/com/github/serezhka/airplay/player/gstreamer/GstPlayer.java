@@ -3,12 +3,14 @@ package com.github.serezhka.airplay.player.gstreamer;
 import com.github.serezhka.airplay.lib.AudioStreamInfo;
 import com.github.serezhka.airplay.lib.VideoStreamInfo;
 import com.github.serezhka.airplay.server.AirPlayConsumer;
+import lombok.extern.slf4j.Slf4j;
 import org.freedesktop.gstreamer.*;
 import org.freedesktop.gstreamer.elements.AppSrc;
 import org.freedesktop.gstreamer.glib.GLib;
 
-import java.nio.file.Path;
+import java.util.concurrent.TimeUnit;
 
+@Slf4j
 public abstract class GstPlayer implements AirPlayConsumer {
 
     static {
@@ -56,8 +58,6 @@ public abstract class GstPlayer implements AirPlayConsumer {
         aacEldSrc.set("is-live", true);
         aacEldSrc.set("format", Format.TIME);
         aacEldSrc.set("emit-signals", true);
-
-        // hlsPipeline = (Pipeline) Gst.parseLaunch("filesrc location=media.m3u8 ! hlsdemux ! decodebin ! videoconvert ! videoscale ! autovideosink sync=false");
     }
 
     protected abstract Pipeline createH264Pipeline();
@@ -93,8 +93,6 @@ public abstract class GstPlayer implements AirPlayConsumer {
         switch (audioCompressionType) {
             case ALAC -> alacSrc.pushBuffer(buf);
             case AAC_ELD -> aacEldSrc.pushBuffer(buf);
-            default -> {
-            }
         }
     }
 
@@ -108,5 +106,36 @@ public abstract class GstPlayer implements AirPlayConsumer {
     public void onMediaPlaylist(String playlistUri) {
         hlsPipeline = (Pipeline) Gst.parseLaunch("playbin3 uri=" + playlistUri);
         hlsPipeline.play();
+    }
+
+    @Override
+    public void onMediaPlaylistRemove() {
+        if (hlsPipeline != null) {
+            hlsPipeline.stop();
+        }
+    }
+
+    @Override
+    public void onMediaPlaylistPause() {
+        if (hlsPipeline != null && hlsPipeline.isPlaying()) {
+            hlsPipeline.pause();
+        }
+    }
+
+    @Override
+    public void onMediaPlaylistResume() {
+        if (hlsPipeline != null && !hlsPipeline.isPlaying()) {
+            hlsPipeline.play();
+        }
+    }
+
+    @Override
+    public PlaybackInfo playbackInfo() {
+        if (hlsPipeline != null) {
+            return new PlaybackInfo(
+                    hlsPipeline.queryDuration(TimeUnit.SECONDS),
+                    hlsPipeline.queryPosition(TimeUnit.SECONDS));
+        }
+        return AirPlayConsumer.super.playbackInfo();
     }
 }

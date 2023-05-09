@@ -8,8 +8,8 @@
 This project unites the [java-airplay-lib](https://github.com/serezhka/java-airplay-lib), [java-airplay-server](https://github.com/serezhka/java-airplay-server)
 and [java-airplay-server-examples](https://github.com/serezhka/java-airplay-server-examples) into one.
 It makes development a lot easier when all parts of the code are put together.
-Also, it's still possible to publish the airplay-lib separately as artifact if someone wants to implement non-Netty server solution;
-to publish airplay-server if someone wants to implement their own player.
+
+😩 Due to lack of free time and other priorities, this project is not actively maintained. 😩
 
 ## Demo
 
