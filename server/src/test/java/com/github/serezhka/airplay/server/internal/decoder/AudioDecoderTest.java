@@ -28,9 +28,9 @@ class AudioDecoderTest {
         AudioPacket packet = (AudioPacket) result.get(0);
         assertEquals(96, packet.getType());
         assertEquals(128, packet.getFlag());
-        assertEquals(54528, packet.getSsrc());
+        assertEquals(0, packet.getSsrc());
         assertEquals(54905, packet.getSequenceNumber());
-        assertEquals(-1937058542, packet.getTimestamp()); // FIXME
+        assertEquals(2357908754L, packet.getTimestamp());
         assertEquals(1920, packet.getEncodedAudioSize());
     }
 }
