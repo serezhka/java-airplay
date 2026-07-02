@@ -3,7 +3,6 @@ name: package-windows
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
     paths:
       - '.github/workflows/package-windows.yml'
       - 'build.gradle'
