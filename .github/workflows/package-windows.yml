@@ -1,0 +1,70 @@
+name: package-windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/package-windows.yml'
+      - 'build.gradle'
+      - 'settings.gradle'
+      - 'gradle/**'
+      - 'gradlew'
+      - 'gradlew.bat'
+      - 'lib/**'
+      - 'server/**'
+      - 'player/**'
+
+jobs:
+  package:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build boot jar
+        run: .\gradlew.bat clean :player:app:bootJar --no-daemon
+
+      - name: Package Windows app image
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $jar = Get-ChildItem -Path 'player/app/build/libs' -Filter 'java-airplay-server-*.jar' | Select-Object -First 1
+          if (-not $jar) {
+            throw 'Boot jar was not produced.'
+          }
+
+          New-Item -ItemType Directory -Force -Path 'build/package/input' | Out-Null
+          Copy-Item -LiteralPath $jar.FullName -Destination 'build/package/input/java-airplay-server.jar'
+
+          jpackage `
+            --type app-image `
+            --name JavaAirPlay `
+            --app-version 1.0.7 `
+            --vendor serezhka `
+            --input build/package/input `
+            --main-jar java-airplay-server.jar `
+            --java-options '-Dfile.encoding=UTF-8' `
+            --dest build/package
+
+          Copy-Item -LiteralPath 'package/windows/application.properties' -Destination 'build/package/JavaAirPlay/application.properties' -Force
+          Copy-Item -LiteralPath 'package/windows/README-Windows.md' -Destination 'build/package/JavaAirPlay/README-Windows.md' -Force
+
+          Compress-Archive -Path 'build/package/JavaAirPlay' -DestinationPath 'build/package/JavaAirPlay-windows-x64.zip' -Force
+
+      - name: Upload Windows app image
+        uses: actions/upload-artifact@v4
+        with:
+          name: JavaAirPlay-windows-x64
+          path: build/package/JavaAirPlay-windows-x64.zip
+          if-no-files-found: error
