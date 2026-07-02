@@ -12,13 +12,16 @@ This package contains a bundled Java runtime. You do not need to install Java.
 ## GStreamer
 
 The default configuration uses the GStreamer player because it supports video and audio.
+This package includes the GStreamer runtime under `gstreamer/`, so a separate
+GStreamer installation should not be required for normal use.
 
-Install the 64-bit MSVC runtime from:
+If playback still fails with a missing GStreamer DLL, install the 64-bit MSVC runtime from:
 
 https://gstreamer.freedesktop.org/download/#windows
 
-After installing GStreamer, restart `JavaAirPlay.exe`. The app looks for the standard
-`GSTREAMER_1_0_ROOT_MSVC_X86_64` environment variable created by the installer.
+After installing GStreamer, restart `JavaAirPlay.exe`. The app first looks for the
+bundled runtime, then falls back to the standard `GSTREAMER_1_0_ROOT_MSVC_X86_64`
+environment variable created by the installer.
 
 ## Configuration
 

@@ -15,6 +15,8 @@ import com.sun.jna.Platform;
 import com.sun.jna.platform.win32.Kernel32;
 
 import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.stream.Stream;
 
 /**
@@ -36,13 +38,8 @@ class GstPlayerUtils {
         if (Platform.isWindows()) {
             String gstPath = System.getProperty("gstreamer.path", findWindowsLocation());
             if (!gstPath.isEmpty()) {
-                String systemPath = System.getenv("PATH");
-                if (systemPath == null || systemPath.trim().isEmpty()) {
-                    Kernel32.INSTANCE.SetEnvironmentVariable("PATH", gstPath);
-                } else {
-                    Kernel32.INSTANCE.SetEnvironmentVariable("PATH", gstPath
-                            + File.pathSeparator + systemPath);
-                }
+                prependEnvironmentVariable("PATH", gstPath);
+                configureBundledWindowsEnvironment(gstPath);
             }
         } else if (Platform.isMac()) {
             String gstPath = System.getProperty("gstreamer.path",
@@ -68,6 +65,11 @@ class GstPlayerUtils {
      */
     static String findWindowsLocation() {
         if (Platform.is64Bit()) {
+            String bundledLocation = findBundledWindowsLocation();
+            if (!bundledLocation.isEmpty()) {
+                return bundledLocation;
+            }
+
             return Stream.of("GSTREAMER_1_0_ROOT_MSVC_X86_64",
                             "GSTREAMER_1_0_ROOT_MINGW_X86_64",
                             "GSTREAMER_1_0_ROOT_X86_64")
@@ -77,6 +79,48 @@ class GstPlayerUtils {
                     .findFirst().orElse("");
         } else {
             return "";
+        }
+    }
+
+    private static String findBundledWindowsLocation() {
+        return Stream.of(
+                        Path.of(System.getProperty("user.dir"), "gstreamer", "bin"),
+                        Path.of(System.getProperty("user.dir"), "..", "gstreamer", "bin").normalize(),
+                        Path.of(System.getProperty("java.home"), "..", "gstreamer", "bin").normalize())
+                .filter(Files::isDirectory)
+                .map(Path::toString)
+                .findFirst()
+                .orElse("");
+    }
+
+    private static void configureBundledWindowsEnvironment(String gstBinPath) {
+        Path bin = Path.of(gstBinPath);
+        Path root = bin.getParent();
+        if (root == null || !Files.isDirectory(root.resolve("lib").resolve("gstreamer-1.0"))) {
+            return;
+        }
+
+        setEnvironmentVariableIfEmpty("GST_PLUGIN_PATH", root.resolve("lib").resolve("gstreamer-1.0").toString());
+
+        Path pluginScanner = root.resolve("libexec").resolve("gstreamer-1.0").resolve("gst-plugin-scanner.exe");
+        if (Files.isRegularFile(pluginScanner)) {
+            setEnvironmentVariableIfEmpty("GST_PLUGIN_SCANNER", pluginScanner.toString());
+        }
+    }
+
+    private static void prependEnvironmentVariable(String name, String value) {
+        String existingValue = System.getenv(name);
+        if (existingValue == null || existingValue.trim().isEmpty()) {
+            Kernel32.INSTANCE.SetEnvironmentVariable(name, value);
+        } else {
+            Kernel32.INSTANCE.SetEnvironmentVariable(name, value + File.pathSeparator + existingValue);
+        }
+    }
+
+    private static void setEnvironmentVariableIfEmpty(String name, String value) {
+        String existingValue = System.getenv(name);
+        if (existingValue == null || existingValue.trim().isEmpty()) {
+            Kernel32.INSTANCE.SetEnvironmentVariable(name, value);
         }
     }
 }

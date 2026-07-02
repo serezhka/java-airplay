@@ -35,6 +35,30 @@ jobs:
       - name: Build boot jar
         run: .\gradlew.bat clean :player:app:bootJar --no-daemon
 
+      - name: Prepare GStreamer runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $gstVersion = '1.24.13'
+          $gstUrl = "https://gstreamer.freedesktop.org/data/pkg/windows/$gstVersion/msvc/gstreamer-1.0-msvc-x86_64-$gstVersion.msi"
+          $gstMsi = 'build/package/gstreamer-runtime.msi'
+
+          New-Item -ItemType Directory -Force -Path 'build/package' | Out-Null
+          $gstExtract = (Resolve-Path 'build/package').Path + '\gstreamer-extract'
+          Invoke-WebRequest -Uri $gstUrl -OutFile $gstMsi
+          New-Item -ItemType Directory -Force -Path $gstExtract | Out-Null
+          Start-Process msiexec.exe -ArgumentList @('/a', (Resolve-Path $gstMsi).Path, '/qn', "TARGETDIR=$gstExtract") -Wait -NoNewWindow
+
+          $gstRoot = Get-ChildItem -Path $gstExtract -Directory -Recurse |
+            Where-Object { (Test-Path (Join-Path $_.FullName 'bin')) -and (Test-Path (Join-Path $_.FullName 'lib\gstreamer-1.0')) } |
+            Select-Object -First 1
+
+          if (-not $gstRoot) {
+            throw 'Extracted GStreamer runtime was not found.'
+          }
+
+          Copy-Item -LiteralPath $gstRoot.FullName -Destination 'build/package/gstreamer' -Recurse -Force
+
       - name: Package Windows app image
         shell: pwsh
         run: |
@@ -59,6 +83,7 @@ jobs:
 
           Copy-Item -LiteralPath 'package/windows/application.properties' -Destination 'build/package/JavaAirPlay/application.properties' -Force
           Copy-Item -LiteralPath 'package/windows/README-Windows.md' -Destination 'build/package/JavaAirPlay/README-Windows.md' -Force
+          Copy-Item -LiteralPath 'build/package/gstreamer' -Destination 'build/package/JavaAirPlay/gstreamer' -Recurse -Force
 
           Compress-Archive -Path 'build/package/JavaAirPlay' -DestinationPath 'build/package/JavaAirPlay-windows-x64.zip' -Force
 
