@@ -18,7 +18,6 @@ public class SystemTrayMenu {
             return;
         }
 
-        systemTray.installShutdownHook();
         systemTray.setImage(Objects.requireNonNull(getClass().getResource("/menu/tray_icon.png")));
         systemTray.getMenu().add(new MenuItem("Quit", event -> {
             systemTray.shutdown();

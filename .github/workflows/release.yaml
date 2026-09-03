@@ -5,28 +5,24 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-java@v3
-        with:
-          java-version: 17
-          distribution: zulu
-      - uses: gradle/gradle-build-action@v2
-        with:
-          gradle-version: 7.6
-          arguments: bootJar
+      - uses: actions/checkout@v4
 
-      - run: echo "tag=${REF##*/v}" >> $GITHUB_ENV
-
-      - uses: softprops/action-gh-release@v1
-        env:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-java@v4
         with:
-          tag_name: ${{ env.tag }}
-          name: ${{ env.tag }}
-          draft: false
+          java-version: 21
+          distribution: temurin
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - run: ./gradlew bootJar
+
+      - uses: softprops/action-gh-release@v2
+        with:
           files: player/app/build/libs/*

@@ -15,7 +15,10 @@ public abstract class GstPlayer implements AirPlayConsumer {
 
     static {
         GstPlayerUtils.configurePaths();
-        GLib.setEnv("GST_DEBUG", "3", true);
+        // GST_DEBUG goes to stderr by default; write it next to the app log.
+        GLib.setEnv("GST_DEBUG_NO_COLOR", "1", true);
+        GLib.setEnv("GST_DEBUG_FILE", System.getProperty("airplay.gst.debug.file", "gst.log"), true);
+        GLib.setEnv("GST_DEBUG", System.getProperty("airplay.gst.debug", "3"), true);
         Gst.init(Version.of(1, 10), "BasicPipeline");
     }
 
@@ -36,9 +39,11 @@ public abstract class GstPlayer implements AirPlayConsumer {
 
         h264Src = (AppSrc) h264Pipeline.getElementByName("h264-src");
         h264Src.setStreamType(AppSrc.StreamType.STREAM);
-        h264Src.setCaps(Caps.fromString("video/x-h264,colorimetry=bt709,stream-format=(string)byte-stream,alignment=(string)au"));
+        // AirPlay sends Annex-B NAL units (start codes), not length-prefixed AU.
+        h264Src.setCaps(Caps.fromString("video/x-h264,colorimetry=bt709,stream-format=(string)byte-stream,alignment=(string)nal"));
         h264Src.set("is-live", true);
         h264Src.set("format", Format.TIME);
+        h264Src.set("do-timestamp", true);
         h264Src.set("emit-signals", true);
 
         alacPipeline = (Pipeline) Gst.parseLaunch("appsrc name=alac-src ! avdec_alac ! audioconvert ! audioresample ! autoaudiosink sync=false");
@@ -70,7 +75,8 @@ public abstract class GstPlayer implements AirPlayConsumer {
     @Override
     public void onVideo(byte[] bytes) {
         Buffer buf = new Buffer(bytes.length);
-        buf.map(true).put(bytes); // ByteBuffer.wrap(bytes)
+        buf.map(true).put(bytes);
+        buf.unmap();
         h264Src.pushBuffer(buf);
     }
 
@@ -89,7 +95,8 @@ public abstract class GstPlayer implements AirPlayConsumer {
     @Override
     public void onAudio(byte[] bytes) {
         Buffer buf = new Buffer(bytes.length);
-        buf.map(true).put(bytes); // ByteBuffer.wrap(bytes)
+        buf.map(true).put(bytes);
+        buf.unmap();
         switch (audioCompressionType) {
             case ALAC -> alacSrc.pushBuffer(buf);
             case AAC_ELD -> aacEldSrc.pushBuffer(buf);

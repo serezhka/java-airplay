@@ -6,5 +6,9 @@ dependencies {
     implementation "net.java.dev.jna:jna-platform:$jnaVersion"
     implementation "org.freedesktop.gstreamer:gst1-java-core:$gstreamerCoreVersion"
     implementation "org.freedesktop.gstreamer:gst1-java-swing:$gstreamerSwingVersion"
-    implementation 'com.formdev:flatlaf:3.0'
+    implementation 'com.formdev:flatlaf:3.7.2'
+}
+
+tasks.named('test') {
+    failOnNoDiscoveredTests = false
 }

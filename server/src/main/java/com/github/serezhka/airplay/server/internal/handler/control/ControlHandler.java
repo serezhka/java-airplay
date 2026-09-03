@@ -11,7 +11,7 @@ import com.github.serezhka.airplay.server.internal.handler.session.Session;
 import com.github.serezhka.airplay.server.internal.handler.session.SessionManager;
 import com.github.serezhka.airplay.server.internal.handler.util.PropertyListUtil;
 import io.lindstrom.m3u8.model.*;
-import io.lindstrom.m3u8.parser.MasterPlaylistParser;
+import io.lindstrom.m3u8.parser.MultivariantPlaylistParser;
 import io.lindstrom.m3u8.parser.MediaPlaylistParser;
 import io.lindstrom.m3u8.parser.ParsingMode;
 import io.lindstrom.m3u8.parser.PlaylistParserException;
@@ -441,10 +441,10 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     }
 
     private String masterPlaylistToLocalUrls(String masterPlaylist, String baseUrl, String sessionId) throws PlaylistParserException {
-        var parser = new MasterPlaylistParser();
+        var parser = new MultivariantPlaylistParser();
         var playlist = parser.readPlaylist(masterPlaylist);
 
-        playlist = MasterPlaylist.builder().from(playlist)
+        playlist = MultivariantPlaylist.builder().from(playlist)
                 .alternativeRenditions(playlist.alternativeRenditions().stream()
                         .map(rendition -> AlternativeRendition.builder().from(rendition)
                                 .uri(playlistUriToLocal(rendition.uri().get(), baseUrl, sessionId)).build()).toList())
