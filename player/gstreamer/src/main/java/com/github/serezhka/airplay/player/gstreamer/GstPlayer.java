@@ -3,15 +3,21 @@ package com.github.serezhka.airplay.player.gstreamer;
 import com.github.serezhka.airplay.lib.AudioStreamInfo;
 import com.github.serezhka.airplay.lib.VideoStreamInfo;
 import com.github.serezhka.airplay.server.AirPlayConsumer;
+import com.sun.jna.Native;
 import lombok.extern.slf4j.Slf4j;
 import org.freedesktop.gstreamer.*;
+import org.freedesktop.gstreamer.elements.AppSink;
 import org.freedesktop.gstreamer.elements.AppSrc;
 import org.freedesktop.gstreamer.glib.GLib;
+import org.freedesktop.gstreamer.interfaces.VideoOverlay;
+import org.freedesktop.gstreamer.swing.GstVideoComponent;
 
+import javax.swing.*;
+import java.awt.*;
 import java.util.concurrent.TimeUnit;
 
 @Slf4j
-public abstract class GstPlayer implements AirPlayConsumer {
+public class GstPlayer implements AirPlayConsumer {
 
     static {
         GstPlayerUtils.configurePaths();
@@ -22,9 +28,11 @@ public abstract class GstPlayer implements AirPlayConsumer {
         Gst.init(Version.of(1, 10), "BasicPipeline");
     }
 
-    protected final Pipeline h264Pipeline;
+    private final Pipeline h264Pipeline;
     private final Pipeline alacPipeline;
     private final Pipeline aacEldPipeline;
+    private final JFrame window;
+    private final Runnable attachWindow;
 
     private final AppSrc h264Src;
     private final AppSrc alacSrc;
@@ -35,7 +43,14 @@ public abstract class GstPlayer implements AirPlayConsumer {
     private AudioStreamInfo.CompressionType audioCompressionType;
 
     public GstPlayer() {
-        h264Pipeline = createH264Pipeline();
+        boolean ximage = Registry.get().lookupFeature("ximagesink") != null;
+        h264Pipeline = (Pipeline) Gst.parseLaunch(
+                "appsrc name=h264-src ! h264parse config-interval=-1 ! avdec_h264"
+                        + " ! videoflip video-direction=auto ! videoconvert"
+                        + (ximage
+                        ? " ! videoscale add-borders=true ! video/x-raw,format=BGRx"
+                        + " ! ximagesink name=sink sync=false force-aspect-ratio=true"
+                        : " ! appsink name=sink sync=false"));
 
         h264Src = (AppSrc) h264Pipeline.getElementByName("h264-src");
         h264Src.setStreamType(AppSrc.StreamType.STREAM);
@@ -63,12 +78,34 @@ public abstract class GstPlayer implements AirPlayConsumer {
         aacEldSrc.set("is-live", true);
         aacEldSrc.set("format", Format.TIME);
         aacEldSrc.set("emit-signals", true);
-    }
 
-    protected abstract Pipeline createH264Pipeline();
+        Element sink = h264Pipeline.getElementByName("sink");
+        if (ximage) {
+            Canvas canvas = new Canvas();
+            canvas.setBackground(Color.BLACK);
+            window = GstFullscreenWindow.create(canvas);
+            VideoOverlay overlay = VideoOverlay.wrap(sink);
+            attachWindow = () -> overlay.setWindowHandle(Native.getComponentID(canvas));
+            h264Pipeline.getBus().setSyncHandler(message -> {
+                if (!VideoOverlay.isPrepareWindowHandleMessage(message)) {
+                    return BusSyncReply.PASS;
+                }
+                attachWindow.run();
+                return BusSyncReply.DROP;
+            });
+        } else {
+            GstVideoComponent video = new GstVideoComponent((AppSink) sink);
+            video.setBackground(Color.BLACK);
+            window = GstFullscreenWindow.create(video);
+            attachWindow = () -> {
+            };
+        }
+    }
 
     @Override
     public void onVideoFormat(VideoStreamInfo videoStreamInfo) {
+        GstFullscreenWindow.show(window);
+        GstFullscreenWindow.onEdt(attachWindow);
         h264Pipeline.play();
     }
 
@@ -82,6 +119,7 @@ public abstract class GstPlayer implements AirPlayConsumer {
 
     @Override
     public void onVideoSrcDisconnect() {
+        GstFullscreenWindow.hide(window);
         h264Pipeline.stop();
     }
 

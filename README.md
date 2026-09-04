@@ -53,8 +53,7 @@ airplay.height=720
 airplay.fps=24
 # player (gstreamer, ffmpeg, vlc, h264-dump)
 player.implementation=gstreamer
-player.menu.enabled=true
-player.gstreamer.swing=true
+player.tray.enabled=true
 ```
 
 ## Players

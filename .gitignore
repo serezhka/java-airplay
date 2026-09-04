@@ -7,3 +7,4 @@ dump.h264
 /log
 /log.*
 gst.log
+player/app/log

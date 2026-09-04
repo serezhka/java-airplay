@@ -2,14 +2,12 @@ package com.github.serezhka.airplay.app.config;
 
 import com.github.serezhka.airplay.app.menu.SystemTrayMenu;
 import com.github.serezhka.airplay.player.ffmpeg.FFmpegPlayer;
-import com.github.serezhka.airplay.player.gstreamer.GstPlayerDefault;
-import com.github.serezhka.airplay.player.gstreamer.GstPlayerSwing;
+import com.github.serezhka.airplay.player.gstreamer.GstPlayer;
 import com.github.serezhka.airplay.player.h264dump.H264Dump;
 import com.github.serezhka.airplay.player.vlc.VlcPlayer;
 import com.github.serezhka.airplay.server.AirPlayConfig;
 import com.github.serezhka.airplay.server.AirPlayConsumer;
 import com.github.serezhka.airplay.server.AirPlayServer;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.ApplicationContext;
@@ -21,8 +19,8 @@ public class PlayerConfig {
 
     @Bean
     @ConditionalOnProperty(value = "player.implementation", havingValue = "gstreamer")
-    public AirPlayConsumer gstreamer(@Value("#{new Boolean('${player.gstreamer.swing}')}") boolean useSwing) {
-        return useSwing ? new GstPlayerSwing() : new GstPlayerDefault();
+    public AirPlayConsumer gstreamer() {
+        return new GstPlayer();
     }
 
     @Bean

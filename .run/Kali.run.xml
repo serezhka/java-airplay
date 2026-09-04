@@ -1,0 +1,19 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Kali" type="SpringBootApplicationConfigurationType" factoryName="Spring Boot">
+    <option name="ENABLE_JMX_AGENT" value="false" />
+    <envs>
+      <env name="DISPLAY" value=":10" />
+      <env name="XAUTHORITY" value="/home/srzhka/.Xauthority" />
+      <env name="XDG_RUNTIME_DIR" value="/run/user/1000" />
+      <env name="XDG_SESSION_TYPE" value="x11" />
+      <env name="DBUS_SESSION_BUS_ADDRESS" value="unix:path=/run/user/1000/bus" />
+      <env name="PULSE_SERVER" value="unix:/run/user/1000/pulse/native" />
+    </envs>
+    <module name="java-airplay.player.app.main" />
+    <target name="srzhka@192.168.0.208:22" />
+    <option name="SPRING_BOOT_MAIN_CLASS" value="com.github.serezhka.airplay.app.PlayerApp" />
+    <method v="2">
+      <option name="Make" enabled="true" />
+    </method>
+  </configuration>
+</component>
