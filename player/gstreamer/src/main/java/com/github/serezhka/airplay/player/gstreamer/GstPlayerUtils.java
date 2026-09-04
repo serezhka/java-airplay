@@ -22,6 +22,20 @@ import java.util.stream.Stream;
  */
 class GstPlayerUtils {
 
+    private static final String[] LIBRARY_DIRS = {
+            "/Library/Frameworks/GStreamer.framework/Libraries",
+            "/opt/homebrew/lib",
+            "/usr/local/lib",
+            "/usr/lib",
+            "/usr/lib64",
+            "/usr/lib/x86_64-linux-gnu",
+            "/usr/lib/aarch64-linux-gnu",
+            "/usr/lib/arm-linux-gnueabihf",
+            "C:\\gstreamer\\1.0\\msvc_x86_64\\bin",
+            "C:\\gstreamer\\1.0\\mingw_x86_64\\bin",
+            "C:\\Program Files\\gstreamer\\1.0\\msvc_x86_64\\bin",
+    };
+
     private GstPlayerUtils() {
     }
 
@@ -33,8 +47,20 @@ class GstPlayerUtils {
      * used to override. On Linux, assumes GStreamer is in the path already.
      */
     static void configurePaths() {
+        String customPath = System.getProperty("gstreamer.path", "").trim();
         if (Platform.isWindows()) {
-            String gstPath = System.getProperty("gstreamer.path", findWindowsLocation());
+            String gstPath = customPath;
+            if (gstPath.isEmpty()) {
+                gstPath = findWindowsLocation();
+            }
+            if (gstPath.isEmpty()) {
+                for (String dir : LIBRARY_DIRS) {
+                    if (new File(dir).isDirectory()) {
+                        gstPath = dir.endsWith("\\") ? dir : dir + "\\";
+                        break;
+                    }
+                }
+            }
             if (!gstPath.isEmpty()) {
                 String systemPath = System.getenv("PATH");
                 if (systemPath == null || systemPath.trim().isEmpty()) {
@@ -44,18 +70,26 @@ class GstPlayerUtils {
                             + File.pathSeparator + systemPath);
                 }
             }
-        } else if (Platform.isMac()) {
-            String gstPath = System.getProperty("gstreamer.path",
-                    "/Library/Frameworks/GStreamer.framework/Libraries/");
-            if (!gstPath.isEmpty()) {
-                String jnaPath = System.getProperty("jna.library.path", "").trim();
-                if (jnaPath.isEmpty()) {
-                    System.setProperty("jna.library.path", gstPath);
-                } else {
-                    System.setProperty("jna.library.path", jnaPath + File.pathSeparator + gstPath);
+        } else {
+            StringBuilder jnaPath = new StringBuilder(System.getProperty("jna.library.path", "").trim());
+            if (!customPath.isEmpty()) {
+                if (jnaPath.length() > 0) {
+                    jnaPath.append(File.pathSeparator);
+                }
+                jnaPath.append(customPath);
+            } else {
+                for (String dir : LIBRARY_DIRS) {
+                    if (new File(dir).isDirectory()) {
+                        if (jnaPath.length() > 0) {
+                            jnaPath.append(File.pathSeparator);
+                        }
+                        jnaPath.append(dir);
+                    }
                 }
             }
-
+            if (jnaPath.length() > 0) {
+                System.setProperty("jna.library.path", jnaPath.toString());
+            }
         }
     }
 
