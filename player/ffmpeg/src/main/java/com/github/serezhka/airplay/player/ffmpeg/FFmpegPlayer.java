@@ -10,15 +10,13 @@ import java.io.IOException;
 @Slf4j
 public class FFmpegPlayer implements AirPlayConsumer {
 
-    private static final String FFPLAY = "ffplay";
-
     private Process h264Process;
 
     @Override
     public synchronized void onVideoFormat(VideoStreamInfo videoStreamInfo) {
         stopVideoProcess();
         try {
-            ProcessBuilder pb = new ProcessBuilder(FFPLAY, "-fs", "-f", "h264", "-codec:v", "h264", "-probesize", "32",
+            ProcessBuilder pb = new ProcessBuilder("ffplay", "-fs", "-f", "h264", "-codec:v", "h264", "-probesize", "32",
                     "-analyzeduration", "0", "-vf", "setpts=0", "-flags", "low_delay", "-");
             pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
             pb.redirectError(ProcessBuilder.Redirect.INHERIT);
