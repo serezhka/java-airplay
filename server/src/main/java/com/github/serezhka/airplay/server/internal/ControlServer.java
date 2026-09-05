@@ -72,7 +72,7 @@ public class ControlServer implements Runnable {
                             ch.pipeline().addLast(
                                     new RtspDecoder(),
                                     new RtspEncoder(),
-                                    new HttpObjectAggregator(64 * 1024),
+                                    new HttpObjectAggregator(2 * 1024 * 1024),
                                     new LoggingHandler(LogLevel.INFO, ByteBufFormat.SIMPLE),
                                     new ControlHandler(sessionManager, airPlayConfig, airPlayConsumer));
                         }

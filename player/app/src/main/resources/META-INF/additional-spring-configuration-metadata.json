@@ -23,12 +23,52 @@
     {
       "name": "player.implementation",
       "type": "java.lang.String",
-      "description": "Player implementation: gstreamer or h264-dump etc."
+      "description": "Player implementation: gstreamer, ffmpeg, or vlc."
     },
     {
       "name": "player.tray.enabled",
       "type": "java.lang.Boolean",
       "description": "Enables system tray menu."
+    },
+    {
+      "name": "dump.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Record an AirPlay dump session beside the selected player."
+    },
+    {
+      "name": "dump.directory",
+      "type": "java.lang.String",
+      "description": "Root directory for dump sessions."
+    },
+    {
+      "name": "dump.protocol",
+      "type": "java.lang.Boolean",
+      "description": "Dump RTSP/HTTP control request and response captures."
+    },
+    {
+      "name": "dump.video",
+      "type": "java.lang.Boolean",
+      "description": "Dump decrypted Annex-B H.264 video."
+    },
+    {
+      "name": "dump.audio",
+      "type": "java.lang.Boolean",
+      "description": "Dump decrypted audio frames."
+    },
+    {
+      "name": "dump.playlist",
+      "type": "java.lang.Boolean",
+      "description": "Dump HLS playlist URI and fetched m3u8 when available."
+    },
+    {
+      "name": "dump.artwork",
+      "type": "java.lang.Boolean",
+      "description": "Dump album artwork and DMAP metadata from SET_PARAMETER when present."
+    },
+    {
+      "name": "dump.videoFps",
+      "type": "java.lang.Integer",
+      "description": "Assumed AirPlay mirror frame rate used when remuxing dumped H.264 into MP4."
     }
   ],
   "hints": [
@@ -40,9 +80,6 @@
         },
         {
           "value": "vlc"
-        },
-        {
-          "value": "h264-dump"
         },
         {
           "value": "ffmpeg"

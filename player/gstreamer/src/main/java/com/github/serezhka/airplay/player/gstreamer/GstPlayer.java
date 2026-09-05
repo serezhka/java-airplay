@@ -49,6 +49,11 @@ public class GstPlayer implements AirPlayConsumer {
     private AudioStreamInfo.CompressionType audioCompressionType;
 
     public GstPlayer() {
+        this(60);
+    }
+
+    public GstPlayer(int fps) {
+        int framerate = Math.max(1, fps);
         boolean d3d11 = Registry.get().lookupFeature("d3d11videosink") != null;
         boolean ximage = Registry.get().lookupFeature("ximagesink") != null;
         nativeFullscreen = d3d11;
@@ -72,7 +77,9 @@ public class GstPlayer implements AirPlayConsumer {
         h264Src = (AppSrc) h264Pipeline.getElementByName("h264-src");
         h264Src.setStreamType(AppSrc.StreamType.STREAM);
         // AirPlay sends Annex-B NAL units (start codes), not length-prefixed AU.
-        h264Src.setCaps(Caps.fromString("video/x-h264,colorimetry=bt709,stream-format=(string)byte-stream,alignment=(string)nal"));
+        h264Src.setCaps(Caps.fromString(
+                "video/x-h264,colorimetry=bt709,stream-format=(string)byte-stream,alignment=(string)nal,framerate="
+                        + framerate + "/1"));
         h264Src.set("is-live", true);
         h264Src.set("format", Format.TIME);
         h264Src.set("do-timestamp", true);
@@ -91,7 +98,7 @@ public class GstPlayer implements AirPlayConsumer {
 
         aacEldSrc = (AppSrc) aacEldPipeline.getElementByName("aac-eld-src");
         aacEldSrc.setStreamType(AppSrc.StreamType.STREAM);
-        aacEldSrc.setCaps(Caps.fromString("audio/mpeg,mpegversion=(int)4,channnels=(int)2,rate=(int)44100,stream-format=raw,codec_data=(buffer)f8e85000"));
+        aacEldSrc.setCaps(Caps.fromString("audio/mpeg,mpegversion=(int)4,channels=(int)2,rate=(int)44100,stream-format=raw,codec_data=(buffer)f8e85000"));
         aacEldSrc.set("is-live", true);
         aacEldSrc.set("format", Format.TIME);
         aacEldSrc.set("emit-signals", true);
@@ -151,8 +158,13 @@ public class GstPlayer implements AirPlayConsumer {
     @Override
     public void onAudioFormat(AudioStreamInfo audioStreamInfo) {
         this.audioCompressionType = audioStreamInfo.getCompressionType();
-        alacPipeline.play();
-        aacEldPipeline.play();
+        if (audioCompressionType == AudioStreamInfo.CompressionType.ALAC) {
+            alacPipeline.play();
+        } else if (audioCompressionType == AudioStreamInfo.CompressionType.AAC_ELD) {
+            aacEldPipeline.play();
+        } else {
+            log.warn("Unsupported audio compression {}", audioCompressionType);
+        }
     }
 
     @Override
@@ -174,7 +186,12 @@ public class GstPlayer implements AirPlayConsumer {
 
     @Override
     public void onMediaPlaylist(String playlistUri) {
-        hlsPipeline = (Pipeline) Gst.parseLaunch("playbin3 uri=" + playlistUri);
+        if (hlsPipeline != null) {
+            hlsPipeline.stop();
+            hlsPipeline = null;
+        }
+        hlsPipeline = (Pipeline) Gst.parseLaunch("playbin3 name=hls");
+        hlsPipeline.set("uri", playlistUri);
         hlsPipeline.play();
     }
 
@@ -182,6 +199,7 @@ public class GstPlayer implements AirPlayConsumer {
     public void onMediaPlaylistRemove() {
         if (hlsPipeline != null) {
             hlsPipeline.stop();
+            hlsPipeline = null;
         }
     }
 

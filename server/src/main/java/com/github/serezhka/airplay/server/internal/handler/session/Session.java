@@ -20,7 +20,7 @@ public class Session {
     private final AudioServer audioServer;
     private final AudioControlServer audioControlServer;
     private final Map<String, ChannelHandlerContext> reverseContexts;
-    private final Map<String, ChannelHandlerContext> playlistRequestContexts;
+    private final Map<String, PlaylistRequest> playlistRequests;
 
     Session(String id) {
         this.id = id;
@@ -29,6 +29,6 @@ public class Session {
         audioServer = new AudioServer(airPlay);
         audioControlServer = new AudioControlServer();
         reverseContexts = new ConcurrentHashMap<>();
-        playlistRequestContexts = new ConcurrentHashMap<>();
+        playlistRequests = new ConcurrentHashMap<>();
     }
 }

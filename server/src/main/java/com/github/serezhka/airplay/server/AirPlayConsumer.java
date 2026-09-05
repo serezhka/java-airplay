@@ -23,6 +23,9 @@ public interface AirPlayConsumer {
     default void onMediaPlaylist(String playlistUri) {
     }
 
+    default void onMediaPlaylistContent(String playlistUri, String content) {
+    }
+
     default void onMediaPlaylistRemove() {
     }
 
@@ -30,6 +33,9 @@ public interface AirPlayConsumer {
     }
 
     default void onMediaPlaylistResume() {
+    }
+
+    default void onControlExchange(ControlExchange exchange) {
     }
 
     default PlaybackInfo playbackInfo() {

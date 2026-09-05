@@ -51,9 +51,18 @@ airplay.serverName=srzhka
 airplay.width=1280
 airplay.height=720
 airplay.fps=24
-# player (gstreamer, ffmpeg, vlc, h264-dump)
+# player (gstreamer, ffmpeg, vlc)
 player.implementation=gstreamer
 player.tray.enabled=true
+# dump (optional sidecar, independent of the player)
+dump.enabled=false
+dump.directory=dumps
+dump.protocol=true
+dump.video=true
+dump.audio=true
+dump.playlist=true
+dump.artwork=true
+dump.videoFps=60
 ```
 
 ## Players
@@ -80,9 +89,20 @@ FFmpeg installation is required, ffplay must be on PATH
 Playback stops after few seconds <br>
 VLC installation is required
 
-### h264-dump
+### dump
 
-Saves video stream into dump.h264 file
+Set `dump.enabled=true` to record the session beside gstreamer, ffmpeg, or vlc. Dumps go under `dumps/<timestamp>_<sessionId>/`:
+
+- `protocol/` — RTSP/HTTP request and response captures, including HLS `GET /playlist`
+- `media/video-NNN.h264` plus `media/video-NNN.mp4` when `ffmpeg` is on PATH — decrypted video remuxed at `dump.videoFps` (default 60)
+- `media/audio-NNN.caf` — ALAC in a CAF container with a magic cookie and packet table; AAC is dumped as `.aac`
+- `extras/` — HLS playlist URI, master/media `m3u8` from YouTube FCUP, artwork, and DMAP metadata when the sender provides them
+
+Play `*.mp4` / `*.caf` in ffplay or VLC. Raw `.h264` has no timestamps, so players often guess 25 fps and look sluggish.
+
+YouTube (and other HLS senders) use `POST /play` plus a reverse HTTP event channel. The receiver answers `/play` first, then fetches playlists through FCUP.
+
+Screen mirroring typically has no cover art. Album artwork usually arrives as RTSP `SET_PARAMETER` with `Content-Type: image/jpeg` or `image/png`.
 
 ## Playback smoke tests
 
@@ -97,5 +117,5 @@ in `build`, `check`, or the regular `test` task.
 # One implementation
 ./gradlew ffmpegPlaybackTest
 ./gradlew gstreamerPlaybackTest
-./gradlew h264DumpPlaybackTest
+./gradlew dumpPlaybackTest
 ```

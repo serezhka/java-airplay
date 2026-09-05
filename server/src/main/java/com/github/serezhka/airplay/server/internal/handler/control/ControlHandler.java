@@ -7,16 +7,19 @@ import com.github.serezhka.airplay.lib.AudioStreamInfo;
 import com.github.serezhka.airplay.lib.VideoStreamInfo;
 import com.github.serezhka.airplay.server.AirPlayConfig;
 import com.github.serezhka.airplay.server.AirPlayConsumer;
+import com.github.serezhka.airplay.server.ControlExchange;
+import com.github.serezhka.airplay.server.internal.handler.session.PlaylistRequest;
 import com.github.serezhka.airplay.server.internal.handler.session.Session;
 import com.github.serezhka.airplay.server.internal.handler.session.SessionManager;
 import com.github.serezhka.airplay.server.internal.handler.util.PropertyListUtil;
 import io.lindstrom.m3u8.model.*;
-import io.lindstrom.m3u8.parser.MultivariantPlaylistParser;
 import io.lindstrom.m3u8.parser.MediaPlaylistParser;
+import io.lindstrom.m3u8.parser.MultivariantPlaylistParser;
 import io.lindstrom.m3u8.parser.ParsingMode;
 import io.lindstrom.m3u8.parser.PlaylistParserException;
 import io.netty.buffer.ByteBufInputStream;
 import io.netty.buffer.ByteBufOutputStream;
+import io.netty.buffer.ByteBufUtil;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
@@ -27,7 +30,10 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.Base64;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -40,9 +46,25 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     private final AirPlayConfig airPlayConfig;
     private final AirPlayConsumer airPlayConsumer;
 
+    private byte[] pendingRequestBody = new byte[0];
+
     @Override
     public final void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
         if (msg instanceof FullHttpRequest request) {
+            pendingRequestBody = ByteBufUtil.getBytes(request.content());
+            try {
+                dispatchControlRequest(ctx, request);
+            } finally {
+                pendingRequestBody = new byte[0];
+            }
+        } else if (msg instanceof FullHttpResponse response) {
+            // reverse connection response
+        } else {
+            log.error("Unknown control message type: {}", msg);
+        }
+    }
+
+    private void dispatchControlRequest(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
             if (RtspVersions.RTSP_1_0.equals(request.protocolVersion())) {
                 if (HttpMethod.GET.equals(request.method()) && "/info".equals(request.uri())) {
                     handleGetInfo(ctx, request);
@@ -108,11 +130,6 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                     sendResponse(ctx, request, response);
                 }
             }
-        } else if (msg instanceof FullHttpResponse response) {
-            // reverse connection response
-        } else {
-            log.error("Unknown control message type: {}", msg);
-        }
     }
 
     /**
@@ -279,19 +296,21 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         var play = (NSDictionary) BinaryPropertyListParser.parse(new ByteBufInputStream(request.content()));
         log.info("Request content:\n{}", play.toXMLPropertyList());
 
-        var clientProcName = play.get("clientProcName").toJavaObject(String.class);
-        if ("YouTube".equals(clientProcName)) {
+        var clientProcName = play.get("clientProcName") != null
+                ? play.get("clientProcName").toJavaObject(String.class)
+                : "";
+        var playlistUri = play.get("Content-Location") != null
+                ? play.get("Content-Location").toJavaObject(String.class)
+                : null;
+        if (playlistUri != null && !playlistUri.isBlank()) {
             var session = resolveSession(request);
-            var playlistUri = play.get("Content-Location").toJavaObject(String.class);
             var playlistUriLocal = playlistUriToLocal(playlistUri, playlistBaseUrl(ctx), session.getId());
-
-            // TODO Create MediaPlaylist record with UUID
-            airPlayConsumer.onMediaPlaylist(playlistUriLocal);
 
             var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
             sendResponse(ctx, request, response);
+            airPlayConsumer.onMediaPlaylist(playlistUriLocal);
         } else {
-            log.error("Client proc name [{}] is not supported!", clientProcName);
+            log.error("Client proc name [{}] has no Content-Location playlist", clientProcName);
             var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.NOT_IMPLEMENTED);
             sendResponse(ctx, request, response);
         }
@@ -335,56 +354,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
 
         var type = action.get("type").toJavaObject(String.class);
         if ("unhandledURLResponse".equals(type)) {
-            var params = (NSDictionary) action.get("params");
-            var fcupResponseURL = params.get("FCUP_Response_URL").toJavaObject(String.class);
-            var fcupResponseBase64 = ((NSData) (params.get("FCUP_Response_Data"))).getBase64EncodedData();
-            var fcupResponse = new String(Base64.getDecoder().decode(fcupResponseBase64));
-            var session = resolveSession(request);
-
-            if (session.getPlaylistRequestContexts().containsKey(fcupResponseURL)) {
-                if (fcupResponseURL.contains("master.m3u8")) {
-                    var context = session.getPlaylistRequestContexts().get(fcupResponseURL);
-                    var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
-                    response.content().writeCharSequence(masterPlaylistToLocalUrls(fcupResponse, playlistBaseUrl(ctx), session.getId()), StandardCharsets.UTF_8);
-                    HttpUtil.setContentLength(response, response.content().readableBytes());
-                    context.writeAndFlush(response);
-                    session.getPlaylistRequestContexts().remove(fcupResponseURL);
-                } else if (fcupResponseURL.contains("mediadata.m3u8")) {
-                    var parser = new MediaPlaylistParser(ParsingMode.LENIENT);
-                    var mediaPlaylist = parser.readPlaylist(fcupResponse);
-
-                    var condensedUrl = mediaPlaylist.comments().stream()
-                            .filter(comment -> comment.startsWith("YT-EXT-CONDENSED-URL:"))
-                            .map(comment -> comment.replace("YT-EXT-CONDENSED-URL:", ""))
-                            .flatMap(attributes -> Pattern.compile("([A-Z0-9\\-]+)=(?:\"([^\"]+)\"|([^,]+))").matcher(attributes).results())
-                            .collect(Collectors.toMap(matcher -> matcher.group(1), matcher -> matcher.group(2) != null ? matcher.group(2) : matcher.group(3)));
-
-                    if (!condensedUrl.isEmpty()) {
-                        mediaPlaylist = MediaPlaylist.builder()
-                                .from(mediaPlaylist)
-                                .mediaSegments(mediaPlaylist.mediaSegments().stream()
-                                        .map(segment -> {
-                                            var prefix = condensedUrl.get("PREFIX");
-                                            var paramNames = condensedUrl.get("PARAMS").split(",");
-                                            var paramValues = segment.uri().replaceFirst(prefix, "").split("/");
-                                            var paramResult = new StringBuilder();
-                                            for (int i = 0; i < paramNames.length; i++) {
-                                                paramResult.append("/").append(paramNames[i]).append("/").append(paramValues[i]);
-                                            }
-                                            return MediaSegment.builder().from(segment).uri(condensedUrl.get("BASE-URI") + paramResult).build();
-                                        })
-                                        .toList())
-                                .build();
-                    }
-
-                    var context = session.getPlaylistRequestContexts().get(fcupResponseURL);
-                    var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
-                    response.content().writeCharSequence(parser.writePlaylistAsString(mediaPlaylist), StandardCharsets.UTF_8);
-                    HttpUtil.setContentLength(response, response.content().readableBytes());
-                    context.writeAndFlush(response);
-                    session.getPlaylistRequestContexts().remove(fcupResponseURL);
-                }
-            }
+            handleUnhandledUrlResponse(ctx, request, action);
         } else if ("playlistRemove".equals(type)) {
             /*<plist version="1.0">
             <dict>
@@ -415,11 +385,106 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         sendResponse(ctx, request, response);
     }
 
+    private void handleUnhandledUrlResponse(ChannelHandlerContext ctx, FullHttpRequest request, NSDictionary action) {
+        var params = action.get("params") instanceof NSDictionary dictionary ? dictionary : null;
+        if (params == null || params.get("FCUP_Response_URL") == null || params.get("FCUP_Response_Data") == null) {
+            log.warn("FCUP response is missing URL or data");
+            return;
+        }
+        var fcupResponseURL = params.get("FCUP_Response_URL").toJavaObject(String.class);
+        var fcupResponseBase64 = ((NSData) params.get("FCUP_Response_Data")).getBase64EncodedData();
+        var fcupResponse = new String(Base64.getDecoder().decode(fcupResponseBase64), StandardCharsets.UTF_8);
+        var session = resolveSession(request);
+        var pending = session.getPlaylistRequests().remove(fcupResponseURL);
+        if (pending == null) {
+            log.warn("No pending GET /playlist for {}", fcupResponseURL);
+            return;
+        }
+
+        String body;
+        try {
+            if (fcupResponseURL.contains("master.m3u8")) {
+                body = masterPlaylistToLocalUrls(fcupResponse, playlistBaseUrl(ctx), session.getId());
+            } else if (fcupResponseURL.contains("mediadata.m3u8")) {
+                body = mediaPlaylistBody(fcupResponse);
+            } else {
+                body = fcupResponse;
+            }
+        } catch (Exception e) {
+            log.warn("Failed to rewrite playlist {}, forwarding raw FCUP body", fcupResponseURL, e);
+            body = fcupResponse;
+        }
+        replyPlaylist(pending, body);
+        airPlayConsumer.onMediaPlaylistContent(fcupResponseURL, body);
+    }
+
+    private String mediaPlaylistBody(String fcupResponse) throws PlaylistParserException {
+        var parser = new MediaPlaylistParser(ParsingMode.LENIENT);
+        var mediaPlaylist = expandYoutubeCondensedUrls(parser.readPlaylist(fcupResponse));
+        return parser.writePlaylistAsString(mediaPlaylist);
+    }
+
+    private MediaPlaylist expandYoutubeCondensedUrls(MediaPlaylist mediaPlaylist) {
+        var condensedUrl = mediaPlaylist.comments().stream()
+                .filter(comment -> comment.startsWith("YT-EXT-CONDENSED-URL:"))
+                .map(comment -> comment.replace("YT-EXT-CONDENSED-URL:", ""))
+                .flatMap(attributes -> Pattern.compile("([A-Z0-9\\-]+)=(?:\"([^\"]+)\"|([^,]+))").matcher(attributes).results())
+                .collect(Collectors.toMap(matcher -> matcher.group(1), matcher -> matcher.group(2) != null ? matcher.group(2) : matcher.group(3)));
+        if (condensedUrl.isEmpty()) {
+            return mediaPlaylist;
+        }
+        var prefix = condensedUrl.get("PREFIX");
+        var params = condensedUrl.get("PARAMS");
+        var baseUri = condensedUrl.get("BASE-URI");
+        if (prefix == null || params == null || baseUri == null) {
+            return mediaPlaylist;
+        }
+        var paramNames = params.split(",");
+        boolean matching = mediaPlaylist.mediaSegments().stream().allMatch(segment ->
+                segment.uri().replaceFirst(Pattern.quote(prefix), "").split("/").length == paramNames.length);
+        if (!matching) {
+            log.warn("YouTube condensed URL param count mismatch, leaving playlist unchanged");
+            return mediaPlaylist;
+        }
+        return MediaPlaylist.builder()
+                .from(mediaPlaylist)
+                .mediaSegments(mediaPlaylist.mediaSegments().stream()
+                        .map(segment -> {
+                            var paramValues = segment.uri().replaceFirst(Pattern.quote(prefix), "").split("/");
+                            var paramResult = new StringBuilder();
+                            for (int i = 0; i < paramNames.length; i++) {
+                                paramResult.append("/").append(paramNames[i]).append("/").append(paramValues[i]);
+                            }
+                            return MediaSegment.builder().from(segment).uri(baseUri + paramResult).build();
+                        })
+                        .toList())
+                .build();
+    }
+
+    private void replyPlaylist(PlaylistRequest pending, String body) {
+        var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+        response.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/vnd.apple.mpegurl");
+        response.content().writeCharSequence(body == null ? "" : body, StandardCharsets.UTF_8);
+        HttpUtil.setContentLength(response, response.content().readableBytes());
+        publishControlExchange(pending, response);
+        var future = pending.context().writeAndFlush(response);
+        if (!pending.keepAlive()) {
+            future.addListener(ChannelFutureListener.CLOSE);
+        }
+    }
+
     private void handleGetPlaylist(ChannelHandlerContext ctx, FullHttpRequest request) {
         var playlistUriRemote = playlistPathToRemote(request.uri());
         var decoder = new QueryStringDecoder(request.uri());
         var session = sessionManager.getSession(decoder.parameters().get("session").get(0));
-        session.getPlaylistRequestContexts().put(playlistUriRemote, ctx);
+        session.getPlaylistRequests().put(playlistUriRemote, new PlaylistRequest(
+                ctx,
+                request.protocolVersion().text(),
+                request.method().name(),
+                request.uri(),
+                copyHeaders(request.headers()),
+                ByteBufUtil.getBytes(request.content()),
+                HttpUtil.isKeepAlive(request)));
         sendEventRequest(session, playlistUriRemote);
     }
 
@@ -471,13 +536,70 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
 
     private void sendResponse(ChannelHandlerContext ctx, FullHttpRequest request, FullHttpResponse response) {
         HttpUtil.setContentLength(response, response.content().readableBytes());
+        publishControlExchange(request, response);
         var future = ctx.writeAndFlush(response);
         if (!HttpUtil.isKeepAlive(request)) {
             future.addListener(ChannelFutureListener.CLOSE);
         }
     }
 
+    private void publishControlExchange(FullHttpRequest request, FullHttpResponse response) {
+        publishControlExchange(
+                Optional.ofNullable(request.headers().get("Active-Remote"))
+                        .orElseGet(() -> request.headers().get("X-Apple-Session-ID")),
+                request.protocolVersion().text(),
+                request.method().name(),
+                request.uri(),
+                copyHeaders(request.headers()),
+                pendingRequestBody,
+                response);
+    }
+
+    private void publishControlExchange(PlaylistRequest pending, FullHttpResponse response) {
+        publishControlExchange(
+                pending.requestHeaders().get("X-Apple-Session-ID"),
+                pending.protocol(),
+                pending.method(),
+                pending.uri(),
+                pending.requestHeaders(),
+                pending.requestBody(),
+                response);
+    }
+
+    private void publishControlExchange(String sessionId, String protocol, String method, String uri,
+                                        Map<String, String> requestHeaders, byte[] requestBody,
+                                        FullHttpResponse response) {
+        try {
+            airPlayConsumer.onControlExchange(new ControlExchange(
+                    Instant.now(),
+                    sessionId,
+                    protocol,
+                    method,
+                    uri,
+                    requestHeaders,
+                    requestBody,
+                    response.status().code(),
+                    copyHeaders(response.headers()),
+                    ByteBufUtil.getBytes(response.content())));
+        } catch (Exception e) {
+            log.warn("Failed to publish control exchange", e);
+        }
+    }
+
+    private static Map<String, String> copyHeaders(HttpHeaders headers) {
+        Map<String, String> copy = new LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : headers) {
+            copy.putIfAbsent(entry.getKey(), entry.getValue());
+        }
+        return copy;
+    }
+
     private void sendEventRequest(Session session, String listUri) {
+        var eventContext = session.getReverseContexts().get("event");
+        if (eventContext == null) {
+            log.error("No reverse event channel for playlist request {}", listUri);
+            return;
+        }
         var requestContent = PropertyListUtil.prepareEventRequest(session.getId(), listUri);
 
         DefaultFullHttpRequest event = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.POST, "/event");
@@ -486,6 +608,6 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         event.headers().add("X-Apple-Session-ID", session.getId());
         event.content().writeBytes(requestContent);
 
-        session.getReverseContexts().get("event").writeAndFlush(event);
+        eventContext.writeAndFlush(event);
     }
 }

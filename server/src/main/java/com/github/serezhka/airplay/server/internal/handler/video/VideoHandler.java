@@ -25,7 +25,7 @@ public class VideoHandler extends ChannelInboundHandlerAdapter {
         try {
             if (packet.getPayloadType() == 0) {
                 airPlay.decryptVideo(packet.getPayload());
-                preparePictureNALUnits(packet.getPayload());
+                toAnnexB(packet.getPayload());
                 dataConsumer.onVideo(packet.getPayload());
             } else if (packet.getPayloadType() == 1) {
                 byte[] spsPps = prepareSpsPpsNALUnits(packet.getPayload());
@@ -36,24 +36,22 @@ public class VideoHandler extends ChannelInboundHandlerAdapter {
         }
     }
 
-    private void preparePictureNALUnits(byte[] payload) {
+    static void toAnnexB(byte[] payload) {
         int idx = 0;
-        while (idx < payload.length) {
-            int naluSize = (payload[idx + 3] & 0xFF) | ((payload[idx + 2] & 0xFF) << 8) | ((payload[idx + 1] & 0xFF) << 16) | ((payload[idx] & 0xFF) << 24);
-            if (naluSize == 1) {
-                return;
-            }
-            if (naluSize > 0) {
-                payload[idx] = 0;
-                payload[idx + 1] = 0;
-                payload[idx + 2] = 0;
-                payload[idx + 3] = 1;
-                idx += naluSize + 4;
-            }
-            if (payload.length - naluSize > 4) {
+        while (idx + 4 <= payload.length) {
+            int naluSize = (payload[idx + 3] & 0xFF)
+                    | ((payload[idx + 2] & 0xFF) << 8)
+                    | ((payload[idx + 1] & 0xFF) << 16)
+                    | ((payload[idx] & 0xFF) << 24);
+            if (naluSize <= 0 || idx + 4 + naluSize > payload.length) {
                 log.error("Video packet contains corrupted NAL unit. It might be decrypt error");
                 return;
             }
+            payload[idx] = 0;
+            payload[idx + 1] = 0;
+            payload[idx + 2] = 0;
+            payload[idx + 3] = 1;
+            idx += naluSize + 4;
         }
     }
 

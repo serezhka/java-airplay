@@ -4,6 +4,7 @@ build
 out
 local.properties
 dump.h264
+dumps/
 /log
 /log.*
 gst.log

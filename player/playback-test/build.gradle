@@ -12,7 +12,7 @@ dependencies {
     playbackTestImplementation project(':server')
     playbackTestImplementation project(':player:ffmpeg')
     playbackTestImplementation project(':player:gstreamer')
-    playbackTestImplementation project(':player:h264-dump')
+    playbackTestImplementation project(':player:dump')
 }
 
 def registerPlaybackTest = { String taskName, String tag, String taskDescription ->
@@ -36,5 +36,5 @@ registerPlaybackTest('ffmpegPlaybackTest', 'ffmpeg',
         'Runs the FFmpeg/ffplay playback smoke test.')
 registerPlaybackTest('gstreamerPlaybackTest', 'gstreamer',
         'Runs the GStreamer playback smoke test.')
-registerPlaybackTest('h264DumpPlaybackTest', 'h264-dump',
-        'Runs the H264 dump playback smoke test.')
+registerPlaybackTest('dumpPlaybackTest', 'dump',
+        'Runs the dump sidecar recording smoke test.')
