@@ -1,0 +1,40 @@
+sourceSets {
+    playbackTest
+}
+
+configurations {
+    playbackTestImplementation.extendsFrom testImplementation
+    playbackTestRuntimeOnly.extendsFrom testRuntimeOnly
+}
+
+dependencies {
+    playbackTestImplementation project(':lib')
+    playbackTestImplementation project(':server')
+    playbackTestImplementation project(':player:ffmpeg')
+    playbackTestImplementation project(':player:gstreamer')
+    playbackTestImplementation project(':player:h264-dump')
+}
+
+def registerPlaybackTest = { String taskName, String tag, String taskDescription ->
+    tasks.register(taskName, Test) {
+        description = taskDescription
+        group = 'verification'
+        testClassesDirs = sourceSets.playbackTest.output.classesDirs
+        classpath = sourceSets.playbackTest.runtimeClasspath
+        useJUnitPlatform {
+            if (tag != null) {
+                includeTags tag
+            }
+        }
+        outputs.upToDateWhen { false }
+    }
+}
+
+registerPlaybackTest('playbackTest', null,
+        'Runs all external playback smoke tests (not part of build or check).')
+registerPlaybackTest('ffmpegPlaybackTest', 'ffmpeg',
+        'Runs the FFmpeg/ffplay playback smoke test.')
+registerPlaybackTest('gstreamerPlaybackTest', 'gstreamer',
+        'Runs the GStreamer playback smoke test.')
+registerPlaybackTest('h264DumpPlaybackTest', 'h264-dump',
+        'Runs the H264 dump playback smoke test.')

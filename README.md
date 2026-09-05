@@ -76,3 +76,19 @@ VLC installation is required
 ### h264-dump
 
 Saves video stream into dump.h264 file
+
+## Playback smoke tests
+
+Playback tests use a synthetic H264 test pattern, so an AirPlay sender is not required.
+They open the real player window for about two seconds and are deliberately not included
+in `build`, `check`, or the regular `test` task.
+
+```shell
+# All supported playback implementations
+./gradlew playbackTest
+
+# One implementation
+./gradlew ffmpegPlaybackTest
+./gradlew gstreamerPlaybackTest
+./gradlew h264DumpPlaybackTest
+```

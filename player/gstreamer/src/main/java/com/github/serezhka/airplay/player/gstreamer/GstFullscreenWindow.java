@@ -20,14 +20,22 @@ final class GstFullscreenWindow {
 
     static void show(JFrame window) {
         onEdt(() -> {
-            window.setBounds(screenBounds());
+            GraphicsDevice screen = defaultScreen();
+            window.setBounds(screen.getDefaultConfiguration().getBounds());
             window.setVisible(true);
+            screen.setFullScreenWindow(window);
             window.toFront();
         });
     }
 
     static void hide(JFrame window) {
-        onEdt(() -> window.setVisible(false));
+        onEdt(() -> {
+            GraphicsDevice screen = defaultScreen();
+            if (screen.getFullScreenWindow() == window) {
+                screen.setFullScreenWindow(null);
+            }
+            window.setVisible(false);
+        });
     }
 
     static void onEdt(Runnable action) {
@@ -43,10 +51,11 @@ final class GstFullscreenWindow {
     }
 
     private static Rectangle screenBounds() {
-        return GraphicsEnvironment.getLocalGraphicsEnvironment()
-                .getDefaultScreenDevice()
-                .getDefaultConfiguration()
-                .getBounds();
+        return defaultScreen().getDefaultConfiguration().getBounds();
+    }
+
+    private static GraphicsDevice defaultScreen() {
+        return GraphicsEnvironment.getLocalGraphicsEnvironment().getDefaultScreenDevice();
     }
 
     private GstFullscreenWindow() {

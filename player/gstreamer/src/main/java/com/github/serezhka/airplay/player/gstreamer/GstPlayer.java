@@ -38,6 +38,7 @@ public class GstPlayer implements AirPlayConsumer {
     private final Pipeline aacEldPipeline;
     private final JFrame window;
     private final Runnable attachWindow;
+    private final boolean nativeFullscreen;
 
     private final AppSrc h264Src;
     private final AppSrc alacSrc;
@@ -50,9 +51,12 @@ public class GstPlayer implements AirPlayConsumer {
     public GstPlayer() {
         boolean d3d11 = Registry.get().lookupFeature("d3d11videosink") != null;
         boolean ximage = Registry.get().lookupFeature("ximagesink") != null;
+        nativeFullscreen = d3d11;
         String sinkLaunch;
         if (d3d11) {
-            sinkLaunch = " ! d3d11upload ! d3d11convert ! d3d11videosink name=sink sync=false fullscreen=true";
+            sinkLaunch = " ! d3d11upload ! d3d11convert"
+                    + " ! d3d11videosink name=sink sync=false force-aspect-ratio=true"
+                    + " fullscreen-toggle-mode=property fullscreen=true";
         } else if (ximage) {
             sinkLaunch = " ! videoscale add-borders=true ! video/x-raw,format=BGRx"
                     + " ! ximagesink name=sink sync=false force-aspect-ratio=true";
@@ -203,5 +207,13 @@ public class GstPlayer implements AirPlayConsumer {
                     hlsPipeline.queryPosition(TimeUnit.SECONDS));
         }
         return AirPlayConsumer.super.playbackInfo();
+    }
+
+    boolean isVideoPipelinePlaying() {
+        return h264Pipeline.isPlaying();
+    }
+
+    boolean isFullscreenConfigured() {
+        return nativeFullscreen || window != null && window.isUndecorated() && !window.isResizable();
     }
 }

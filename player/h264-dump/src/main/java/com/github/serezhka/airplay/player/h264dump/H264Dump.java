@@ -19,7 +19,11 @@ public class H264Dump implements AirPlayConsumer {
     private final FileChannel videoFileChannel;
 
     public H264Dump() throws IOException {
-        videoFileChannel = FileChannel.open(Paths.get("dump.h264"),
+        this(Paths.get("dump.h264"));
+    }
+
+    public H264Dump(Path outputFile) throws IOException {
+        videoFileChannel = FileChannel.open(outputFile,
                 StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
     }
 
