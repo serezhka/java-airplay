@@ -23,7 +23,12 @@ public class GstPlayer implements AirPlayConsumer {
         GstPlayerUtils.configurePaths();
         // GST_DEBUG goes to stderr by default; write it next to the app log.
         GLib.setEnv("GST_DEBUG_NO_COLOR", "1", true);
-        GLib.setEnv("GST_DEBUG_FILE", System.getProperty("airplay.gst.debug.file", "gst.log"), true);
+        String gstLog = System.getProperty("airplay.gst.debug.file");
+        if (gstLog == null || gstLog.isBlank()) {
+            gstLog = java.nio.file.Path.of(System.getProperty("java.io.tmpdir"),
+                    "airplay-gst-" + ProcessHandle.current().pid() + ".log").toString();
+        }
+        GLib.setEnv("GST_DEBUG_FILE", gstLog, true);
         GLib.setEnv("GST_DEBUG", System.getProperty("airplay.gst.debug", "3"), true);
         Gst.init(Version.of(1, 10), "BasicPipeline");
     }
@@ -43,14 +48,22 @@ public class GstPlayer implements AirPlayConsumer {
     private AudioStreamInfo.CompressionType audioCompressionType;
 
     public GstPlayer() {
+        boolean d3d11 = Registry.get().lookupFeature("d3d11videosink") != null;
         boolean ximage = Registry.get().lookupFeature("ximagesink") != null;
+        String sinkLaunch;
+        if (d3d11) {
+            sinkLaunch = " ! d3d11upload ! d3d11convert ! d3d11videosink name=sink sync=false fullscreen=true";
+        } else if (ximage) {
+            sinkLaunch = " ! videoscale add-borders=true ! video/x-raw,format=BGRx"
+                    + " ! ximagesink name=sink sync=false force-aspect-ratio=true";
+        } else {
+            sinkLaunch = " ! appsink name=sink sync=false";
+        }
+        log.info("GStreamer video sink: {}", d3d11 ? "d3d11videosink" : ximage ? "ximagesink" : "appsink");
         h264Pipeline = (Pipeline) Gst.parseLaunch(
                 "appsrc name=h264-src ! h264parse config-interval=-1 ! avdec_h264"
                         + " ! videoflip video-direction=auto ! videoconvert"
-                        + (ximage
-                        ? " ! videoscale add-borders=true ! video/x-raw,format=BGRx"
-                        + " ! ximagesink name=sink sync=false force-aspect-ratio=true"
-                        : " ! appsink name=sink sync=false"));
+                        + sinkLaunch);
 
         h264Src = (AppSrc) h264Pipeline.getElementByName("h264-src");
         h264Src.setStreamType(AppSrc.StreamType.STREAM);
@@ -80,7 +93,11 @@ public class GstPlayer implements AirPlayConsumer {
         aacEldSrc.set("emit-signals", true);
 
         Element sink = h264Pipeline.getElementByName("sink");
-        if (ximage) {
+        if (d3d11) {
+            window = null;
+            attachWindow = () -> {
+            };
+        } else if (ximage) {
             Canvas canvas = new Canvas();
             canvas.setBackground(Color.BLACK);
             window = GstFullscreenWindow.create(canvas);
@@ -104,8 +121,10 @@ public class GstPlayer implements AirPlayConsumer {
 
     @Override
     public void onVideoFormat(VideoStreamInfo videoStreamInfo) {
-        GstFullscreenWindow.show(window);
-        GstFullscreenWindow.onEdt(attachWindow);
+        if (window != null) {
+            GstFullscreenWindow.show(window);
+            GstFullscreenWindow.onEdt(attachWindow);
+        }
         h264Pipeline.play();
     }
 
@@ -119,7 +138,9 @@ public class GstPlayer implements AirPlayConsumer {
 
     @Override
     public void onVideoSrcDisconnect() {
-        GstFullscreenWindow.hide(window);
+        if (window != null) {
+            GstFullscreenWindow.hide(window);
+        }
         h264Pipeline.stop();
     }
 

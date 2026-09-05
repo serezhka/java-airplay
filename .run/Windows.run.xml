@@ -1,0 +1,17 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Windows" type="SpringBootApplicationConfigurationType" factoryName="Spring Boot">
+    <option name="ENABLE_JMX_AGENT" value="false" />
+    <envs>
+      <env name="GSTREAMER_1_0_ROOT_MSVC_X86_64" value="C:\Program Files\gstreamer\1.0\msvc_x86_64" />
+      <env name="GST_REGISTRY_FORK" value="no" />
+      <env name="PLAYER_TRAY_ENABLED" value="false" />
+    </envs>
+    <module name="java-airplay.player.app.main" />
+    <target name="srzhk@192.168.0.208:22" />
+    <option name="SHORTEN_COMMAND_LINE" value="ARGS_FILE" />
+    <option name="SPRING_BOOT_MAIN_CLASS" value="com.github.serezhka.airplay.app.PlayerApp" />
+    <method v="2">
+      <option name="Make" enabled="true" />
+    </method>
+  </configuration>
+</component>
