@@ -63,6 +63,13 @@ player.tray.enabled=true
 Supports both video and audio (alac + aac_eld) streams <br>
 Gstreamer installation is required (see https://github.com/gstreamer-java/gst1-java-core)
 
+AirPlay audio is routed by the sender OS. When an iPhone or iPad mirrors to this
+receiver, iOS/iPadOS may move playback audio from the device speaker to the
+AirPlay receiver. The receiver can play the audio it receives, but it cannot
+force the sender device speaker to play at the same time. Dual playback requires
+an additional sender-side or companion-device audio path outside the AirPlay
+receiver protocol.
+
 ### FFmpeg
 
 Supports only video stream because playback of aac_eld audio requires ffmpeg compilation with ```--enable-libfdk-aac```  <br>
