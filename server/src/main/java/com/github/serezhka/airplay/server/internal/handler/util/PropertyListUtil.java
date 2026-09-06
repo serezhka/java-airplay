@@ -109,34 +109,44 @@ public class PropertyListUtil {
 
     public static byte[] preparePlaybackInfoResponse(AirPlayConsumer.PlaybackInfo playbackInfo) {
         NSDictionary response = new NSDictionary();
-        response.put("duration", playbackInfo.duration());
+        double duration = Math.max(0, playbackInfo.duration());
+        double position = Math.max(0, playbackInfo.position());
+        if (duration > 0) {
+            position = Math.min(position, duration);
+        }
+        response.put("duration", duration);
         NSDictionary loadedTimeRanges = new NSDictionary();
-        loadedTimeRanges.put("duration", playbackInfo.duration());
+        loadedTimeRanges.put("duration", duration);
         loadedTimeRanges.put("start", 0.0);
         response.put("loadedTimeRanges", new NSArray(loadedTimeRanges));
-        response.put("playbackBufferEmpty", true);
-        response.put("playbackBufferFull", false);
-        response.put("playbackLikelyToKeepUp", true);
-        response.put("position", playbackInfo.position());
-        response.put("rate", 1);
-        response.put("readyToPlay", true);
+        boolean hasDuration = duration > 0;
+        boolean hasPosition = position > 0;
+        boolean atEnd = hasDuration && position >= duration;
+        boolean bufferEmpty = !hasDuration && !hasPosition;
+        response.put("playbackBufferEmpty", bufferEmpty);
+        response.put("playbackBufferFull", hasDuration && !atEnd);
+        response.put("playbackLikelyToKeepUp", hasDuration && !atEnd);
+        response.put("position", position);
+        response.put("rate", atEnd ? 0 : 1);
+        response.put("readyToPlay", hasDuration);
         NSDictionary seekableTimeRanges = new NSDictionary();
-        seekableTimeRanges.put("duration", playbackInfo.duration());
+        seekableTimeRanges.put("duration", duration);
         seekableTimeRanges.put("start", 0.0);
         response.put("seekableTimeRanges", new NSArray(seekableTimeRanges));
-        log.error("Playback info:\n{}", response.toXMLPropertyList());
+        log.debug("Playback info: duration={}, position={}", duration, position);
         return response.toXMLPropertyList().getBytes(StandardCharsets.UTF_8);
     }
 
-    public static byte[] prepareEventRequest(String sessionId, String listUri) {
+    public static byte[] prepareEventRequest(String sessionId, String listUri, int requestId) {
         NSDictionary headers = new NSDictionary();
         headers.put("X-Playback-Session-Id", sessionId);
+        headers.put("User-Agent", "AppleCoreMedia/1.0.0.11B554a (Apple TV; U; CPU OS 7_0_4 like Mac OS X; en_us");
 
         NSDictionary request = new NSDictionary();
-        request.put("FCUP_Response_ClientInfo", 0);
-        request.put("FCUP_Response_ClientRef", 0);
+        request.put("FCUP_Response_ClientInfo", 1);
+        request.put("FCUP_Response_ClientRef", 40030004);
         request.put("FCUP_Response_Headers", headers);
-        request.put("FCUP_Response_RequestID", 0);
+        request.put("FCUP_Response_RequestID", requestId);
         request.put("FCUP_Response_URL", listUri);
         request.put("sessionID", 1);
 

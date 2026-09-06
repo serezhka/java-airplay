@@ -2,7 +2,9 @@ package com.github.serezhka.airplay.server.internal.handler.session;
 
 import lombok.RequiredArgsConstructor;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 @RequiredArgsConstructor
@@ -18,6 +20,12 @@ public class SessionManager {
                 sessions.put(sessionId, session);
             }
             return session;
+        }
+    }
+
+    public List<Session> allSessions() {
+        synchronized (sessions) {
+            return new ArrayList<>(sessions.values());
         }
     }
 }

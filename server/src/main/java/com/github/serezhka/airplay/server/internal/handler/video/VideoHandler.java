@@ -57,32 +57,36 @@ public class VideoHandler extends ChannelInboundHandlerAdapter {
 
     private byte[] prepareSpsPpsNALUnits(byte[] payload) {
         ByteBuf payloadBuf = Unpooled.wrappedBuffer(payload);
-        payloadBuf.readerIndex(6);
+        try {
+            payloadBuf.readerIndex(6);
 
-        short spsLen = (short) payloadBuf.readUnsignedShort();
-        byte[] sequenceParameterSet = new byte[spsLen];
-        payloadBuf.readBytes(sequenceParameterSet);
+            short spsLen = (short) payloadBuf.readUnsignedShort();
+            byte[] sequenceParameterSet = new byte[spsLen];
+            payloadBuf.readBytes(sequenceParameterSet);
 
-        payloadBuf.skipBytes(1); // pps count
+            payloadBuf.skipBytes(1); // pps count
 
-        short ppsLen = (short) payloadBuf.readUnsignedShort();
-        byte[] pictureParameterSet = new byte[ppsLen];
-        payloadBuf.readBytes(pictureParameterSet);
+            short ppsLen = (short) payloadBuf.readUnsignedShort();
+            byte[] pictureParameterSet = new byte[ppsLen];
+            payloadBuf.readBytes(pictureParameterSet);
 
-        int spsPpsLen = spsLen + ppsLen + 8;
-        log.info("SPS PPS length: {}", spsPpsLen);
-        byte[] spsPps = new byte[spsPpsLen];
-        spsPps[0] = 0;
-        spsPps[1] = 0;
-        spsPps[2] = 0;
-        spsPps[3] = 1;
-        System.arraycopy(sequenceParameterSet, 0, spsPps, 4, spsLen);
-        spsPps[spsLen + 4] = 0;
-        spsPps[spsLen + 5] = 0;
-        spsPps[spsLen + 6] = 0;
-        spsPps[spsLen + 7] = 1;
-        System.arraycopy(pictureParameterSet, 0, spsPps, 8 + spsLen, ppsLen);
+            int spsPpsLen = spsLen + ppsLen + 8;
+            log.info("SPS PPS length: {}", spsPpsLen);
+            byte[] spsPps = new byte[spsPpsLen];
+            spsPps[0] = 0;
+            spsPps[1] = 0;
+            spsPps[2] = 0;
+            spsPps[3] = 1;
+            System.arraycopy(sequenceParameterSet, 0, spsPps, 4, spsLen);
+            spsPps[spsLen + 4] = 0;
+            spsPps[spsLen + 5] = 0;
+            spsPps[spsLen + 6] = 0;
+            spsPps[spsLen + 7] = 1;
+            System.arraycopy(pictureParameterSet, 0, spsPps, 8 + spsLen, ppsLen);
 
-        return spsPps;
+            return spsPps;
+        } finally {
+            payloadBuf.release();
+        }
     }
 }

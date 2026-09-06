@@ -4,6 +4,7 @@ plugins {
 }
 
 dependencies {
+    implementation project(':lib')
     implementation project(':server')
     implementation project(':player:gstreamer')
     implementation project(':player:dump')

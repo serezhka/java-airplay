@@ -1,6 +1,8 @@
 package com.github.serezhka.airplay.player.gstreamer;
 
 import com.github.serezhka.airplay.lib.AudioStreamInfo;
+import com.github.serezhka.airplay.lib.AppLogs;
+import com.github.serezhka.airplay.lib.HlsLifecycle;
 import com.github.serezhka.airplay.lib.VideoStreamInfo;
 import com.github.serezhka.airplay.server.AirPlayConsumer;
 import com.sun.jna.Native;
@@ -21,14 +23,8 @@ public class GstPlayer implements AirPlayConsumer {
 
     static {
         GstPlayerUtils.configurePaths();
-        // GST_DEBUG goes to stderr by default; write it next to the app log.
         GLib.setEnv("GST_DEBUG_NO_COLOR", "1", true);
-        String gstLog = System.getProperty("airplay.gst.debug.file");
-        if (gstLog == null || gstLog.isBlank()) {
-            gstLog = java.nio.file.Path.of(System.getProperty("java.io.tmpdir"),
-                    "airplay-gst-" + ProcessHandle.current().pid() + ".log").toString();
-        }
-        GLib.setEnv("GST_DEBUG_FILE", gstLog, true);
+        GLib.setEnv("GST_DEBUG_FILE", AppLogs.playerLogFile("gstreamer").toString(), true);
         GLib.setEnv("GST_DEBUG", System.getProperty("airplay.gst.debug", "3"), true);
         Gst.init(Version.of(1, 10), "BasicPipeline");
     }
@@ -39,12 +35,17 @@ public class GstPlayer implements AirPlayConsumer {
     private final JFrame window;
     private final Runnable attachWindow;
     private final boolean nativeFullscreen;
+    private final boolean useD3d11;
+    private final boolean useXimage;
 
     private final AppSrc h264Src;
     private final AppSrc alacSrc;
     private final AppSrc aacEldSrc;
 
     private Pipeline hlsPipeline;
+    private String hlsUri;
+    private JFrame hlsWindow;
+    private Canvas hlsCanvas;
 
     private AudioStreamInfo.CompressionType audioCompressionType;
 
@@ -53,22 +54,23 @@ public class GstPlayer implements AirPlayConsumer {
     }
 
     public GstPlayer(int fps) {
+        log.info("GStreamer debug log: {}", AppLogs.playerLogFile("gstreamer"));
         int framerate = Math.max(1, fps);
-        boolean d3d11 = Registry.get().lookupFeature("d3d11videosink") != null;
-        boolean ximage = Registry.get().lookupFeature("ximagesink") != null;
-        nativeFullscreen = d3d11;
+        useD3d11 = Registry.get().lookupFeature("d3d11videosink") != null;
+        useXimage = Registry.get().lookupFeature("ximagesink") != null;
+        nativeFullscreen = useD3d11;
         String sinkLaunch;
-        if (d3d11) {
+        if (useD3d11) {
             sinkLaunch = " ! d3d11upload ! d3d11convert"
                     + " ! d3d11videosink name=sink sync=false force-aspect-ratio=true"
                     + " fullscreen-toggle-mode=property fullscreen=true";
-        } else if (ximage) {
+        } else if (useXimage) {
             sinkLaunch = " ! videoscale add-borders=true ! video/x-raw,format=BGRx"
                     + " ! ximagesink name=sink sync=false force-aspect-ratio=true";
         } else {
             sinkLaunch = " ! appsink name=sink sync=false";
         }
-        log.info("GStreamer video sink: {}", d3d11 ? "d3d11videosink" : ximage ? "ximagesink" : "appsink");
+        log.info("GStreamer video sink: {}", useD3d11 ? "d3d11videosink" : useXimage ? "ximagesink" : "appsink");
         h264Pipeline = (Pipeline) Gst.parseLaunch(
                 "appsrc name=h264-src ! h264parse config-interval=-1 ! avdec_h264"
                         + " ! videoflip video-direction=auto ! videoconvert"
@@ -104,11 +106,11 @@ public class GstPlayer implements AirPlayConsumer {
         aacEldSrc.set("emit-signals", true);
 
         Element sink = h264Pipeline.getElementByName("sink");
-        if (d3d11) {
+        if (useD3d11) {
             window = null;
             attachWindow = () -> {
             };
-        } else if (ximage) {
+        } else if (useXimage) {
             Canvas canvas = new Canvas();
             canvas.setBackground(Color.BLACK);
             window = GstFullscreenWindow.create(canvas);
@@ -186,21 +188,76 @@ public class GstPlayer implements AirPlayConsumer {
 
     @Override
     public void onMediaPlaylist(String playlistUri) {
+        startHlsPipeline(playlistUri);
+    }
+
+    private void startHlsPipeline(String playlistUri) {
+        stopHlsPipeline();
+        hlsUri = playlistUri;
+        Element videoSink = createHlsVideoSink();
+        hlsPipeline = (Pipeline) Gst.parseLaunch("playbin3 name=hls");
+        hlsPipeline.set("uri", playlistUri);
+        hlsPipeline.set("video-sink", videoSink);
+        if (useXimage && hlsCanvas != null) {
+            GstFullscreenWindow.show(hlsWindow);
+            VideoOverlay overlay = VideoOverlay.wrap(videoSink);
+            Runnable attachHlsWindow = () -> overlay.setWindowHandle(Native.getComponentID(hlsCanvas));
+            hlsPipeline.getBus().setSyncHandler(message -> {
+                if (!VideoOverlay.isPrepareWindowHandleMessage(message)) {
+                    return BusSyncReply.PASS;
+                }
+                GstFullscreenWindow.onEdt(attachHlsWindow);
+                return BusSyncReply.DROP;
+            });
+        }
+        hlsPipeline.getBus().connect((Bus.EOS) source -> {
+            if (hlsUri == null) {
+                return;
+            }
+            log.info("HLS ended, requesting playlist refresh for {}", hlsUri);
+            HlsLifecycle.notifyEnded();
+        });
+        hlsPipeline.play();
+    }
+
+    private Element createHlsVideoSink() {
+        if (useD3d11) {
+            Element sink = ElementFactory.make("d3d11videosink", "hls-sink");
+            sink.set("sync", false);
+            sink.set("force-aspect-ratio", true);
+            sink.set("fullscreen", true);
+            return sink;
+        }
+        if (useXimage) {
+            hlsCanvas = new Canvas();
+            hlsCanvas.setBackground(Color.BLACK);
+            hlsWindow = GstFullscreenWindow.create(hlsCanvas);
+            Element sink = ElementFactory.make("ximagesink", "hls-sink");
+            sink.set("sync", false);
+            sink.set("force-aspect-ratio", true);
+            return sink;
+        }
+        Element sink = ElementFactory.make("autovideosink", "hls-sink");
+        sink.set("sync", false);
+        return sink;
+    }
+
+    private void stopHlsPipeline() {
         if (hlsPipeline != null) {
             hlsPipeline.stop();
             hlsPipeline = null;
         }
-        hlsPipeline = (Pipeline) Gst.parseLaunch("playbin3 name=hls");
-        hlsPipeline.set("uri", playlistUri);
-        hlsPipeline.play();
+        if (hlsWindow != null) {
+            GstFullscreenWindow.hide(hlsWindow);
+            hlsWindow = null;
+            hlsCanvas = null;
+        }
     }
 
     @Override
     public void onMediaPlaylistRemove() {
-        if (hlsPipeline != null) {
-            hlsPipeline.stop();
-            hlsPipeline = null;
-        }
+        hlsUri = null;
+        stopHlsPipeline();
     }
 
     @Override

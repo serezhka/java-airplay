@@ -8,7 +8,9 @@ import io.netty.channel.ChannelHandlerContext;
 import lombok.Getter;
 
 import java.util.Map;
+import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 @Getter
 public class Session {
@@ -20,7 +22,8 @@ public class Session {
     private final AudioServer audioServer;
     private final AudioControlServer audioControlServer;
     private final Map<String, ChannelHandlerContext> reverseContexts;
-    private final Map<String, PlaylistRequest> playlistRequests;
+    private final Map<String, Queue<PlaylistRequest>> playlistRequests;
+    private volatile HlsPlaylistState hlsPlaylistState;
 
     Session(String id) {
         this.id = id;
@@ -30,5 +33,18 @@ public class Session {
         audioControlServer = new AudioControlServer();
         reverseContexts = new ConcurrentHashMap<>();
         playlistRequests = new ConcurrentHashMap<>();
+    }
+
+    public void enqueuePlaylistRequest(String remoteUri, PlaylistRequest request) {
+        playlistRequests.computeIfAbsent(remoteUri, ignored -> new ConcurrentLinkedQueue<>()).add(request);
+    }
+
+    public PlaylistRequest pollPlaylistRequest(String remoteUri) {
+        Queue<PlaylistRequest> queue = playlistRequests.get(remoteUri);
+        return queue == null ? null : queue.poll();
+    }
+
+    public void setHlsPlaylistState(HlsPlaylistState hlsPlaylistState) {
+        this.hlsPlaylistState = hlsPlaylistState;
     }
 }

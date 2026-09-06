@@ -81,8 +81,31 @@ receiver protocol.
 
 ### FFmpeg
 
-Supports only video stream because playback of aac_eld audio requires ffmpeg compilation with ```--enable-libfdk-aac```  <br>
-FFmpeg installation is required, ffplay must be on PATH
+`ffplay` must be on PATH. Logs are written under `logs/` in the working directory.
+
+| Mode | Stock distro ffmpeg | Notes |
+|------|---------------------|-------|
+| Screen mirroring video | yes | H.264 pipe to ffplay |
+| Music (ALAC) | yes | native `alac` decoder |
+| YouTube / HLS | yes | `ffplay <local playlist uri>` |
+| Mirroring audio (AAC-ELD) | usually no | needs `--enable-libfdk-aac` build |
+
+`libfdk-aac` is still not in default Debian/Ubuntu ffmpeg packages because of
+license/patent constraints. Distro builds use the native `aac` encoder/decoder
+instead, which does not cover AirPlay's AAC-ELD mirroring audio. Music over
+AirPlay is ALAC, not AAC-ELD, so Apple Music works without libfdk-aac.
+
+For mirroring audio on ffmpeg you can either keep using GStreamer (`avdec_aac`)
+or install a custom ffmpeg build with `--enable-nonfree --enable-libfdk-aac`.
+
+Logs (created in `./logs/` next to the process working directory):
+
+- `airplay-app-<timestamp>-<pid>.log` — Spring / Netty application log
+- `airplay-gst-<timestamp>-<pid>.log` — GStreamer (`-Dairplay.gst.debug.file=...`)
+- `airplay-ffmpeg-<timestamp>-<pid>.log` — ffplay (`-Dairplay.ffmpeg.debug.file=...`)
+- `airplay-vlc-<timestamp>-<pid>.log` — VLC (`-Dairplay.vlc.debug.file=...`)
+
+Override directory with `-Dairplay.logs.directory=...`.
 
 ### VLC
 

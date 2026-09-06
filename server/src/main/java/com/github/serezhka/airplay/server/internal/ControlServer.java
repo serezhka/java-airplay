@@ -3,7 +3,9 @@ package com.github.serezhka.airplay.server.internal;
 import com.github.serezhka.airplay.server.AirPlayConfig;
 import com.github.serezhka.airplay.server.AirPlayConsumer;
 import com.github.serezhka.airplay.server.internal.handler.control.ControlHandler;
+import com.github.serezhka.airplay.server.internal.handler.control.HlsFcupService;
 import com.github.serezhka.airplay.server.internal.handler.session.SessionManager;
+import com.github.serezhka.airplay.lib.HlsLifecycle;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
@@ -22,16 +24,15 @@ import io.netty.handler.logging.ByteBufFormat;
 import io.netty.handler.logging.LogLevel;
 import io.netty.handler.logging.LoggingHandler;
 import lombok.Getter;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 import java.net.InetSocketAddress;
 
 @Slf4j
-@RequiredArgsConstructor
 public class ControlServer implements Runnable {
 
     private final SessionManager sessionManager = new SessionManager();
+    private final HlsFcupService hlsFcupService;
 
     private final AirPlayConfig airPlayConfig;
     private final AirPlayConsumer airPlayConsumer;
@@ -40,6 +41,13 @@ public class ControlServer implements Runnable {
 
     @Getter
     private int port;
+
+    public ControlServer(AirPlayConfig airPlayConfig, AirPlayConsumer airPlayConsumer) {
+        this.airPlayConfig = airPlayConfig;
+        this.airPlayConsumer = airPlayConsumer;
+        this.hlsFcupService = new HlsFcupService(sessionManager, airPlayConsumer);
+        HlsLifecycle.setOnEnded(hlsFcupService::refreshActivePlaylists);
+    }
 
     public void start() throws InterruptedException {
         thread = new Thread(this);
@@ -74,7 +82,7 @@ public class ControlServer implements Runnable {
                                     new RtspEncoder(),
                                     new HttpObjectAggregator(2 * 1024 * 1024),
                                     new LoggingHandler(LogLevel.INFO, ByteBufFormat.SIMPLE),
-                                    new ControlHandler(sessionManager, airPlayConfig, airPlayConsumer));
+                                    new ControlHandler(sessionManager, hlsFcupService, airPlayConfig, airPlayConsumer));
                         }
                     })
                     .childOption(ChannelOption.TCP_NODELAY, true)
