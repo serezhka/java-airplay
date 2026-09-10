@@ -88,6 +88,7 @@ receiver protocol.
 | Screen mirroring video | yes | H.264 pipe to ffplay |
 | Music (ALAC) | yes | native `alac` decoder |
 | YouTube / HLS | yes | `ffplay <local playlist uri>` |
+| Test-client audio (AAC-LC ADTS) | yes | `ffplay -f aac` |
 | Mirroring audio (AAC-ELD) | usually no | needs `--enable-libfdk-aac` build |
 
 `libfdk-aac` is still not in default Debian/Ubuntu ffmpeg packages because of
@@ -95,8 +96,9 @@ license/patent constraints. Distro builds use the native `aac` encoder/decoder
 instead, which does not cover AirPlay's AAC-ELD mirroring audio. Music over
 AirPlay is ALAC, not AAC-ELD, so Apple Music works without libfdk-aac.
 
-For mirroring audio on ffmpeg you can either keep using GStreamer (`avdec_aac`)
-or install a custom ffmpeg build with `--enable-nonfree --enable-libfdk-aac`.
+For mirroring audio use the GStreamer player (`avdec_aac`), or install a custom
+ffmpeg build with `--enable-nonfree --enable-libfdk-aac`. Keep player backends
+separate — `FFmpegPlayer` does not fall back to GStreamer.
 
 Logs (created in `./logs/` next to the process working directory):
 

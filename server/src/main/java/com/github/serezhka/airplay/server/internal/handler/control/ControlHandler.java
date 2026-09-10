@@ -28,6 +28,7 @@ import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.socket.ServerSocketChannel;
 import io.netty.handler.codec.http.*;
 import io.netty.handler.codec.rtsp.*;
+import io.netty.util.ReferenceCountUtil;
 import lombok.extern.slf4j.Slf4j;
 
 import java.nio.charset.StandardCharsets;
@@ -61,17 +62,21 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     public final void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-        if (msg instanceof FullHttpRequest request) {
-            pendingRequestBody = ByteBufUtil.getBytes(request.content());
-            try {
-                dispatchControlRequest(ctx, request);
-            } finally {
-                pendingRequestBody = new byte[0];
+        try {
+            if (msg instanceof FullHttpRequest request) {
+                pendingRequestBody = ByteBufUtil.getBytes(request.content());
+                try {
+                    dispatchControlRequest(ctx, request);
+                } finally {
+                    pendingRequestBody = new byte[0];
+                }
+            } else if (msg instanceof FullHttpResponse response) {
+                log.debug("Reverse channel response: {} {}", response.status(), response.content().readableBytes());
+            } else {
+                log.error("Unknown control message type: {}", msg);
             }
-        } else if (msg instanceof FullHttpResponse response) {
-            log.debug("Reverse channel response: {} {}", response.status(), response.content().readableBytes());
-        } else {
-            log.error("Unknown control message type: {}", msg);
+        } finally {
+            ReferenceCountUtil.release(msg);
         }
     }
 

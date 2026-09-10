@@ -83,17 +83,19 @@ public class AirPlay {
     }
 
     /**
-     * @return {@code true} if we got shared secret during pairing, ekey & stream connection id during RTSP SETUP
+     * Video decrypt needs FairPlay {@code ekey} + streamConnectionID.
+     * Shared secret is optional: absent when the client skips pairing (features bit 27 off).
      */
     public boolean isFairPlayVideoDecryptorReady() {
-        return pairing.getSharedSecret() != null && rtsp.getEkey() != null && rtsp.getStreamConnectionID() != null;
+        return rtsp.getEkey() != null && rtsp.getStreamConnectionID() != null;
     }
 
     /**
-     * @return {@code true} if we got shared secret during pairing, ekey & eiv during RTSP SETUP
+     * Audio decrypt needs FairPlay {@code ekey} + {@code eiv}.
+     * Shared secret is optional (same as video).
      */
     public boolean isFairPlayAudioDecryptorReady() {
-        return pairing.getSharedSecret() != null && rtsp.getEkey() != null && rtsp.getEiv() != null;
+        return rtsp.getEkey() != null && rtsp.getEiv() != null;
     }
 
     public void decryptVideo(byte[] video) throws Exception {
@@ -101,7 +103,8 @@ public class AirPlay {
             if (!isFairPlayVideoDecryptorReady()) {
                 throw new IllegalStateException("FairPlayVideoDecryptor not ready!");
             }
-            fairPlayVideoDecryptor = new FairPlayVideoDecryptor(getFairPlayAesKey(), pairing.getSharedSecret(), rtsp.getStreamConnectionID());
+            byte[] secret = pairing.getSharedSecret() != null ? pairing.getSharedSecret() : new byte[0];
+            fairPlayVideoDecryptor = new FairPlayVideoDecryptor(getFairPlayAesKey(), secret, rtsp.getStreamConnectionID());
         }
         fairPlayVideoDecryptor.decrypt(video);
     }
@@ -111,7 +114,8 @@ public class AirPlay {
             if (!isFairPlayAudioDecryptorReady()) {
                 throw new IllegalStateException("FairPlayAudioDecryptor not ready!");
             }
-            fairPlayAudioDecryptor = new FairPlayAudioDecryptor(getFairPlayAesKey(), rtsp.getEiv(), pairing.getSharedSecret());
+            byte[] secret = pairing.getSharedSecret() != null ? pairing.getSharedSecret() : new byte[0];
+            fairPlayAudioDecryptor = new FairPlayAudioDecryptor(getFairPlayAesKey(), rtsp.getEiv(), secret);
         }
         fairPlayAudioDecryptor.decrypt(audio, audioLength);
     }

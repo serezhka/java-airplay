@@ -32,6 +32,7 @@ public class GstPlayer implements AirPlayConsumer {
     private final Pipeline h264Pipeline;
     private final Pipeline alacPipeline;
     private final Pipeline aacEldPipeline;
+    private final Pipeline aacLcPipeline;
     private final JFrame window;
     private final Runnable attachWindow;
     private final boolean nativeFullscreen;
@@ -41,6 +42,7 @@ public class GstPlayer implements AirPlayConsumer {
     private final AppSrc h264Src;
     private final AppSrc alacSrc;
     private final AppSrc aacEldSrc;
+    private final AppSrc aacLcSrc;
 
     private Pipeline hlsPipeline;
     private String hlsUri;
@@ -105,6 +107,16 @@ public class GstPlayer implements AirPlayConsumer {
         aacEldSrc.set("format", Format.TIME);
         aacEldSrc.set("emit-signals", true);
 
+        // AAC-LC (ct=4): accept ADTS (test client) or raw AUs with LC ASC.
+        aacLcPipeline = (Pipeline) Gst.parseLaunch(
+                "appsrc name=aac-lc-src ! aacparse ! avdec_aac ! audioconvert ! audioresample ! autoaudiosink sync=false");
+        aacLcSrc = (AppSrc) aacLcPipeline.getElementByName("aac-lc-src");
+        aacLcSrc.setStreamType(AppSrc.StreamType.STREAM);
+        aacLcSrc.setCaps(Caps.fromString("audio/mpeg,mpegversion=(int)4,stream-format=adts,channels=(int)2,rate=(int)44100"));
+        aacLcSrc.set("is-live", true);
+        aacLcSrc.set("format", Format.TIME);
+        aacLcSrc.set("emit-signals", true);
+
         Element sink = h264Pipeline.getElementByName("sink");
         if (useD3d11) {
             window = null;
@@ -164,6 +176,8 @@ public class GstPlayer implements AirPlayConsumer {
             alacPipeline.play();
         } else if (audioCompressionType == AudioStreamInfo.CompressionType.AAC_ELD) {
             aacEldPipeline.play();
+        } else if (audioCompressionType == AudioStreamInfo.CompressionType.AAC) {
+            aacLcPipeline.play();
         } else {
             log.warn("Unsupported audio compression {}", audioCompressionType);
         }
@@ -177,6 +191,9 @@ public class GstPlayer implements AirPlayConsumer {
         switch (audioCompressionType) {
             case ALAC -> alacSrc.pushBuffer(buf);
             case AAC_ELD -> aacEldSrc.pushBuffer(buf);
+            case AAC -> aacLcSrc.pushBuffer(buf);
+            default -> {
+            }
         }
     }
 
@@ -184,6 +201,7 @@ public class GstPlayer implements AirPlayConsumer {
     public void onAudioSrcDisconnect() {
         alacPipeline.stop();
         aacEldPipeline.stop();
+        aacLcPipeline.stop();
     }
 
     @Override

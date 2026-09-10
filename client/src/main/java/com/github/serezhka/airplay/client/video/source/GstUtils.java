@@ -20,7 +20,7 @@ import java.util.stream.Stream;
 /**
  * Utility methods for use in examples.
  */
-class GstUtils {
+public final class GstUtils {
 
     private GstUtils() {
     }
@@ -32,7 +32,7 @@ class GstUtils {
      * link to each other). On both, the gstreamer.path system property can be
      * used to override. On Linux, assumes GStreamer is in the path already.
      */
-    static void configurePaths() {
+    public static void configurePaths() {
         if (Platform.isWindows()) {
             String gstPath = System.getProperty("gstreamer.path", findWindowsLocation());
             if (!gstPath.isEmpty()) {

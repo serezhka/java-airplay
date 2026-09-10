@@ -1,5 +1,10 @@
 plugins {
-    id 'java-library'
+    id 'java'
+    id 'application'
+}
+
+application {
+    mainClass = 'com.github.serezhka.airplay.client.App'
 }
 
 dependencies {
@@ -18,4 +23,10 @@ dependencies {
 
     implementation "ch.qos.logback:logback-core:$logbackVersion"
     implementation "ch.qos.logback:logback-classic:$logbackVersion"
+
+    testImplementation "org.junit.jupiter:junit-jupiter:$junitVersion"
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
 }

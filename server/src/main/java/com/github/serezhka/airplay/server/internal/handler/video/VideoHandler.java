@@ -24,6 +24,8 @@ public class VideoHandler extends ChannelInboundHandlerAdapter {
         VideoPacket packet = (VideoPacket) msg;
         try {
             if (packet.getPayloadType() == 0) {
+                // Type 0 only: type 5 is an unencrypted streaming-report plist; decrypting it
+                // advances AES-CTR and corrupts subsequent video frames.
                 airPlay.decryptVideo(packet.getPayload());
                 toAnnexB(packet.getPayload());
                 dataConsumer.onVideo(packet.getPayload());

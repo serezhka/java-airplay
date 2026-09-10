@@ -9,3 +9,5 @@ dumps/
 /log.*
 gst.log
 player/app/log
+/research/
+/.cursor

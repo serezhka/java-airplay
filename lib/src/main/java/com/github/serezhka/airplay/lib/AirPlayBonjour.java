@@ -68,19 +68,16 @@ public class AirPlayBonjour {
     private Map<String, String> airPlayMDNSProps(String deviceId) {
         HashMap<String, String> airPlayMDNSProps = new HashMap<>();
         airPlayMDNSProps.put("deviceid", deviceId);
-        airPlayMDNSProps.put("features", "0x5A7FFFF7,0x1E"); // 0x5A7FFFF7 E4
+        // Bit 27 (legacy pairing) off: clients skip pair-pin-start and go FairPlay → SETUP.
+        // Legacy Pairing code remains for senders that still use it.
+        airPlayMDNSProps.put("features", "0x527FFEE6,0x0");
         airPlayMDNSProps.put("srcvers", "220.68");
         airPlayMDNSProps.put("flags", "0x44");
         airPlayMDNSProps.put("vv", "2");
-        airPlayMDNSProps.put("model", "AppleTV3,2C");
+        airPlayMDNSProps.put("model", "AppleTV3,2");
         airPlayMDNSProps.put("rhd", "5.6.0.0");
         airPlayMDNSProps.put("pw", "false");
         airPlayMDNSProps.put("pk", "f3769a660475d27b4f6040381d784645e13e21c53e6d2da6a8c3d757086fc336");
-        //airPlayMDNSProps.put("pi", "2e388006-13ba-4041-9a67-25dd4a43d536");
-        airPlayMDNSProps.put("rmodel", "PC1.0");
-        airPlayMDNSProps.put("rrv", "1.01");
-        airPlayMDNSProps.put("rsv", "1.00");
-        airPlayMDNSProps.put("pcversion", "1715");
         return airPlayMDNSProps;
     }
 
@@ -91,12 +88,9 @@ public class AirPlayBonjour {
         airTunesMDNSProps.put("da", "true");
         airTunesMDNSProps.put("et", "0,3,5");
         airTunesMDNSProps.put("ek", "1");
-        //airTunesMDNSProps.put("vv", "2");
-        airTunesMDNSProps.put("ft", "0x5A7FFFF7,0x1E");
-        airTunesMDNSProps.put("am", "AppleTV3,2C");
+        airTunesMDNSProps.put("ft", "0x527FFEE6,0x0");
+        airTunesMDNSProps.put("am", "AppleTV3,2");
         airTunesMDNSProps.put("md", "0,1,2");
-        //airTunesMDNSProps.put("rhd", "5.6.0.0");
-        //airTunesMDNSProps.put("pw", "false");
         airTunesMDNSProps.put("sr", "44100");
         airTunesMDNSProps.put("ss", "16");
         airTunesMDNSProps.put("sv", "false");

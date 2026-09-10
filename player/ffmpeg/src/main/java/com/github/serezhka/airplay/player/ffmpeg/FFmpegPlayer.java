@@ -64,16 +64,11 @@ public class FFmpegPlayer implements AirPlayConsumer {
     public synchronized void onAudioFormat(AudioStreamInfo audioStreamInfo) {
         this.audioCompressionType = audioStreamInfo.getCompressionType();
         stopAudioProcess();
-        if (audioCompressionType == AudioStreamInfo.CompressionType.ALAC) {
-            startAlacProcess();
-        } else if (audioCompressionType == AudioStreamInfo.CompressionType.AAC_ELD) {
-            if (!hasLibFdkAacDecoder()) {
-                log.warn("AAC-ELD mirroring audio requires ffmpeg with libfdk_aac decoder; audio will be skipped");
-                return;
-            }
-            startAacEldProcess();
-        } else {
-            log.warn("Unsupported audio compression {}", audioCompressionType);
+        switch (audioCompressionType) {
+            case ALAC -> startAlacProcess();
+            case AAC -> startAacLcProcess();
+            case AAC_ELD -> startAacEldProcess();
+            default -> log.warn("Unsupported audio compression {}", audioCompressionType);
         }
     }
 
@@ -144,7 +139,22 @@ public class FFmpegPlayer implements AirPlayConsumer {
         }
     }
 
+    private void startAacLcProcess() {
+        try {
+            ProcessBuilder pb = new ProcessBuilder("ffplay", "-nodisp", "-loglevel", "debug",
+                    "-f", "aac", "-i", "pipe:0");
+            AppLogs.configureProcessLogging(pb, "ffmpeg");
+            alacProcess = pb.start();
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to start ffplay for AAC-LC audio", e);
+        }
+    }
+
     private void startAacEldProcess() {
+        if (!hasLibFdkAacDecoder()) {
+            log.warn("AAC-ELD mirroring audio requires ffmpeg with libfdk_aac decoder; audio will be skipped");
+            return;
+        }
         try {
             ProcessBuilder pb = new ProcessBuilder("ffplay", "-nodisp", "-loglevel", "debug",
                     "-f", "aac", "-acodec", "libfdk_aac", "-i", "pipe:0");

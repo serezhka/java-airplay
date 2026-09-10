@@ -113,7 +113,7 @@ public class ControlClient implements Runnable {
     }
 
     public byte[] fpSetup(byte[] requestBytes) throws InterruptedException {
-        FullHttpRequest request = new DefaultFullHttpRequest(RtspVersions.RTSP_1_0, HttpMethod.POST, "/pair-setup");
+        FullHttpRequest request = new DefaultFullHttpRequest(RtspVersions.RTSP_1_0, HttpMethod.POST, "/fp-setup");
         request.content().writeBytes(requestBytes);
 
         FullHttpResponse response = exchange(request);

@@ -59,7 +59,9 @@ public class RTSP {
             // video stream
             case 110 -> {
                 if (stream.containsKey("streamConnectionID")) {
-                    streamConnectionID = Long.toUnsignedString((long) stream.get("streamConnectionID"));
+                    Object rawId = stream.get("streamConnectionID");
+                    long id = rawId instanceof Number n ? n.longValue() : Long.parseLong(rawId.toString());
+                    streamConnectionID = Long.toUnsignedString(id);
                 }
                 return new VideoStreamInfo(streamConnectionID);
             }

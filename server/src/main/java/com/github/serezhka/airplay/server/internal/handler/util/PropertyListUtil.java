@@ -57,7 +57,7 @@ public class PropertyListUtil {
         response.put("audioFormats", audioFormats);
         response.put("audioLatencies", audioLatencies);
         response.put("displays", displays);
-        response.put("features", 130367356919L);
+        response.put("features", 0x527FFEE6L);
         response.put("keepAliveSendStatsAsBody", 1);
         response.put("model", "AppleTV3,2");
         response.put("name", "Apple TV");
