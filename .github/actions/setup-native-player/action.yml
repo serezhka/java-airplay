@@ -68,29 +68,50 @@ runs:
       run: |
         $prefix = 'C:\gstreamer\1.0\msvc_x86_64'
         $bin = Join-Path $prefix 'bin'
+        function Find-GstLaunch([string]$root) {
+          Get-ChildItem -Path $root -Filter 'gst-launch-1.0.exe' -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        }
         if (-not (Test-Path (Join-Path $bin 'gst-launch-1.0.exe'))) {
           $version = '1.26.11'
           $msi = Join-Path $env:RUNNER_TEMP 'gstreamer-runtime.msi'
           $url = "https://gstreamer.freedesktop.org/data/pkg/windows/$version/msvc/gstreamer-1.0-msvc-x86_64-$version.msi"
+          Write-Host "Downloading $url"
           Invoke-WebRequest -Uri $url -OutFile $msi
+          $log = Join-Path $env:RUNNER_TEMP 'gstreamer-msiexec.log'
+          # Administrative extract avoids feature-selection quirks of silent /i installs.
           $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
-            '/i', $msi, '/qn', '/norestart',
-            "INSTALLDIR=$prefix",
-            'ADDLOCAL=ALL'
+            '/a', $msi, '/qn', '/norestart',
+            "TARGETDIR=$prefix",
+            "/L*v", $log
           )
           if ($p.ExitCode -ne 0) {
-            throw "msiexec failed with exit code $($p.ExitCode)"
+            if (Test-Path $log) { Get-Content $log -Tail 80 }
+            throw "msiexec /a failed with exit code $($p.ExitCode)"
           }
-        }
-        if (-not (Test-Path (Join-Path $bin 'gst-launch-1.0.exe'))) {
-          $alt = 'C:\Program Files\gstreamer\1.0\msvc_x86_64'
-          if (Test-Path (Join-Path $alt 'bin\gst-launch-1.0.exe')) {
-            $prefix = $alt
-            $bin = Join-Path $prefix 'bin'
-          } else {
-            throw "GStreamer runtime not found under $prefix or Program Files"
+          $found = Find-GstLaunch $prefix
+          if (-not $found) {
+            # Fall back to normal install into default location
+            $p2 = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
+              '/i', $msi, '/qn', '/norestart',
+              "INSTALLDIR=$prefix",
+              'ADDLOCAL=ALL',
+              "/L*v", $log
+            )
+            Write-Host "msiexec /i exit $($p2.ExitCode)"
+            $found = Find-GstLaunch 'C:\gstreamer'
+            if (-not $found) { $found = Find-GstLaunch 'C:\Program Files\gstreamer' }
           }
+          if (-not $found) {
+            if (Test-Path $log) { Get-Content $log -Tail 120 }
+            Get-ChildItem -Path $prefix -Recurse -ErrorAction SilentlyContinue | Select-Object -First 40 FullName
+            throw "GStreamer runtime not found after install"
+          }
+          $bin = $found.Directory.FullName
+          $prefix = (Resolve-Path (Join-Path $bin '..')).Path
         }
+        Write-Host "Using GStreamer bin=$bin prefix=$prefix"
         Add-Content -Path $env:GITHUB_PATH -Value $bin
         Add-Content -Path $env:GITHUB_ENV -Value "GSTREAMER_1_0_ROOT_MSVC_X86_64=$prefix"
         Add-Content -Path $env:GITHUB_ENV -Value "GSTREAMER_BIN=$bin"
+
