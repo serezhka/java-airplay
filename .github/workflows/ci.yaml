@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       bench:
-        description: Run 30s benchIntegrationTest
+        description: Run 5-minute benchIntegrationTest matrix
         required: false
-        default: 'false'
+        default: 'true'
         type: choice
         options: ['false', 'true']
 
@@ -40,8 +40,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
-        player: [ffmpeg, gstreamer]
+        include:
+          - os: ubuntu-latest
+            player: ffmpeg
+          - os: ubuntu-latest
+            player: gstreamer
+          - os: ubuntu-latest
+            player: vlc
+          - os: windows-latest
+            player: ffmpeg
+          - os: windows-latest
+            player: gstreamer
+          - os: windows-latest
+            player: vlc
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -61,15 +72,22 @@ jobs:
       - name: Playback integration test (Linux)
         if: runner.os == 'Linux'
         run: |
-          TASK=ffmpegIntegrationTest
-          if [ "${{ matrix.player }}" = "gstreamer" ]; then TASK=gstreamerIntegrationTest; fi
+          case "${{ matrix.player }}" in
+            gstreamer) TASK=gstreamerIntegrationTest ;;
+            vlc) TASK=vlcIntegrationTest ;;
+            *) TASK=ffmpegIntegrationTest ;;
+          esac
           xvfb-run -a ./gradlew :player:harness:$TASK --no-daemon -Dairplay.harness.metrics=true
 
       - name: Playback integration test (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $task = if ('${{ matrix.player }}' -eq 'gstreamer') { 'gstreamerIntegrationTest' } else { 'ffmpegIntegrationTest' }
+          $task = switch ('${{ matrix.player }}') {
+            'gstreamer' { 'gstreamerIntegrationTest' }
+            'vlc' { 'vlcIntegrationTest' }
+            default { 'ffmpegIntegrationTest' }
+          }
           $extra = @('-Dairplay.harness.metrics=true')
           if ($env:GSTREAMER_BIN) {
             $extra += "-Dgstreamer.path=$($env:GSTREAMER_BIN)"
@@ -79,19 +97,26 @@ jobs:
           }
           ./gradlew ":player:harness:$task" --no-daemon @extra
 
-      - name: Upload metrics
+      - name: Upload playback reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: playback-metrics-${{ matrix.os }}-${{ matrix.player }}
+          name: playback-${{ matrix.os }}-${{ matrix.player }}
           path: |
             **/build/reports/**
             **/build/test-results/**
           if-no-files-found: ignore
 
   bench:
-    if: github.event_name == 'workflow_dispatch' && inputs.bench == 'true'
+    # 5-minute benches: on this feature branch always, elsewhere via workflow_dispatch.
+    if: >
+      github.ref == 'refs/heads/cursor/cicd-tests' ||
+      (github.event_name == 'workflow_dispatch' && inputs.bench == 'true')
     needs: unit
+    strategy:
+      fail-fast: false
+      matrix:
+        player: [ffmpeg, gstreamer, vlc]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -100,10 +125,42 @@ jobs:
           java-version: '21'
           distribution: temurin
       - uses: gradle/actions/setup-gradle@v4
-      - name: Bench
-        run: ./gradlew :player:harness:benchIntegrationTest --no-daemon -Dairplay.harness.metrics=true
-      - uses: actions/upload-artifact@v4
+      - name: Setup native player
+        uses: ./.github/actions/setup-native-player
         with:
-          name: bench-metrics
-          path: '**/build/reports/**'
+          player: ${{ matrix.player }}
+      - name: 5-minute bench
+        run: |
+          xvfb-run -a ./gradlew :player:harness:benchIntegrationTest --no-daemon \
+            -Dairplay.harness.metrics=true \
+            -Dairplay.harness.bench.seconds=300 \
+            -Dairplay.harness.bench.player=${{ matrix.player }}
+      - name: Publish report summary
+        if: always()
+        run: |
+          REPORT_DIR=player/harness/build/reports/playback-metrics
+          if [ -d "$REPORT_DIR" ]; then
+            echo "## Bench ${{ matrix.player }}" >> "$GITHUB_STEP_SUMMARY"
+            for f in "$REPORT_DIR"/*.json; do
+              [ -f "$f" ] || continue
+              echo "### $(basename "$f")" >> "$GITHUB_STEP_SUMMARY"
+              python3 - <<'PY' "$f" >> "$GITHUB_STEP_SUMMARY"
+          import json,sys
+          d=json.load(open(sys.argv[1]))
+          lat=d.get("writeLatencyMs",{})
+          print(f"- wall: {d.get('wallMillis',0)/1000:.1f}s")
+          print(f"- framesOk/fail: {d.get('framesOk')}/{d.get('framesFail')}")
+          print(f"- latency p50/p95/p99/max ms: {lat.get('p50')}/{lat.get('p95')}/{lat.get('p99')}/{lat.get('max')}")
+          print(f"- slowWrites/stalls: {d.get('slowWrites')}/{d.get('stalls')}")
+          print(f"- rssHighWater MB: {(d.get('rssHighWaterBytes') or 0)/1024/1024:.1f}")
+          PY
+            done
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-report-${{ matrix.player }}
+          path: |
+            player/harness/build/reports/playback-metrics/**
+            **/build/test-results/benchIntegrationTest/**
           if-no-files-found: ignore

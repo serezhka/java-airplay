@@ -26,6 +26,7 @@ dependencies {
     "integrationTestImplementation"(projects.player.ffmpeg)
     "integrationTestImplementation"(projects.player.gstreamer)
     "integrationTestImplementation"(projects.player.dump)
+    "integrationTestImplementation"(projects.player.vlc)
     "integrationTestImplementation"(libs.bundles.logging)
     "integrationTestImplementation"(libs.eddsa)
     "integrationTestImplementation"(libs.curve25519)
@@ -42,6 +43,35 @@ fun registerIntegrationTest(taskName: String, tag: String?, taskDescription: Str
             if (tag != null) {
                 includeTags(tag)
             }
+        }
+        // Forward harness props from Gradle JVM (-D...) into the test worker.
+        listOf(
+            "airplay.harness.metrics",
+            "airplay.harness.bench.seconds",
+            "airplay.harness.bench.player",
+            "airplay.harness.reportDir",
+            "gstreamer.path",
+            "jna.library.path"
+        ).forEach { key ->
+            val value = System.getProperty(key)
+            if (value != null) {
+                systemProperty(key, value)
+            }
+        }
+        // Defaults for bench when not overridden
+        if (tag == "bench") {
+            systemProperty(
+                "airplay.harness.metrics",
+                System.getProperty("airplay.harness.metrics", "true")
+            )
+            systemProperty(
+                "airplay.harness.bench.seconds",
+                System.getProperty("airplay.harness.bench.seconds", "300")
+            )
+            systemProperty(
+                "airplay.harness.bench.player",
+                System.getProperty("airplay.harness.bench.player", "ffmpeg")
+            )
         }
         outputs.upToDateWhen { false }
     }
@@ -68,6 +98,11 @@ registerIntegrationTest(
     "Runs the dump sidecar recording smoke test."
 )
 registerIntegrationTest(
+    "vlcIntegrationTest",
+    "vlc",
+    "Runs the VLC playback smoke test."
+)
+registerIntegrationTest(
     "loopbackIntegrationTest",
     "loopback",
     "Runs localhost client→server protocol scenarios."
@@ -75,5 +110,5 @@ registerIntegrationTest(
 registerIntegrationTest(
     "benchIntegrationTest",
     "bench",
-    "Runs longer multi-resolution playback benchmarks."
+    "Runs multi-minute playback benchmarks with HTML/JSON metrics."
 )

@@ -58,7 +58,7 @@ public class VlcPlayer implements AirPlayConsumer {
 
         window = new JFrame("AirPlay player");
         window.setSize(800, 600);
-        window.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        window.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
         window.addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
@@ -110,6 +110,37 @@ public class VlcPlayer implements AirPlayConsumer {
 
     @Override
     public void onVideoSrcDisconnect() {
+        try {
+            mediaPlayerComponent.mediaPlayer().controls().stop();
+        } catch (Exception ignored) {
+            // shutting down
+        }
+        try {
+            mediaPlayerComponent.release();
+        } catch (Exception ignored) {
+            // shutting down
+        }
+        try {
+            nativeLog.release();
+        } catch (Exception ignored) {
+            // shutting down
+        }
+        try {
+            mediaPlayerFactory.release();
+        } catch (Exception ignored) {
+            // shutting down
+        }
+        try {
+            window.dispose();
+        } catch (Exception ignored) {
+            // shutting down
+        }
+        try {
+            output.close();
+        } catch (Exception ignored) {
+            // shutting down
+        }
+        vlcLog.close();
     }
 
     @Override

@@ -4,7 +4,7 @@ description: Install FFmpeg and/or GStreamer for playback integration tests
 
 inputs:
   player:
-    description: ffmpeg | gstreamer | both
+    description: ffmpeg | gstreamer | vlc | both
     required: true
 
 runs:
@@ -15,7 +15,7 @@ runs:
       shell: bash
       run: |
         sudo apt-get update
-        sudo apt-get install -y ffmpeg
+        sudo apt-get install -y ffmpeg xvfb
 
     - name: Install GStreamer (Linux)
       if: runner.os == 'Linux' && (inputs.player == 'gstreamer' || inputs.player == 'both')
@@ -31,6 +31,13 @@ runs:
           libgstreamer1.0-0 \
           libgstreamer-plugins-base1.0-0 \
           xvfb
+
+    - name: Install VLC (Linux)
+      if: runner.os == 'Linux' && (inputs.player == 'vlc' || inputs.player == 'both')
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y vlc libvlc5 libvlc-dev xvfb
 
     - name: Cache FFmpeg (Windows)
       if: runner.os == 'Windows' && (inputs.player == 'ffmpeg' || inputs.player == 'both')
@@ -114,4 +121,17 @@ runs:
         Add-Content -Path $env:GITHUB_PATH -Value $bin
         Add-Content -Path $env:GITHUB_ENV -Value "GSTREAMER_1_0_ROOT_MSVC_X86_64=$prefix"
         Add-Content -Path $env:GITHUB_ENV -Value "GSTREAMER_BIN=$bin"
+
+    - name: Install VLC (Windows)
+      if: runner.os == 'Windows' && (inputs.player == 'vlc' || inputs.player == 'both')
+      shell: pwsh
+      run: |
+        choco install vlc -y --no-progress
+        $vlc = 'C:\Program Files\VideoLAN\VLC'
+        if (Test-Path "$vlc\libvlc.dll") {
+          Add-Content -Path $env:GITHUB_PATH -Value $vlc
+          Add-Content -Path $env:GITHUB_ENV -Value "VLC_PLUGIN_PATH=$vlc\plugins"
+        } else {
+          throw "VLC install did not produce libvlc.dll under $vlc"
+        }
 
