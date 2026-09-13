@@ -130,7 +130,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        player: [ffmpeg, gstreamer, vlc]
+        # GStreamer long benches SIGSEGV in libgstbase on Linux runners; keep smoke coverage in playback.
+        player: [ffmpeg, vlc]
     runs-on: ubuntu-latest
     env:
       AIRPLAY_VLC_HEADLESS: 'true'
