@@ -1,0 +1,64 @@
+[versions]
+java = "21"
+springBoot = "4.1.1"
+springDependencyManagement = "1.1.7"
+lombokPlugin = "8.14"
+testLogger = "4.0.0"
+junit = "5.12.2"
+netty = "4.2.17.Final"
+slf4j = "2.0.17"
+logback = "1.5.18"
+jna = "5.17.0"
+jmdns = "3.6.1"
+plist = "1.28"
+eddsa = "0.3.0"
+curve25519 = "0.5.0"
+gstreamerCore = "1.4.0"
+gstreamerSwing = "0.9.0"
+m3u8 = "0.30"
+systemTray = "4.4"
+vlcj = "4.11.0"
+spf4j = "8.9.8"
+flatlaf = "3.5.4"
+avro = "1.12.0"
+jakartaAnnotation = "3.0.0"
+
+[libraries]
+netty-all = { module = "io.netty:netty-all", version.ref = "netty" }
+slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
+logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+logback-core = { module = "ch.qos.logback:logback-core", version.ref = "logback" }
+jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
+jna-platform = { module = "net.java.dev.jna:jna-platform", version.ref = "jna" }
+jmdns = { module = "org.jmdns:jmdns", version.ref = "jmdns" }
+dd-plist = { module = "com.googlecode.plist:dd-plist", version.ref = "plist" }
+eddsa = { module = "net.i2p.crypto:eddsa", version.ref = "eddsa" }
+curve25519 = { module = "org.whispersystems:curve25519-java", version.ref = "curve25519" }
+gst1-java-core = { module = "org.freedesktop.gstreamer:gst1-java-core", version.ref = "gstreamerCore" }
+gst1-java-swing = { module = "org.freedesktop.gstreamer:gst1-java-swing", version.ref = "gstreamerSwing" }
+m3u8-parser = { module = "io.lindstrom:m3u8-parser", version.ref = "m3u8" }
+system-tray = { module = "com.dorkbox:SystemTray", version.ref = "systemTray" }
+vlcj = { module = "uk.co.caprica:vlcj", version.ref = "vlcj" }
+spf4j-core = { module = "org.spf4j:spf4j-core", version.ref = "spf4j" }
+flatlaf = { module = "com.formdev:flatlaf", version.ref = "flatlaf" }
+avro = { module = "org.apache.avro:avro", version.ref = "avro" }
+jakarta-annotation-api = { module = "jakarta.annotation:jakarta.annotation-api", version.ref = "jakartaAnnotation" }
+junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
+junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
+junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
+
+spring-boot-gradle-plugin = { module = "org.springframework.boot:spring-boot-gradle-plugin", version.ref = "springBoot" }
+spring-dependency-management-plugin = { module = "io.spring.gradle:dependency-management-plugin", version.ref = "springDependencyManagement" }
+lombok-plugin = { module = "io.freefair.gradle:lombok-plugin", version.ref = "lombokPlugin" }
+test-logger-plugin = { module = "com.adarshr:gradle-test-logger-plugin", version.ref = "testLogger" }
+
+[bundles]
+logging = ["slf4j-api", "logback-classic", "logback-core"]
+jna-full = ["jna", "jna-platform"]
+gstreamer = ["gst1-java-core", "gst1-java-swing"]
+
+[plugins]
+spring-boot = { id = "org.springframework.boot", version.ref = "springBoot" }
+spring-dependency-management = { id = "io.spring.dependency-management", version.ref = "springDependencyManagement" }
+lombok = { id = "io.freefair.lombok", version.ref = "lombokPlugin" }
+test-logger = { id = "com.adarshr.test-logger", version.ref = "testLogger" }

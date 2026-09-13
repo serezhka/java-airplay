@@ -43,7 +43,7 @@ public class VideoDecoder extends ReplayingDecoder<VideoDecoder.DecoderState> {
                     checkpoint(DecoderState.READ_HEADER);
                     out.add(new VideoPacket(payloadType, payloadSize, payloadBytes));
                 } else {
-                    log.info("Video packet with type: {}, length: {} bytes is skipped", payloadType, payloadSize);
+                    log.debug("Video packet with type: {}, length: {} bytes is skipped", payloadType, payloadSize);
                     in.skipBytes(payloadSize);
                     checkpoint(DecoderState.READ_HEADER);
                 }

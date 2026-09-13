@@ -81,7 +81,7 @@ public class ControlServer implements Runnable {
                                     new RtspDecoder(),
                                     new RtspEncoder(),
                                     new HttpObjectAggregator(2 * 1024 * 1024),
-                                    new LoggingHandler(LogLevel.INFO, ByteBufFormat.SIMPLE),
+                                    new LoggingHandler(LogLevel.DEBUG, ByteBufFormat.SIMPLE),
                                     new ControlHandler(sessionManager, hlsFcupService, airPlayConfig, airPlayConsumer));
                         }
                     })

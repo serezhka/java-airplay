@@ -1,0 +1,102 @@
+name: ci
+
+on:
+  push:
+    branches: [main, cursor/cicd-tests]
+  workflow_dispatch:
+    inputs:
+      bench:
+        description: Run 30s benchIntegrationTest
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Unit tests
+        run: ./gradlew test --no-daemon
+
+      - name: Loopback control
+        run: ./gradlew :player:harness:loopbackIntegrationTest --no-daemon
+
+  playback:
+    needs: unit
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        player: [ffmpeg, gstreamer]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Setup native player
+        uses: ./.github/actions/setup-native-player
+        with:
+          player: ${{ matrix.player }}
+
+      - name: Playback integration test (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          TASK=ffmpegIntegrationTest
+          if [ "${{ matrix.player }}" = "gstreamer" ]; then TASK=gstreamerIntegrationTest; fi
+          xvfb-run -a ./gradlew :player:harness:$TASK --no-daemon -Dairplay.harness.metrics=true
+
+      - name: Playback integration test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $task = if ('${{ matrix.player }}' -eq 'gstreamer') { 'gstreamerIntegrationTest' } else { 'ffmpegIntegrationTest' }
+          ./gradlew ":player:harness:$task" --no-daemon "-Dairplay.harness.metrics=true"
+
+      - name: Upload metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playback-metrics-${{ matrix.os }}-${{ matrix.player }}
+          path: |
+            **/build/reports/**
+            **/build/test-results/**
+          if-no-files-found: ignore
+
+  bench:
+    if: github.event_name == 'workflow_dispatch' && inputs.bench == 'true'
+    needs: unit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Bench
+        run: ./gradlew :player:harness:benchIntegrationTest --no-daemon -Dairplay.harness.metrics=true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-metrics
+          path: '**/build/reports/**'
+          if-no-files-found: ignore

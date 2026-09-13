@@ -61,7 +61,7 @@ public class ControlClient implements Runnable {
                     ChannelPipeline p = ch.pipeline();
                     p.addLast("encoder", new RtspEncoder());
                     p.addLast("decoder", new RtspDecoder());
-                    p.addLast("logger", new LoggingHandler(LogLevel.INFO, ByteBufFormat.SIMPLE));
+                    p.addLast("logger", new LoggingHandler(LogLevel.DEBUG, ByteBufFormat.SIMPLE));
                     p.addLast("aggregator", new HttpObjectAggregator(64 * 1024));
                     p.addLast("control handler", controlHandler);
                 }

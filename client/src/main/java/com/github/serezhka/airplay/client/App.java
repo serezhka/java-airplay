@@ -70,7 +70,10 @@ public class App {
         ControlClient controlClient = new ControlClient(address, port);
 
         NSDictionary nsDictionary = controlClient.requestInfo();
-        log.info("info:\n{}", nsDictionary.toXMLPropertyList());
+        log.info("GET /info ok");
+        if (log.isDebugEnabled()) {
+            log.debug("info:\n{}", nsDictionary.toXMLPropertyList());
+        }
 
         byte[] pairSetupResponseBytes = controlClient.pairSetup();
         log.info("pair-setup response: {} bytes", pairSetupResponseBytes.length);
@@ -145,7 +148,10 @@ public class App {
         NSDictionary rtspSetupVideo = new NSDictionary();
         rtspSetupVideo.put("streams", videoStreams);
         NSDictionary videoSetupResponse = controlClient.rtspSetup(rtspSetupVideo);
-        log.info("video setup:\n{}", videoSetupResponse.toXMLPropertyList());
+        log.info("video SETUP ok");
+        if (log.isDebugEnabled()) {
+            log.debug("video setup:\n{}", videoSetupResponse.toXMLPropertyList());
+        }
 
         NSArray audioStreams = new NSArray(1);
         NSDictionary audioStream = new NSDictionary();
@@ -157,7 +163,10 @@ public class App {
         NSDictionary rtspSetupAudio = new NSDictionary();
         rtspSetupAudio.put("streams", audioStreams);
         NSDictionary audioSetupResponse = controlClient.rtspSetup(rtspSetupAudio);
-        log.info("audio setup:\n{}", audioSetupResponse.toXMLPropertyList());
+        log.info("audio SETUP ok");
+        if (log.isDebugEnabled()) {
+            log.debug("audio setup:\n{}", audioSetupResponse.toXMLPropertyList());
+        }
 
         byte[] aesKey = new byte[]{116, 39, -113, 75, -84, 63, -70, 20, -55, -65, -37, 125, 86, 89, -128, -6};
         FairPlayVideoEncryptor videoEncryptor =

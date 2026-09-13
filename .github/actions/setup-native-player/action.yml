@@ -1,0 +1,77 @@
+name: Setup native AirPlay player deps
+
+description: Install FFmpeg and/or GStreamer for playback integration tests
+
+inputs:
+  player:
+    description: ffmpeg | gstreamer | both
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install FFmpeg (Linux)
+      if: runner.os == 'Linux' && (inputs.player == 'ffmpeg' || inputs.player == 'both')
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg
+
+    - name: Install GStreamer (Linux)
+      if: runner.os == 'Linux' && (inputs.player == 'gstreamer' || inputs.player == 'both')
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          gstreamer1.0-tools \
+          gstreamer1.0-plugins-base \
+          gstreamer1.0-plugins-good \
+          gstreamer1.0-plugins-bad \
+          gstreamer1.0-libav \
+          libgstreamer1.0-0 \
+          libgstreamer-plugins-base1.0-0 \
+          xvfb
+
+    - name: Cache FFmpeg (Windows)
+      if: runner.os == 'Windows' && (inputs.player == 'ffmpeg' || inputs.player == 'both')
+      uses: actions/cache@v4
+      with:
+        path: C:/tools/ffmpeg
+        key: ffmpeg-win-btbn-gpl-2026-03
+
+    - name: Install FFmpeg (Windows)
+      if: runner.os == 'Windows' && (inputs.player == 'ffmpeg' || inputs.player == 'both')
+      shell: pwsh
+      run: |
+        $dest = 'C:\tools\ffmpeg'
+        if (-not (Test-Path "$dest\bin\ffplay.exe")) {
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          $url = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip'
+          $zip = Join-Path $env:RUNNER_TEMP 'ffmpeg.zip'
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath "$env:RUNNER_TEMP\ffmpeg-extract" -Force
+          $inner = Get-ChildItem "$env:RUNNER_TEMP\ffmpeg-extract" | Select-Object -First 1
+          Copy-Item -Recurse -Force "$($inner.FullName)\*" $dest
+        }
+        echo "$dest\bin" >> $env:GITHUB_PATH
+
+    - name: Cache GStreamer (Windows)
+      if: runner.os == 'Windows' && (inputs.player == 'gstreamer' || inputs.player == 'both')
+      uses: actions/cache@v4
+      with:
+        path: C:/gstreamer/1.0/msvc_x86_64
+        key: gstreamer-win-1.24.12-msvc-runtime
+
+    - name: Install GStreamer runtime (Windows)
+      if: runner.os == 'Windows' && (inputs.player == 'gstreamer' || inputs.player == 'both')
+      shell: pwsh
+      run: |
+        $prefix = 'C:\gstreamer\1.0\msvc_x86_64'
+        if (-not (Test-Path "$prefix\bin\gst-launch-1.0.exe")) {
+          $msi = Join-Path $env:RUNNER_TEMP 'gstreamer-runtime.msi'
+          $url = 'https://gstreamer.freedesktop.org/data/pkg/windows/1.24.12/msvc/gstreamer-1.0-msvc-x86_64-1.24.12.msi'
+          Invoke-WebRequest -Uri $url -OutFile $msi
+          Start-Process msiexec.exe -Wait -ArgumentList "/i `"$msi`" /qn ADDLOCAL=ALL"
+        }
+        echo "$prefix\bin" >> $env:GITHUB_PATH
+        "gstreamer.path=$prefix\bin" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
