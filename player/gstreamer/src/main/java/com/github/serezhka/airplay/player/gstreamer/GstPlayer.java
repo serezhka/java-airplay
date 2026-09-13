@@ -120,7 +120,12 @@ public class GstPlayer implements AirPlayConsumer {
         aacLcSrc.set("emit-signals", true);
 
         Element sink = h264Pipeline.getElementByName("sink");
-        if (useD3d11) {
+        if (forceAppsink) {
+            // Headless bench path: do not attach VideoOverlay / Swing to appsink.
+            window = null;
+            attachWindow = () -> {
+            };
+        } else if (useD3d11) {
             window = null;
             attachWindow = () -> {
             };
