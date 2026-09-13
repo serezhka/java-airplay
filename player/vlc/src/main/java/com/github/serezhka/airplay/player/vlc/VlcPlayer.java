@@ -11,7 +11,6 @@ import uk.co.caprica.vlcj.factory.MediaPlayerFactory;
 import uk.co.caprica.vlcj.log.LogLevel;
 import uk.co.caprica.vlcj.log.NativeLog;
 import uk.co.caprica.vlcj.media.callback.nonseekable.NonSeekableInputStreamMedia;
-import uk.co.caprica.vlcj.player.base.MediaPlayer;
 import uk.co.caprica.vlcj.player.component.EmbeddedMediaPlayerComponent;
 
 import javax.swing.*;
@@ -19,33 +18,47 @@ import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+/**
+ * VLC-backed AirPlay consumer.
+ * <p>
+ * Under CI / headless mode this shells out to {@code cvlc}/{@code vlc} with a dummy
+ * interface instead of embedding libVLC via vlcj — native factory init has been observed
+ * to stall indefinitely on Linux GitHub runners.
+ */
 @Slf4j
 public class VlcPlayer implements AirPlayConsumer {
 
     static {
-        // FlatLaf touches Swing; skip in headless CI to avoid EDT / xvfb stalls on startup.
         if (!headless()) {
             FlatDarkLaf.setup();
         }
     }
 
     private final boolean headless;
-    private final MediaPlayerFactory mediaPlayerFactory;
-    private final NativeLog nativeLog;
     private final PrintStream vlcLog;
-    private final PipedOutputStream output;
-    private final InputStream input;
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final AtomicBoolean started = new AtomicBoolean();
 
+    // GUI / vlcj path
+    private MediaPlayerFactory mediaPlayerFactory;
+    private NativeLog nativeLog;
     private EmbeddedMediaPlayerComponent mediaPlayerComponent;
-    private MediaPlayer headlessPlayer;
     private JFrame window;
+    private PipedOutputStream output;
+    private InputStream input;
+    private NonSeekableInputStreamMedia media;
+
+    // CLI path
+    private Process cliProcess;
+    private OutputStream cliStdin;
 
     public VlcPlayer() {
         this.headless = headless();
@@ -56,10 +69,15 @@ public class VlcPlayer implements AirPlayConsumer {
             throw new IllegalStateException("Failed to open VLC debug log", e);
         }
 
-        mediaPlayerFactory = new MediaPlayerFactory(factoryArgs(headless).toArray(String[]::new));
+        if (!headless) {
+            initEmbedded();
+        }
+    }
 
+    private void initEmbedded() {
+        mediaPlayerFactory = new MediaPlayerFactory("-vv", "--demux=h264");
         nativeLog = mediaPlayerFactory.application().newLog();
-        nativeLog.setLevel(LogLevel.DEBUG);
+        nativeLog.setLevel(LogLevel.WARNING);
         nativeLog.addLogListener((level, module, file, line, name, header, id, message) -> {
             vlcLog.printf("[%s] [%s] %s %s%n", level, module, name, message);
             log.debug("[VLCJ] [{}] [{}] {} {}", level, module, name, message);
@@ -67,8 +85,7 @@ public class VlcPlayer implements AirPlayConsumer {
 
         output = new PipedOutputStream();
         input = output.getInputStream();
-
-        NonSeekableInputStreamMedia media = new NonSeekableInputStreamMedia() {
+        media = new NonSeekableInputStreamMedia() {
             @Override
             protected long onGetSize() {
                 return 0;
@@ -85,26 +102,18 @@ public class VlcPlayer implements AirPlayConsumer {
             }
         };
 
-        if (headless) {
-            headlessPlayer = mediaPlayerFactory.mediaPlayers().newMediaPlayer();
-            headlessPlayer.media().play(media);
-            headlessPlayer.controls().play();
-        } else {
-            mediaPlayerComponent = new EmbeddedMediaPlayerComponent(mediaPlayerFactory, null, null, null, null);
-            window = new JFrame("AirPlay player");
-            window.setSize(800, 600);
-            window.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
-            window.addWindowListener(new WindowAdapter() {
-                @Override
-                public void windowClosing(WindowEvent e) {
-                    onVideoSrcDisconnect();
-                }
-            });
-            window.setContentPane(mediaPlayerComponent);
-            window.setVisible(true);
-            mediaPlayerComponent.mediaPlayer().media().play(media);
-            mediaPlayerComponent.mediaPlayer().controls().play();
-        }
+        mediaPlayerComponent = new EmbeddedMediaPlayerComponent(mediaPlayerFactory, null, null, null, null);
+        window = new JFrame("AirPlay player");
+        window.setSize(800, 600);
+        window.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
+        window.addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowClosing(WindowEvent e) {
+                onVideoSrcDisconnect();
+            }
+        });
+        window.setContentPane(mediaPlayerComponent);
+        window.setVisible(true);
     }
 
     static boolean headless() {
@@ -114,35 +123,62 @@ public class VlcPlayer implements AirPlayConsumer {
         if (Boolean.parseBoolean(System.getenv().getOrDefault("AIRPLAY_VLC_HEADLESS", "false"))) {
             return true;
         }
-        // GitHub Actions / generic CI
-        if (System.getenv("CI") != null || System.getenv("GITHUB_ACTIONS") != null) {
-            return true;
-        }
-        return Boolean.getBoolean("java.awt.headless");
+        return System.getenv("CI") != null
+                || System.getenv("GITHUB_ACTIONS") != null
+                || Boolean.getBoolean("java.awt.headless");
     }
 
-    private static List<String> factoryArgs(boolean headless) {
-        List<String> args = new ArrayList<>();
-        args.add("-vv");
-        args.add("--demux=h264");
-        if (headless) {
-            args.add("--intf=dummy");
-            args.add("--vout=dummy");
-            args.add("--aout=dummy");
-            args.add("--no-video-title-show");
-            args.add("--no-stats");
-            args.add("--no-osd");
+    private static String resolveCliBinary() {
+        for (String candidate : List.of("cvlc", "vlc")) {
+            try {
+                Process p = new ProcessBuilder(candidate, "--version").redirectErrorStream(true).start();
+                if (p.waitFor(3, TimeUnit.SECONDS)) {
+                    return candidate;
+                }
+            } catch (Exception ignored) {
+                // try next
+            }
         }
-        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
-        if (os.contains("linux")) {
-            // Avoid plugin probe stalls on minimal CI images.
-            args.add("--no-xlib");
-        }
-        return args;
+        throw new IllegalStateException("Neither cvlc nor vlc found on PATH");
     }
 
     @Override
     public void onVideoFormat(VideoStreamInfo videoStreamInfo) {
+        if (!started.compareAndSet(false, true)) {
+            return;
+        }
+        if (headless) {
+            startCli();
+        } else {
+            mediaPlayerComponent.mediaPlayer().media().play(media);
+            mediaPlayerComponent.mediaPlayer().controls().play();
+        }
+    }
+
+    private void startCli() {
+        String binary = resolveCliBinary();
+        List<String> cmd = new ArrayList<>();
+        cmd.add(binary);
+        cmd.add("--intf");
+        cmd.add("dummy");
+        cmd.add("--vout");
+        cmd.add("dummy");
+        cmd.add("--aout");
+        cmd.add("dummy");
+        cmd.add("--demux");
+        cmd.add("h264");
+        cmd.add("--play-and-exit");
+        cmd.add("--no-video-title-show");
+        cmd.add("-");
+        try {
+            ProcessBuilder pb = new ProcessBuilder(cmd);
+            AppLogs.configureProcessLogging(pb, "vlc");
+            cliProcess = pb.start();
+            cliStdin = cliProcess.getOutputStream();
+            log.info("Started headless {} for H264 stdin", binary);
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to start " + binary, e);
+        }
     }
 
     @Override
@@ -150,9 +186,17 @@ public class VlcPlayer implements AirPlayConsumer {
         if (closed.get() || bytes == null || bytes.length == 0) {
             return;
         }
+        if (!started.get()) {
+            onVideoFormat(null);
+        }
         try {
-            output.write(bytes);
-            output.flush();
+            if (headless) {
+                cliStdin.write(bytes);
+                cliStdin.flush();
+            } else {
+                output.write(bytes);
+                output.flush();
+            }
         } catch (IOException e) {
             vlcLog.printf("Failed to write video bytes: %s%n", e.getMessage());
             log.debug("Failed to write video bytes to VLC", e);
@@ -164,19 +208,30 @@ public class VlcPlayer implements AirPlayConsumer {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
-        try {
-            if (headlessPlayer != null) {
-                headlessPlayer.controls().stop();
-                headlessPlayer.release();
+        if (headless) {
+            try {
+                if (cliStdin != null) {
+                    cliStdin.close();
+                }
+            } catch (IOException ignored) {
+                // shutting down
             }
-        } catch (Exception ignored) {
-            // shutting down
+            if (cliProcess != null) {
+                cliProcess.destroy();
+                try {
+                    cliProcess.waitFor(3, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                cliProcess.destroyForcibly();
+            }
+            vlcLog.close();
+            return;
         }
+
         try {
-            if (mediaPlayerComponent != null) {
-                mediaPlayerComponent.mediaPlayer().controls().stop();
-                mediaPlayerComponent.release();
-            }
+            mediaPlayerComponent.mediaPlayer().controls().stop();
+            mediaPlayerComponent.release();
         } catch (Exception ignored) {
             // shutting down
         }
@@ -191,9 +246,7 @@ public class VlcPlayer implements AirPlayConsumer {
             // shutting down
         }
         try {
-            if (window != null) {
-                window.dispose();
-            }
+            window.dispose();
         } catch (Exception ignored) {
             // shutting down
         }
@@ -215,5 +268,10 @@ public class VlcPlayer implements AirPlayConsumer {
 
     @Override
     public void onAudioSrcDisconnect() {
+    }
+
+    /** Exposed for harness assertions. */
+    public boolean isCliAlive() {
+        return cliProcess != null && cliProcess.isAlive();
     }
 }

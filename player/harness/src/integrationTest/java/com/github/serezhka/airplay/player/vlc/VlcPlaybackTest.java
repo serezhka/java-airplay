@@ -11,21 +11,24 @@ import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 @Tag("vlc")
 class VlcPlaybackTest {
 
     @Test
-    @Timeout(value = 90, unit = TimeUnit.SECONDS)
+    @Timeout(value = 60, unit = TimeUnit.SECONDS)
     void playsSyntheticAirPlayStream() throws Exception {
-        assumeTrue(vlcAvailable(), "VLC native libraries not available");
+        assumeTrue(vlcAvailable(), "VLC / cvlc not available");
         System.setProperty("airplay.vlc.headless", "true");
 
         VlcPlayer player = new VlcPlayer();
         try {
             player.onVideoFormat(new VideoStreamInfo("playback-test"));
+            assertTrue(player.isCliAlive(), "cvlc/vlc did not start");
             assertDoesNotThrow(() -> PlaybackFixture.play(player));
+            assertTrue(player.isCliAlive(), "cvlc/vlc exited while receiving H264");
         } finally {
             player.onVideoSrcDisconnect();
         }
@@ -38,11 +41,16 @@ class VlcPlaybackTest {
                 || Files.isRegularFile(Path.of("/usr/lib/libvlc.so.5"))) {
             return true;
         }
-        try {
-            Process p = new ProcessBuilder("vlc", "--version").redirectErrorStream(true).start();
-            return p.waitFor(3, TimeUnit.SECONDS);
-        } catch (Exception e) {
-            return false;
+        for (String bin : new String[]{"cvlc", "vlc"}) {
+            try {
+                Process p = new ProcessBuilder(bin, "--version").redirectErrorStream(true).start();
+                if (p.waitFor(3, TimeUnit.SECONDS)) {
+                    return true;
+                }
+            } catch (Exception ignored) {
+                // try next
+            }
         }
+        return false;
     }
 }
