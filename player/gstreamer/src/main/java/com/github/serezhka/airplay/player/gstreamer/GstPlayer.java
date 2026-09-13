@@ -60,19 +60,21 @@ public class GstPlayer implements AirPlayConsumer {
         int framerate = Math.max(1, fps);
         useD3d11 = Registry.get().lookupFeature("d3d11videosink") != null;
         useXimage = Registry.get().lookupFeature("ximagesink") != null;
-        nativeFullscreen = useD3d11;
+        boolean forceAppsink = Boolean.parseBoolean(System.getProperty("airplay.gst.appsink", "false"));
+        nativeFullscreen = useD3d11 && !forceAppsink;
         String sinkLaunch;
-        if (useD3d11) {
+        if (!forceAppsink && useD3d11) {
             sinkLaunch = " ! d3d11upload ! d3d11convert"
                     + " ! d3d11videosink name=sink sync=false force-aspect-ratio=true"
                     + " fullscreen-toggle-mode=property fullscreen=true";
-        } else if (useXimage) {
+        } else if (!forceAppsink && useXimage) {
             sinkLaunch = " ! videoscale add-borders=true ! video/x-raw,format=BGRx"
                     + " ! ximagesink name=sink sync=false force-aspect-ratio=true";
         } else {
             sinkLaunch = " ! appsink name=sink sync=false";
         }
-        log.info("GStreamer video sink: {}", useD3d11 ? "d3d11videosink" : useXimage ? "ximagesink" : "appsink");
+        log.info("GStreamer video sink: {}",
+                forceAppsink ? "appsink(forced)" : useD3d11 ? "d3d11videosink" : useXimage ? "ximagesink" : "appsink");
         h264Pipeline = (Pipeline) Gst.parseLaunch(
                 "appsrc name=h264-src ! h264parse config-interval=-1 ! avdec_h264"
                         + " ! videoflip video-direction=auto ! videoconvert"

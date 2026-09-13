@@ -50,6 +50,7 @@ fun registerIntegrationTest(taskName: String, tag: String?, taskDescription: Str
             "airplay.harness.bench.seconds",
             "airplay.harness.bench.player",
             "airplay.harness.reportDir",
+            "airplay.gst.appsink",
             "gstreamer.path",
             "jna.library.path"
         ).forEach { key ->

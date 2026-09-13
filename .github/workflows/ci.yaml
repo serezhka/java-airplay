@@ -134,7 +134,8 @@ jobs:
           xvfb-run -a ./gradlew :player:harness:benchIntegrationTest --no-daemon \
             -Dairplay.harness.metrics=true \
             -Dairplay.harness.bench.seconds=300 \
-            -Dairplay.harness.bench.player=${{ matrix.player }}
+            -Dairplay.harness.bench.player=${{ matrix.player }} \
+            -Dairplay.gst.appsink=${{ matrix.player == 'gstreamer' }}
       - name: Publish report summary
         if: always()
         run: |
