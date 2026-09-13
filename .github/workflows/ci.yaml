@@ -19,6 +19,7 @@ concurrency:
 jobs:
   unit:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -37,6 +38,7 @@ jobs:
 
   playback:
     needs: unit
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -71,24 +73,35 @@ jobs:
 
       - name: Playback integration test (Linux)
         if: runner.os == 'Linux'
+        timeout-minutes: 10
+        env:
+          AIRPLAY_VLC_HEADLESS: 'true'
         run: |
           case "${{ matrix.player }}" in
             gstreamer) TASK=gstreamerIntegrationTest ;;
             vlc) TASK=vlcIntegrationTest ;;
             *) TASK=ffmpegIntegrationTest ;;
           esac
-          xvfb-run -a ./gradlew :player:harness:$TASK --no-daemon -Dairplay.harness.metrics=true
+          xvfb-run -a ./gradlew :player:harness:$TASK --no-daemon \
+            -Dairplay.harness.metrics=true \
+            -Dairplay.vlc.headless=true
 
       - name: Playback integration test (Windows)
         if: runner.os == 'Windows'
+        timeout-minutes: 10
         shell: pwsh
+        env:
+          AIRPLAY_VLC_HEADLESS: 'true'
         run: |
           $task = switch ('${{ matrix.player }}') {
             'gstreamer' { 'gstreamerIntegrationTest' }
             'vlc' { 'vlcIntegrationTest' }
             default { 'ffmpegIntegrationTest' }
           }
-          $extra = @('-Dairplay.harness.metrics=true')
+          $extra = @(
+            '-Dairplay.harness.metrics=true',
+            '-Dairplay.vlc.headless=true'
+          )
           if ($env:GSTREAMER_BIN) {
             $extra += "-Dgstreamer.path=$($env:GSTREAMER_BIN)"
           } elseif ($env:GSTREAMER_1_0_ROOT_MSVC_X86_64) {
@@ -113,11 +126,15 @@ jobs:
       github.ref == 'refs/heads/cursor/cicd-tests' ||
       (github.event_name == 'workflow_dispatch' && inputs.bench == 'true')
     needs: unit
+    timeout-minutes: 12
     strategy:
       fail-fast: false
       matrix:
         player: [ffmpeg, gstreamer, vlc]
     runs-on: ubuntu-latest
+    env:
+      AIRPLAY_VLC_HEADLESS: 'true'
+      AIRPLAY_GST_APPSINK: ${{ matrix.player == 'gstreamer' && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -130,11 +147,13 @@ jobs:
         with:
           player: ${{ matrix.player }}
       - name: 5-minute bench
+        timeout-minutes: 10
         run: |
           xvfb-run -a ./gradlew :player:harness:benchIntegrationTest --no-daemon \
             -Dairplay.harness.metrics=true \
             -Dairplay.harness.bench.seconds=300 \
             -Dairplay.harness.bench.player=${{ matrix.player }} \
+            -Dairplay.vlc.headless=true \
             -Dairplay.gst.appsink=${{ matrix.player == 'gstreamer' }}
       - name: Publish report summary
         if: always()

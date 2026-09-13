@@ -4,6 +4,7 @@ import com.github.serezhka.airplay.lib.VideoStreamInfo;
 import com.github.serezhka.airplay.player.test.PlaybackFixture;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -16,8 +17,10 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 class VlcPlaybackTest {
 
     @Test
+    @Timeout(value = 90, unit = TimeUnit.SECONDS)
     void playsSyntheticAirPlayStream() throws Exception {
         assumeTrue(vlcAvailable(), "VLC native libraries not available");
+        System.setProperty("airplay.vlc.headless", "true");
 
         VlcPlayer player = new VlcPlayer();
         try {

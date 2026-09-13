@@ -60,21 +60,25 @@ public class GstPlayer implements AirPlayConsumer {
         int framerate = Math.max(1, fps);
         useD3d11 = Registry.get().lookupFeature("d3d11videosink") != null;
         useXimage = Registry.get().lookupFeature("ximagesink") != null;
-        boolean forceAppsink = Boolean.parseBoolean(System.getProperty("airplay.gst.appsink", "false"));
+        boolean forceAppsink = Boolean.parseBoolean(System.getProperty("airplay.gst.appsink", "false"))
+                || Boolean.parseBoolean(System.getenv().getOrDefault("AIRPLAY_GST_APPSINK", "false"));
         nativeFullscreen = useD3d11 && !forceAppsink;
         String sinkLaunch;
-        if (!forceAppsink && useD3d11) {
+        if (forceAppsink) {
+            // fakesink is more stable than appsink+Swing for long CI benches under xvfb.
+            sinkLaunch = " ! fakesink name=sink sync=false async=false";
+        } else if (useD3d11) {
             sinkLaunch = " ! d3d11upload ! d3d11convert"
                     + " ! d3d11videosink name=sink sync=false force-aspect-ratio=true"
                     + " fullscreen-toggle-mode=property fullscreen=true";
-        } else if (!forceAppsink && useXimage) {
+        } else if (useXimage) {
             sinkLaunch = " ! videoscale add-borders=true ! video/x-raw,format=BGRx"
                     + " ! ximagesink name=sink sync=false force-aspect-ratio=true";
         } else {
             sinkLaunch = " ! appsink name=sink sync=false";
         }
         log.info("GStreamer video sink: {}",
-                forceAppsink ? "appsink(forced)" : useD3d11 ? "d3d11videosink" : useXimage ? "ximagesink" : "appsink");
+                forceAppsink ? "fakesink(forced)" : useD3d11 ? "d3d11videosink" : useXimage ? "ximagesink" : "appsink");
         h264Pipeline = (Pipeline) Gst.parseLaunch(
                 "appsrc name=h264-src ! h264parse config-interval=-1 ! avdec_h264"
                         + " ! videoflip video-direction=auto ! videoconvert"
@@ -121,7 +125,7 @@ public class GstPlayer implements AirPlayConsumer {
 
         Element sink = h264Pipeline.getElementByName("sink");
         if (forceAppsink) {
-            // Headless bench path: do not attach VideoOverlay / Swing to appsink.
+            // Headless bench path: no VideoOverlay / Swing.
             window = null;
             attachWindow = () -> {
             };

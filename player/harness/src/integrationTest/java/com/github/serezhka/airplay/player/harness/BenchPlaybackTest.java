@@ -8,6 +8,7 @@ import com.github.serezhka.airplay.player.vlc.VlcPlayer;
 import com.github.serezhka.airplay.server.AirPlayConsumer;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -21,6 +22,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 class BenchPlaybackTest {
 
     @Test
+    @Timeout(value = 10, unit = TimeUnit.MINUTES)
     void fiveMinutePlayerBench() throws Exception {
         System.setProperty("airplay.harness.metrics", "true");
         String player = System.getProperty("airplay.harness.bench.player", "ffmpeg").trim().toLowerCase(Locale.ROOT);

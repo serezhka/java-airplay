@@ -1,3 +1,5 @@
+import java.time.Duration
+
 plugins {
     id("airplay.java-library")
 }
@@ -51,6 +53,7 @@ fun registerIntegrationTest(taskName: String, tag: String?, taskDescription: Str
             "airplay.harness.bench.player",
             "airplay.harness.reportDir",
             "airplay.gst.appsink",
+            "airplay.vlc.headless",
             "gstreamer.path",
             "jna.library.path"
         ).forEach { key ->
@@ -73,6 +76,20 @@ fun registerIntegrationTest(taskName: String, tag: String?, taskDescription: Str
                 "airplay.harness.bench.player",
                 System.getProperty("airplay.harness.bench.player", "ffmpeg")
             )
+            // Bench wall + JVM/native teardown budget.
+            val seconds = System.getProperty("airplay.harness.bench.seconds", "300").toLongOrNull() ?: 300L
+            timeout.set(Duration.ofSeconds(seconds + 120))
+        }
+        if (tag == "vlc") {
+            // Hard cap so a stuck libvlc/Swing path cannot burn the whole job.
+            timeout.set(Duration.ofMinutes(2))
+            systemProperty(
+                "airplay.vlc.headless",
+                System.getProperty("airplay.vlc.headless", "true")
+            )
+        }
+        if (tag == "ffmpeg" || tag == "gstreamer" || tag == "dump" || tag == "loopback") {
+            timeout.set(Duration.ofMinutes(3))
         }
         outputs.upToDateWhen { false }
     }

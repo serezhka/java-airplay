@@ -11,6 +11,7 @@ import uk.co.caprica.vlcj.factory.MediaPlayerFactory;
 import uk.co.caprica.vlcj.log.LogLevel;
 import uk.co.caprica.vlcj.log.NativeLog;
 import uk.co.caprica.vlcj.media.callback.nonseekable.NonSeekableInputStreamMedia;
+import uk.co.caprica.vlcj.player.base.MediaPlayer;
 import uk.co.caprica.vlcj.player.component.EmbeddedMediaPlayerComponent;
 
 import javax.swing.*;
@@ -19,33 +20,43 @@ import java.awt.event.WindowEvent;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Slf4j
 public class VlcPlayer implements AirPlayConsumer {
 
     static {
-        FlatDarkLaf.setup();
+        // FlatLaf touches Swing; skip in headless CI to avoid EDT / xvfb stalls on startup.
+        if (!headless()) {
+            FlatDarkLaf.setup();
+        }
     }
 
-    private final EmbeddedMediaPlayerComponent mediaPlayerComponent;
+    private final boolean headless;
     private final MediaPlayerFactory mediaPlayerFactory;
     private final NativeLog nativeLog;
     private final PrintStream vlcLog;
-
-    private final JFrame window;
-
     private final PipedOutputStream output;
     private final InputStream input;
+    private final AtomicBoolean closed = new AtomicBoolean();
+
+    private EmbeddedMediaPlayerComponent mediaPlayerComponent;
+    private MediaPlayer headlessPlayer;
+    private JFrame window;
 
     public VlcPlayer() {
-        log.info("VLC debug log: {}", AppLogs.playerLogFile("vlc"));
+        this.headless = headless();
+        log.info("VLC debug log: {} (headless={})", AppLogs.playerLogFile("vlc"), headless);
         try {
             vlcLog = AppLogs.openAppendPrintStream("vlc");
         } catch (IOException e) {
             throw new IllegalStateException("Failed to open VLC debug log", e);
         }
 
-        mediaPlayerFactory = new MediaPlayerFactory("-vv", "--demux=h264");
+        mediaPlayerFactory = new MediaPlayerFactory(factoryArgs(headless).toArray(String[]::new));
 
         nativeLog = mediaPlayerFactory.application().newLog();
         nativeLog.setLevel(LogLevel.DEBUG);
@@ -54,26 +65,10 @@ public class VlcPlayer implements AirPlayConsumer {
             log.debug("[VLCJ] [{}] [{}] {} {}", level, module, name, message);
         });
 
-        mediaPlayerComponent = new EmbeddedMediaPlayerComponent(mediaPlayerFactory, null, null, null, null);
-
-        window = new JFrame("AirPlay player");
-        window.setSize(800, 600);
-        window.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
-        window.addWindowListener(new WindowAdapter() {
-            @Override
-            public void windowClosing(WindowEvent e) {
-                mediaPlayerComponent.release();
-                vlcLog.close();
-            }
-        });
-        window.setContentPane(mediaPlayerComponent);
-        window.setVisible(true);
-
         output = new PipedOutputStream();
         input = output.getInputStream();
 
         NonSeekableInputStreamMedia media = new NonSeekableInputStreamMedia() {
-
             @Override
             protected long onGetSize() {
                 return 0;
@@ -90,8 +85,60 @@ public class VlcPlayer implements AirPlayConsumer {
             }
         };
 
-        mediaPlayerComponent.mediaPlayer().media().play(media);
-        mediaPlayerComponent.mediaPlayer().controls().play();
+        if (headless) {
+            headlessPlayer = mediaPlayerFactory.mediaPlayers().newMediaPlayer();
+            headlessPlayer.media().play(media);
+            headlessPlayer.controls().play();
+        } else {
+            mediaPlayerComponent = new EmbeddedMediaPlayerComponent(mediaPlayerFactory, null, null, null, null);
+            window = new JFrame("AirPlay player");
+            window.setSize(800, 600);
+            window.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
+            window.addWindowListener(new WindowAdapter() {
+                @Override
+                public void windowClosing(WindowEvent e) {
+                    onVideoSrcDisconnect();
+                }
+            });
+            window.setContentPane(mediaPlayerComponent);
+            window.setVisible(true);
+            mediaPlayerComponent.mediaPlayer().media().play(media);
+            mediaPlayerComponent.mediaPlayer().controls().play();
+        }
+    }
+
+    static boolean headless() {
+        if (Boolean.parseBoolean(System.getProperty("airplay.vlc.headless", "false"))) {
+            return true;
+        }
+        if (Boolean.parseBoolean(System.getenv().getOrDefault("AIRPLAY_VLC_HEADLESS", "false"))) {
+            return true;
+        }
+        // GitHub Actions / generic CI
+        if (System.getenv("CI") != null || System.getenv("GITHUB_ACTIONS") != null) {
+            return true;
+        }
+        return Boolean.getBoolean("java.awt.headless");
+    }
+
+    private static List<String> factoryArgs(boolean headless) {
+        List<String> args = new ArrayList<>();
+        args.add("-vv");
+        args.add("--demux=h264");
+        if (headless) {
+            args.add("--intf=dummy");
+            args.add("--vout=dummy");
+            args.add("--aout=dummy");
+            args.add("--no-video-title-show");
+            args.add("--no-stats");
+            args.add("--no-osd");
+        }
+        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+        if (os.contains("linux")) {
+            // Avoid plugin probe stalls on minimal CI images.
+            args.add("--no-xlib");
+        }
+        return args;
     }
 
     @Override
@@ -100,8 +147,12 @@ public class VlcPlayer implements AirPlayConsumer {
 
     @Override
     public void onVideo(byte[] bytes) {
+        if (closed.get() || bytes == null || bytes.length == 0) {
+            return;
+        }
         try {
             output.write(bytes);
+            output.flush();
         } catch (IOException e) {
             vlcLog.printf("Failed to write video bytes: %s%n", e.getMessage());
             log.debug("Failed to write video bytes to VLC", e);
@@ -110,13 +161,22 @@ public class VlcPlayer implements AirPlayConsumer {
 
     @Override
     public void onVideoSrcDisconnect() {
+        if (!closed.compareAndSet(false, true)) {
+            return;
+        }
         try {
-            mediaPlayerComponent.mediaPlayer().controls().stop();
+            if (headlessPlayer != null) {
+                headlessPlayer.controls().stop();
+                headlessPlayer.release();
+            }
         } catch (Exception ignored) {
             // shutting down
         }
         try {
-            mediaPlayerComponent.release();
+            if (mediaPlayerComponent != null) {
+                mediaPlayerComponent.mediaPlayer().controls().stop();
+                mediaPlayerComponent.release();
+            }
         } catch (Exception ignored) {
             // shutting down
         }
@@ -131,7 +191,9 @@ public class VlcPlayer implements AirPlayConsumer {
             // shutting down
         }
         try {
-            window.dispose();
+            if (window != null) {
+                window.dispose();
+            }
         } catch (Exception ignored) {
             // shutting down
         }
