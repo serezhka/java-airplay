@@ -70,7 +70,14 @@ jobs:
         shell: pwsh
         run: |
           $task = if ('${{ matrix.player }}' -eq 'gstreamer') { 'gstreamerIntegrationTest' } else { 'ffmpegIntegrationTest' }
-          ./gradlew ":player:harness:$task" --no-daemon "-Dairplay.harness.metrics=true"
+          $extra = @('-Dairplay.harness.metrics=true')
+          if ($env:GSTREAMER_BIN) {
+            $extra += "-Dgstreamer.path=$($env:GSTREAMER_BIN)"
+          } elseif ($env:GSTREAMER_1_0_ROOT_MSVC_X86_64) {
+            $gstBin = Join-Path $env:GSTREAMER_1_0_ROOT_MSVC_X86_64 'bin'
+            $extra += "-Dgstreamer.path=$gstBin"
+          }
+          ./gradlew ":player:harness:$task" --no-daemon @extra
 
       - name: Upload metrics
         if: always()

@@ -60,18 +60,37 @@ runs:
       uses: actions/cache@v4
       with:
         path: C:/gstreamer/1.0/msvc_x86_64
-        key: gstreamer-win-1.24.12-msvc-runtime
+        key: gstreamer-win-1.26.11-msvc-runtime
 
     - name: Install GStreamer runtime (Windows)
       if: runner.os == 'Windows' && (inputs.player == 'gstreamer' || inputs.player == 'both')
       shell: pwsh
       run: |
         $prefix = 'C:\gstreamer\1.0\msvc_x86_64'
-        if (-not (Test-Path "$prefix\bin\gst-launch-1.0.exe")) {
+        $bin = Join-Path $prefix 'bin'
+        if (-not (Test-Path (Join-Path $bin 'gst-launch-1.0.exe'))) {
+          $version = '1.26.11'
           $msi = Join-Path $env:RUNNER_TEMP 'gstreamer-runtime.msi'
-          $url = 'https://gstreamer.freedesktop.org/data/pkg/windows/1.24.12/msvc/gstreamer-1.0-msvc-x86_64-1.24.12.msi'
+          $url = "https://gstreamer.freedesktop.org/data/pkg/windows/$version/msvc/gstreamer-1.0-msvc-x86_64-$version.msi"
           Invoke-WebRequest -Uri $url -OutFile $msi
-          Start-Process msiexec.exe -Wait -ArgumentList "/i `"$msi`" /qn ADDLOCAL=ALL"
+          $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
+            '/i', $msi, '/qn', '/norestart',
+            "INSTALLDIR=$prefix",
+            'ADDLOCAL=ALL'
+          )
+          if ($p.ExitCode -ne 0) {
+            throw "msiexec failed with exit code $($p.ExitCode)"
+          }
         }
-        echo "$prefix\bin" >> $env:GITHUB_PATH
-        "gstreamer.path=$prefix\bin" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+        if (-not (Test-Path (Join-Path $bin 'gst-launch-1.0.exe'))) {
+          $alt = 'C:\Program Files\gstreamer\1.0\msvc_x86_64'
+          if (Test-Path (Join-Path $alt 'bin\gst-launch-1.0.exe')) {
+            $prefix = $alt
+            $bin = Join-Path $prefix 'bin'
+          } else {
+            throw "GStreamer runtime not found under $prefix or Program Files"
+          }
+        }
+        Add-Content -Path $env:GITHUB_PATH -Value $bin
+        Add-Content -Path $env:GITHUB_ENV -Value "GSTREAMER_1_0_ROOT_MSVC_X86_64=$prefix"
+        Add-Content -Path $env:GITHUB_ENV -Value "GSTREAMER_BIN=$bin"
