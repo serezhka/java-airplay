@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       bench:
-        description: Run 5-minute benchIntegrationTest matrix
+        description: Run 5-minute benches
         required: false
         default: 'true'
         type: choice
@@ -22,19 +22,12 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-java@v4
         with:
           java-version: '21'
           distribution: temurin
-
       - uses: gradle/actions/setup-gradle@v4
-
-      - name: Unit tests
-        run: ./gradlew test --no-daemon
-
-      - name: Loopback control
-        run: ./gradlew :player:harness:loopbackIntegrationTest --no-daemon
+      - run: ./gradlew test :player:harness:loopbackIntegrationTest --no-daemon
 
   playback:
     needs: unit
@@ -42,100 +35,54 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-latest
-            player: ffmpeg
-          - os: ubuntu-latest
-            player: gstreamer
-          - os: ubuntu-latest
-            player: vlc
-          - os: windows-latest
-            player: ffmpeg
-          - os: windows-latest
-            player: gstreamer
-          - os: windows-latest
-            player: vlc
+        os: [ubuntu-latest, windows-latest]
+        player: [ffmpeg, gstreamer, vlc]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-java@v4
         with:
           java-version: '21'
           distribution: temurin
-
       - uses: gradle/actions/setup-gradle@v4
-
-      - name: Setup native player
-        uses: ./.github/actions/setup-native-player
+      - uses: ./.github/actions/setup-native-player
         with:
           player: ${{ matrix.player }}
-
-      - name: Playback integration test (Linux)
-        if: runner.os == 'Linux'
+      - name: Integration test
         timeout-minutes: 10
         env:
           AIRPLAY_VLC_HEADLESS: 'true'
+        shell: bash
         run: |
-          case "${{ matrix.player }}" in
-            gstreamer) TASK=gstreamerIntegrationTest ;;
-            vlc) TASK=vlcIntegrationTest ;;
-            *) TASK=ffmpegIntegrationTest ;;
-          esac
-          xvfb-run -a ./gradlew :player:harness:$TASK --no-daemon \
-            -Dairplay.harness.metrics=true \
-            -Dairplay.vlc.headless=true
-
-      - name: Playback integration test (Windows)
-        if: runner.os == 'Windows'
-        timeout-minutes: 10
-        shell: pwsh
-        env:
-          AIRPLAY_VLC_HEADLESS: 'true'
-        run: |
-          $task = switch ('${{ matrix.player }}') {
-            'gstreamer' { 'gstreamerIntegrationTest' }
-            'vlc' { 'vlcIntegrationTest' }
-            default { 'ffmpegIntegrationTest' }
-          }
-          $extra = @(
-            '-Dairplay.harness.metrics=true',
-            '-Dairplay.vlc.headless=true'
-          )
-          if ($env:GSTREAMER_BIN) {
-            $extra += "-Dgstreamer.path=$($env:GSTREAMER_BIN)"
-          } elseif ($env:GSTREAMER_1_0_ROOT_MSVC_X86_64) {
-            $gstBin = Join-Path $env:GSTREAMER_1_0_ROOT_MSVC_X86_64 'bin'
-            $extra += "-Dgstreamer.path=$gstBin"
-          }
-          ./gradlew ":player:harness:$task" --no-daemon @extra
-
-      - name: Upload playback reports
-        if: always()
+          TASK="${{ matrix.player }}IntegrationTest"
+          EXTRA=(-Dairplay.harness.metrics=true -Dairplay.vlc.headless=true)
+          if [ -n "${GSTREAMER_BIN:-}" ]; then EXTRA+=("-Dgstreamer.path=$GSTREAMER_BIN"); fi
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            xvfb-run -a ./gradlew ":player:harness:$TASK" --no-daemon "${EXTRA[@]}"
+          else
+            ./gradlew ":player:harness:$TASK" --no-daemon "${EXTRA[@]}"
+          fi
+      - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: playback-${{ matrix.os }}-${{ matrix.player }}
           path: |
-            **/build/reports/**
+            **/build/reports/playback-metrics/**
             **/build/test-results/**
           if-no-files-found: ignore
 
   bench:
-    # 5-minute benches: on this feature branch always, elsewhere via workflow_dispatch.
-    if: >
-      github.ref == 'refs/heads/cursor/cicd-tests' ||
-      (github.event_name == 'workflow_dispatch' && inputs.bench == 'true')
+    if: github.ref == 'refs/heads/cursor/cicd-tests' || (github.event_name == 'workflow_dispatch' && inputs.bench == 'true')
     needs: unit
     timeout-minutes: 12
     strategy:
       fail-fast: false
       matrix:
-        # GStreamer long benches SIGSEGV in libgstbase on Linux runners; keep smoke coverage in playback.
-        player: [ffmpeg, vlc]
+        player: [ffmpeg, gstreamer, vlc]
     runs-on: ubuntu-latest
     env:
       AIRPLAY_VLC_HEADLESS: 'true'
-      AIRPLAY_GST_APPSINK: ${{ matrix.player == 'gstreamer' && 'true' || 'false' }}
+      AIRPLAY_GST_CLI: 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -143,8 +90,7 @@ jobs:
           java-version: '21'
           distribution: temurin
       - uses: gradle/actions/setup-gradle@v4
-      - name: Setup native player
-        uses: ./.github/actions/setup-native-player
+      - uses: ./.github/actions/setup-native-player
         with:
           player: ${{ matrix.player }}
       - name: 5-minute bench
@@ -155,33 +101,44 @@ jobs:
             -Dairplay.harness.bench.seconds=300 \
             -Dairplay.harness.bench.player=${{ matrix.player }} \
             -Dairplay.vlc.headless=true \
-            -Dairplay.gst.appsink=${{ matrix.player == 'gstreamer' }}
-      - name: Publish report summary
-        if: always()
-        run: |
-          REPORT_DIR=player/harness/build/reports/playback-metrics
-          if [ -d "$REPORT_DIR" ]; then
-            echo "## Bench ${{ matrix.player }}" >> "$GITHUB_STEP_SUMMARY"
-            for f in "$REPORT_DIR"/*.json; do
-              [ -f "$f" ] || continue
-              echo "### $(basename "$f")" >> "$GITHUB_STEP_SUMMARY"
-              python3 - <<'PY' "$f" >> "$GITHUB_STEP_SUMMARY"
-          import json,sys
-          d=json.load(open(sys.argv[1]))
-          lat=d.get("writeLatencyMs",{})
-          print(f"- wall: {d.get('wallMillis',0)/1000:.1f}s")
-          print(f"- framesOk/fail: {d.get('framesOk')}/{d.get('framesFail')}")
-          print(f"- latency p50/p95/p99/max ms: {lat.get('p50')}/{lat.get('p95')}/{lat.get('p99')}/{lat.get('max')}")
-          print(f"- slowWrites/stalls: {d.get('slowWrites')}/{d.get('stalls')}")
-          print(f"- rssHighWater MB: {(d.get('rssHighWaterBytes') or 0)/1024/1024:.1f}")
-          PY
-            done
-          fi
-      - uses: actions/upload-artifact@v4
-        if: always()
+            -Dairplay.gst.cli=true
+      - if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: bench-report-${{ matrix.player }}
-          path: |
-            player/harness/build/reports/playback-metrics/**
-            **/build/test-results/benchIntegrationTest/**
+          name: bench-${{ matrix.player }}
+          path: player/harness/build/reports/playback-metrics/**
           if-no-files-found: ignore
+
+  pages:
+    needs: [playback, bench]
+    if: always() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/cursor/cicd-tests')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: pages-src
+          pattern: '{playback-*,bench-*}'
+          merge-multiple: false
+      - name: Build site
+        env:
+          PAGES_SRC: pages-src
+          PAGES_OUT: pages-out
+        run: |
+          mkdir -p pages-out
+          curl -fsSL "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/history.json" \
+            -o pages-out/history.json || echo '[]' > pages-out/history.json
+          python3 .github/scripts/build-pages-report.py
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: pages-out
+      - id: deploy
+        continue-on-error: true
+        uses: actions/deploy-pages@v4

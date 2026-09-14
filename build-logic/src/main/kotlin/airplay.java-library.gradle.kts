@@ -21,10 +21,10 @@ tasks.withType<Test>().configureEach {
     useJUnitPlatform()
 }
 
+val libs = extensions.getByType<VersionCatalogsExtension>().named("libs")
+
 dependencies {
-    // Versions come from the consuming project's version catalog via forced resolution in modules.
-    // Keep only JUnit wiring here so every library module can run tests out of the box.
-    "testImplementation"(platform("org.junit:junit-bom:5.12.2"))
-    "testImplementation"("org.junit.jupiter:junit-jupiter")
-    "testRuntimeOnly"("org.junit.platform:junit-platform-launcher")
+    "testImplementation"(platform(libs.findLibrary("junit-bom").get()))
+    "testImplementation"(libs.findLibrary("junit-jupiter").get())
+    "testRuntimeOnly"(libs.findLibrary("junit-platform-launcher").get())
 }

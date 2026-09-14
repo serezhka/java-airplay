@@ -40,6 +40,8 @@ class BenchPlaybackTest {
                 consumer.onVideoFormat(new VideoStreamInfo("bench-" + player));
                 if (raw instanceof FFmpegPlayer ffmpeg) {
                     metrics.trackChildPid(ffmpeg.videoProcessPid());
+                } else if (raw instanceof GstLaunchPlayer gst) {
+                    metrics.trackChildPid(gst.pid());
                 }
                 feedFor(consumer, seconds);
             } finally {
@@ -62,7 +64,12 @@ class BenchPlaybackTest {
                 yield new FFmpegPlayer(30);
             }
             case "gstreamer" -> {
-                assumeTrue(gstreamerLikelyAvailable(), "GStreamer not available");
+                assumeTrue(onPath("gst-launch-1.0") || gstreamerLikelyAvailable(), "GStreamer not available");
+                // Long JNI benches SIGSEGV on Linux Actions; CLI path is what CI/bench uses.
+                if (useGstCli()) {
+                    assumeTrue(onPath("gst-launch-1.0"), "gst-launch-1.0 not on PATH");
+                    yield new GstLaunchPlayer();
+                }
                 yield new GstPlayer();
             }
             case "vlc" -> {
@@ -110,6 +117,17 @@ class BenchPlaybackTest {
 
     private static String safeName(String scenario) {
         return scenario.replaceAll("[^a-zA-Z0-9._-]", "_");
+    }
+
+    static boolean useGstCli() {
+        if (Boolean.parseBoolean(System.getProperty("airplay.gst.cli", "false"))) {
+            return true;
+        }
+        if (Boolean.parseBoolean(System.getenv().getOrDefault("AIRPLAY_GST_CLI", "false"))) {
+            return true;
+        }
+        // Default for CI benches: avoid gst1-java long-run crashes.
+        return System.getenv("CI") != null || System.getenv("GITHUB_ACTIONS") != null;
     }
 
     static boolean onPath(String binary) {

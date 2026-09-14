@@ -139,9 +139,11 @@ Default logging is INFO (no request/response bodies). Use DEBUG for wire dumps.
 ./gradlew :player:harness:loopbackIntegrationTest
 ./gradlew :player:harness:ffmpegIntegrationTest
 ./gradlew :player:harness:gstreamerIntegrationTest
+./gradlew :player:harness:vlcIntegrationTest
 ./gradlew :player:harness:dumpIntegrationTest
-./gradlew :player:harness:benchIntegrationTest -Dairplay.harness.metrics=true
+./gradlew :player:harness:benchIntegrationTest -Dairplay.harness.metrics=true -Dairplay.harness.bench.player=ffmpeg
 ```
 
-CI (`.github/workflows/ci.yaml`) runs unit + loopback on pushes to `main` / `cursor/cicd-tests`,
-plus Linux/Windows × ffmpeg/gstreamer playback. Dispatch with `bench=true` for the 30s bench job.
+CI (`.github/workflows/ci.yaml`) runs unit + loopback, then Linux/Windows × ffmpeg/gstreamer/vlc playback.
+On `cursor/cicd-tests` (or `workflow_dispatch` with `bench=true`) it also runs 5-minute benches.
+Reports are published to GitHub Pages after each run.

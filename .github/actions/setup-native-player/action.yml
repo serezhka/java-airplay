@@ -1,137 +1,57 @@
-name: Setup native AirPlay player deps
+name: Setup native player
 
-description: Install FFmpeg and/or GStreamer for playback integration tests
+description: Install ffmpeg, gstreamer, or vlc for harness tests
 
 inputs:
   player:
-    description: ffmpeg | gstreamer | vlc | both
+    description: ffmpeg, gstreamer, or vlc
     required: true
 
 runs:
   using: composite
   steps:
-    - name: Install FFmpeg (Linux)
-      if: runner.os == 'Linux' && (inputs.player == 'ffmpeg' || inputs.player == 'both')
+    - name: Linux packages
+      if: runner.os == 'Linux'
       shell: bash
       run: |
+        set -euo pipefail
         sudo apt-get update
-        sudo apt-get install -y ffmpeg xvfb
+        case "${{ inputs.player }}" in
+          ffmpeg) sudo apt-get install -y ffmpeg xvfb ;;
+          gstreamer) sudo apt-get install -y gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-libav xvfb ;;
+          vlc) sudo apt-get install -y vlc xvfb ;;
+          *) echo "Unknown player: ${{ inputs.player }}"; exit 1 ;;
+        esac
 
-    - name: Install GStreamer (Linux)
-      if: runner.os == 'Linux' && (inputs.player == 'gstreamer' || inputs.player == 'both')
-      shell: bash
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          gstreamer1.0-tools \
-          gstreamer1.0-plugins-base \
-          gstreamer1.0-plugins-good \
-          gstreamer1.0-plugins-bad \
-          gstreamer1.0-libav \
-          libgstreamer1.0-0 \
-          libgstreamer-plugins-base1.0-0 \
-          xvfb
-
-    - name: Install VLC (Linux)
-      if: runner.os == 'Linux' && (inputs.player == 'vlc' || inputs.player == 'both')
-      shell: bash
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y vlc libvlc5 libvlc-dev xvfb
-
-    - name: Cache FFmpeg (Windows)
-      if: runner.os == 'Windows' && (inputs.player == 'ffmpeg' || inputs.player == 'both')
-      uses: actions/cache@v4
-      with:
-        path: C:/tools/ffmpeg
-        key: ffmpeg-win-btbn-gpl-2026-03
-
-    - name: Install FFmpeg (Windows)
-      if: runner.os == 'Windows' && (inputs.player == 'ffmpeg' || inputs.player == 'both')
+    - name: Windows FFmpeg
+      if: runner.os == 'Windows' && inputs.player == 'ffmpeg'
       shell: pwsh
       run: |
-        $dest = 'C:\tools\ffmpeg'
-        if (-not (Test-Path "$dest\bin\ffplay.exe")) {
-          New-Item -ItemType Directory -Force -Path $dest | Out-Null
-          $url = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip'
-          $zip = Join-Path $env:RUNNER_TEMP 'ffmpeg.zip'
-          Invoke-WebRequest -Uri $url -OutFile $zip
-          Expand-Archive -Path $zip -DestinationPath "$env:RUNNER_TEMP\ffmpeg-extract" -Force
-          $inner = Get-ChildItem "$env:RUNNER_TEMP\ffmpeg-extract" | Select-Object -First 1
-          Copy-Item -Recurse -Force "$($inner.FullName)\*" $dest
-        }
-        echo "$dest\bin" >> $env:GITHUB_PATH
+        $dest = "$env:RUNNER_TEMP\ffmpeg"
+        Invoke-WebRequest -Uri 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip' -OutFile "$env:RUNNER_TEMP\ffmpeg.zip"
+        Expand-Archive "$env:RUNNER_TEMP\ffmpeg.zip" "$env:RUNNER_TEMP\ffmpeg-extract" -Force
+        $inner = Get-ChildItem "$env:RUNNER_TEMP\ffmpeg-extract" | Select-Object -First 1
+        Copy-Item -Recurse -Force "$($inner.FullName)\*" $dest
+        Add-Content $env:GITHUB_PATH "$dest\bin"
 
-    - name: Cache GStreamer (Windows)
-      if: runner.os == 'Windows' && (inputs.player == 'gstreamer' || inputs.player == 'both')
-      uses: actions/cache@v4
-      with:
-        path: C:/gstreamer/1.0/msvc_x86_64
-        key: gstreamer-win-1.26.11-msvc-runtime
-
-    - name: Install GStreamer runtime (Windows)
-      if: runner.os == 'Windows' && (inputs.player == 'gstreamer' || inputs.player == 'both')
+    - name: Windows GStreamer
+      if: runner.os == 'Windows' && inputs.player == 'gstreamer'
       shell: pwsh
       run: |
+        $ver = '1.26.11'
+        $msi = "$env:RUNNER_TEMP\gstreamer.msi"
         $prefix = 'C:\gstreamer\1.0\msvc_x86_64'
+        Invoke-WebRequest -Uri "https://gstreamer.freedesktop.org/data/pkg/windows/$ver/msvc/gstreamer-1.0-msvc-x86_64-$ver.msi" -OutFile $msi
+        Start-Process msiexec.exe -Wait -ArgumentList "/a `"$msi`" /qn TARGETDIR=$prefix"
         $bin = Join-Path $prefix 'bin'
-        function Find-GstLaunch([string]$root) {
-          Get-ChildItem -Path $root -Filter 'gst-launch-1.0.exe' -Recurse -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-        }
-        if (-not (Test-Path (Join-Path $bin 'gst-launch-1.0.exe'))) {
-          $version = '1.26.11'
-          $msi = Join-Path $env:RUNNER_TEMP 'gstreamer-runtime.msi'
-          $url = "https://gstreamer.freedesktop.org/data/pkg/windows/$version/msvc/gstreamer-1.0-msvc-x86_64-$version.msi"
-          Write-Host "Downloading $url"
-          Invoke-WebRequest -Uri $url -OutFile $msi
-          $log = Join-Path $env:RUNNER_TEMP 'gstreamer-msiexec.log'
-          # Administrative extract avoids feature-selection quirks of silent /i installs.
-          $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
-            '/a', $msi, '/qn', '/norestart',
-            "TARGETDIR=$prefix",
-            "/L*v", $log
-          )
-          if ($p.ExitCode -ne 0) {
-            if (Test-Path $log) { Get-Content $log -Tail 80 }
-            throw "msiexec /a failed with exit code $($p.ExitCode)"
-          }
-          $found = Find-GstLaunch $prefix
-          if (-not $found) {
-            # Fall back to normal install into default location
-            $p2 = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
-              '/i', $msi, '/qn', '/norestart',
-              "INSTALLDIR=$prefix",
-              'ADDLOCAL=ALL',
-              "/L*v", $log
-            )
-            Write-Host "msiexec /i exit $($p2.ExitCode)"
-            $found = Find-GstLaunch 'C:\gstreamer'
-            if (-not $found) { $found = Find-GstLaunch 'C:\Program Files\gstreamer' }
-          }
-          if (-not $found) {
-            if (Test-Path $log) { Get-Content $log -Tail 120 }
-            Get-ChildItem -Path $prefix -Recurse -ErrorAction SilentlyContinue | Select-Object -First 40 FullName
-            throw "GStreamer runtime not found after install"
-          }
-          $bin = $found.Directory.FullName
-          $prefix = (Resolve-Path (Join-Path $bin '..')).Path
-        }
-        Write-Host "Using GStreamer bin=$bin prefix=$prefix"
-        Add-Content -Path $env:GITHUB_PATH -Value $bin
-        Add-Content -Path $env:GITHUB_ENV -Value "GSTREAMER_1_0_ROOT_MSVC_X86_64=$prefix"
-        Add-Content -Path $env:GITHUB_ENV -Value "GSTREAMER_BIN=$bin"
+        if (-not (Test-Path "$bin\gst-launch-1.0.exe")) { throw "gst-launch-1.0 missing after MSI extract" }
+        Add-Content $env:GITHUB_PATH $bin
+        Add-Content $env:GITHUB_ENV "GSTREAMER_1_0_ROOT_MSVC_X86_64=$prefix"
+        Add-Content $env:GITHUB_ENV "GSTREAMER_BIN=$bin"
 
-    - name: Install VLC (Windows)
-      if: runner.os == 'Windows' && (inputs.player == 'vlc' || inputs.player == 'both')
+    - name: Windows VLC
+      if: runner.os == 'Windows' && inputs.player == 'vlc'
       shell: pwsh
       run: |
         choco install vlc -y --no-progress
-        $vlc = 'C:\Program Files\VideoLAN\VLC'
-        if (Test-Path "$vlc\libvlc.dll") {
-          Add-Content -Path $env:GITHUB_PATH -Value $vlc
-          Add-Content -Path $env:GITHUB_ENV -Value "VLC_PLUGIN_PATH=$vlc\plugins"
-        } else {
-          throw "VLC install did not produce libvlc.dll under $vlc"
-        }
-
+        Add-Content $env:GITHUB_PATH 'C:\Program Files\VideoLAN\VLC'

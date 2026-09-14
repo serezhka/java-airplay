@@ -53,6 +53,7 @@ fun registerIntegrationTest(taskName: String, tag: String?, taskDescription: Str
             "airplay.harness.bench.player",
             "airplay.harness.reportDir",
             "airplay.gst.appsink",
+            "airplay.gst.cli",
             "airplay.vlc.headless",
             "gstreamer.path",
             "jna.library.path"
@@ -62,6 +63,9 @@ fun registerIntegrationTest(taskName: String, tag: String?, taskDescription: Str
                 systemProperty(key, value)
             }
         }
+        // Prefer env from CI when -D was not set on the Gradle JVM.
+        System.getenv("AIRPLAY_GST_CLI")?.let { systemProperty("airplay.gst.cli", it) }
+        System.getenv("AIRPLAY_VLC_HEADLESS")?.let { systemProperty("airplay.vlc.headless", it) }
         // Defaults for bench when not overridden
         if (tag == "bench") {
             systemProperty(
