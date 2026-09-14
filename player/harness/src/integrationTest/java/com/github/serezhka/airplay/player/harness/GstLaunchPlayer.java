@@ -1,6 +1,5 @@
 package com.github.serezhka.airplay.player.harness;
 
-import com.github.serezhka.airplay.lib.AppLogs;
 import com.github.serezhka.airplay.lib.AudioStreamInfo;
 import com.github.serezhka.airplay.lib.VideoStreamInfo;
 import com.github.serezhka.airplay.server.AirPlayConsumer;
@@ -37,13 +36,13 @@ public final class GstLaunchPlayer implements AirPlayConsumer {
                     "!", "h264parse",
                     "!", "fakesink", "sync=false"
             );
-            AppLogs.configureProcessLogging(pb, "gstreamer");
+            pb.redirectErrorStream(true);
             process = pb.start();
             stdin = process.getOutputStream();
             // Fail fast if gst-launch rejected the pipeline.
-            Thread.sleep(200);
+            Thread.sleep(300);
             if (!process.isAlive()) {
-                String err = readAvailable(process.getErrorStream()) + readAvailable(process.getInputStream());
+                String err = readAvailable(process.getInputStream());
                 throw new IllegalStateException("gst-launch-1.0 exited immediately: " + err.trim());
             }
         } catch (IOException e) {

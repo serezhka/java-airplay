@@ -112,15 +112,11 @@ jobs:
 
   pages:
     needs: [playback, bench]
-    if: always() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/cursor/cicd-tests')
+    if: always() && !cancelled() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/cursor/cicd-tests')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -135,14 +131,13 @@ jobs:
           PAGES_OUT: pages-out
         run: |
           mkdir -p pages-src pages-out
+          # Preserve prior history from the live site when present.
           curl -fsSL "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/history.json" \
             -o pages-out/history.json || echo '[]' > pages-out/history.json
           python3 .github/scripts/build-pages-report.py
-          # Always publish something browseable even if no metrics yet.
-          test -f pages-out/index.html
-      - uses: actions/upload-pages-artifact@v3
+      - uses: peaceiris/actions-gh-pages@v4
         with:
-          path: pages-out
-      - id: deploy
-        continue-on-error: true
-        uses: actions/deploy-pages@v4
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: pages-out
+          keep_files: true
+          force_orphan: false
