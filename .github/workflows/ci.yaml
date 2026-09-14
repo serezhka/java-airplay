@@ -52,10 +52,11 @@ jobs:
         timeout-minutes: 10
         env:
           AIRPLAY_VLC_HEADLESS: 'true'
+          AIRPLAY_GST_CLI: 'true'
         shell: bash
         run: |
           TASK="${{ matrix.player }}IntegrationTest"
-          EXTRA=(-Dairplay.harness.metrics=true -Dairplay.vlc.headless=true)
+          EXTRA=(-Dairplay.harness.metrics=true -Dairplay.vlc.headless=true -Dairplay.gst.cli=true)
           if [ -n "${GSTREAMER_BIN:-}" ]; then EXTRA+=("-Dgstreamer.path=$GSTREAMER_BIN"); fi
           if [ "${{ runner.os }}" = "Linux" ]; then
             xvfb-run -a ./gradlew ":player:harness:$TASK" --no-daemon "${EXTRA[@]}"
@@ -123,6 +124,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           path: pages-src
           pattern: '{playback-*,bench-*}'
@@ -132,10 +134,12 @@ jobs:
           PAGES_SRC: pages-src
           PAGES_OUT: pages-out
         run: |
-          mkdir -p pages-out
+          mkdir -p pages-src pages-out
           curl -fsSL "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/history.json" \
             -o pages-out/history.json || echo '[]' > pages-out/history.json
           python3 .github/scripts/build-pages-report.py
+          # Always publish something browseable even if no metrics yet.
+          test -f pages-out/index.html
       - uses: actions/upload-pages-artifact@v3
         with:
           path: pages-out

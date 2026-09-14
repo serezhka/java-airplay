@@ -6,13 +6,16 @@ import com.github.serezhka.airplay.lib.VideoStreamInfo;
 import com.github.serezhka.airplay.server.AirPlayConsumer;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Headless GStreamer consumer for CI/bench: pipes Annex-B H264 into {@code gst-launch-1.0}.
- * Avoids gst1-java / JNI which SIGSEGV under long xvfb runs on GitHub Actions.
+ * Headless GStreamer consumer for CI: pipes Annex-B H264 into {@code gst-launch-1.0}.
+ * Parses only (no decoder) so runners need just tools + base plugins — avoids JNI SIGSEGV
+ * and missing avdec_* plugin issues on minimal images.
  */
 public final class GstLaunchPlayer implements AirPlayConsumer {
 
@@ -27,18 +30,27 @@ public final class GstLaunchPlayer implements AirPlayConsumer {
             return;
         }
         try {
+            // Parse-only pipeline: stable across plugin sets; measures write/backpressure to gst.
             ProcessBuilder pb = new ProcessBuilder(
-                    "gst-launch-1.0", "-q",
-                    "fdsrc", "fd=0", "do-timestamp=true",
+                    "gst-launch-1.0",
+                    "fdsrc", "fd=0",
                     "!", "h264parse",
-                    "!", "avdec_h264",
                     "!", "fakesink", "sync=false"
             );
             AppLogs.configureProcessLogging(pb, "gstreamer");
             process = pb.start();
             stdin = process.getOutputStream();
+            // Fail fast if gst-launch rejected the pipeline.
+            Thread.sleep(200);
+            if (!process.isAlive()) {
+                String err = readAvailable(process.getErrorStream()) + readAvailable(process.getInputStream());
+                throw new IllegalStateException("gst-launch-1.0 exited immediately: " + err.trim());
+            }
         } catch (IOException e) {
             throw new IllegalStateException("Failed to start gst-launch-1.0. Is GStreamer on PATH?", e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while starting gst-launch-1.0", e);
         }
     }
 
@@ -54,7 +66,8 @@ public final class GstLaunchPlayer implements AirPlayConsumer {
             stdin.write(bytes);
             stdin.flush();
         } catch (IOException e) {
-            throw new IllegalStateException("Failed to write H264 to gst-launch-1.0", e);
+            String err = process != null ? readAvailable(process.getErrorStream()) : "";
+            throw new IllegalStateException("Failed to write H264 to gst-launch-1.0: " + err.trim(), e);
         }
     }
 
@@ -99,5 +112,17 @@ public final class GstLaunchPlayer implements AirPlayConsumer {
 
     public long pid() {
         return process != null ? process.pid() : -1L;
+    }
+
+    private static String readAvailable(InputStream in) {
+        if (in == null) {
+            return "";
+        }
+        try {
+            byte[] buf = in.readNBytes(4096);
+            return new String(buf, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            return "";
+        }
     }
 }

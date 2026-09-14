@@ -18,7 +18,7 @@ runs:
         sudo apt-get update
         case "${{ inputs.player }}" in
           ffmpeg) sudo apt-get install -y ffmpeg xvfb ;;
-          gstreamer) sudo apt-get install -y gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-libav xvfb ;;
+          gstreamer) sudo apt-get install -y gstreamer1.0-tools gstreamer1.0-plugins-base xvfb ;;
           vlc) sudo apt-get install -y vlc xvfb ;;
           *) echo "Unknown player: ${{ inputs.player }}"; exit 1 ;;
         esac
@@ -28,6 +28,7 @@ runs:
       shell: pwsh
       run: |
         $dest = "$env:RUNNER_TEMP\ffmpeg"
+        New-Item -ItemType Directory -Force -Path $dest | Out-Null
         Invoke-WebRequest -Uri 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip' -OutFile "$env:RUNNER_TEMP\ffmpeg.zip"
         Expand-Archive "$env:RUNNER_TEMP\ffmpeg.zip" "$env:RUNNER_TEMP\ffmpeg-extract" -Force
         $inner = Get-ChildItem "$env:RUNNER_TEMP\ffmpeg-extract" | Select-Object -First 1
@@ -43,10 +44,12 @@ runs:
         $prefix = 'C:\gstreamer\1.0\msvc_x86_64'
         Invoke-WebRequest -Uri "https://gstreamer.freedesktop.org/data/pkg/windows/$ver/msvc/gstreamer-1.0-msvc-x86_64-$ver.msi" -OutFile $msi
         Start-Process msiexec.exe -Wait -ArgumentList "/a `"$msi`" /qn TARGETDIR=$prefix"
-        $bin = Join-Path $prefix 'bin'
-        if (-not (Test-Path "$bin\gst-launch-1.0.exe")) { throw "gst-launch-1.0 missing after MSI extract" }
+        $exe = Get-ChildItem $prefix -Recurse -Filter gst-launch-1.0.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $exe) { throw "gst-launch-1.0 missing after MSI extract under $prefix" }
+        $bin = $exe.Directory.FullName
+        $root = (Resolve-Path (Join-Path $bin '..')).Path
         Add-Content $env:GITHUB_PATH $bin
-        Add-Content $env:GITHUB_ENV "GSTREAMER_1_0_ROOT_MSVC_X86_64=$prefix"
+        Add-Content $env:GITHUB_ENV "GSTREAMER_1_0_ROOT_MSVC_X86_64=$root"
         Add-Content $env:GITHUB_ENV "GSTREAMER_BIN=$bin"
 
     - name: Windows VLC
