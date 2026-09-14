@@ -29,9 +29,13 @@ import java.util.concurrent.atomic.LongAdder;
  * Opt-in time-series metrics for harness/bench. Off by default (no hot-path cost in production).
  * Enable with {@code -Dairplay.harness.metrics=true}.
  *
- * <p>Primary signal for player lag is {@code onVideo} write latency (pipe / sink backpressure).
+ * <p>Primary player-lag signal is {@code onVideo} <em>write</em> latency (pipe / sink backpressure).
+ * That is <strong>not</strong> end-to-end AirPlay display latency.
  */
 public final class PlaybackMetrics implements AutoCloseable {
+
+    /** Bump when adding/removing top-level JSON fields so Pages reports stay compatible. */
+    public static final int SCHEMA_VERSION = 2;
 
     private static final long SLOW_WRITE_NANOS = TimeUnit.MILLISECONDS.toNanos(5);
     private static final long STALL_NANOS = TimeUnit.MILLISECONDS.toNanos(66); // ~2 frames @30fps
@@ -43,6 +47,7 @@ public final class PlaybackMetrics implements AutoCloseable {
     private final long startNano = System.nanoTime();
     private final ScheduledExecutorService sampler;
     private final ConcurrentLinkedQueue<Long> recentWriteNanos = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<Long> recentFrameIntervalNanos = new ConcurrentLinkedQueue<>();
     private final List<Sample> samples = new ArrayList<>();
     private final Object samplesLock = new Object();
 
@@ -53,6 +58,8 @@ public final class PlaybackMetrics implements AutoCloseable {
     private final LongAdder stalls = new LongAdder();
     private final AtomicLong rssHighWaterBytes = new AtomicLong();
     private final AtomicLong writeLatencyHighWaterNanos = new AtomicLong();
+    private final AtomicLong frameIntervalHighWaterNanos = new AtomicLong();
+    private final AtomicLong timeToFirstFrameNanos = new AtomicLong(-1);
 
     private volatile Long childPid;
     private volatile long lastFrameNano = -1;
@@ -116,9 +123,11 @@ public final class PlaybackMetrics implements AutoCloseable {
         if (!enabled()) {
             return;
         }
+        long now = System.nanoTime();
         if (ok) {
             framesOk.increment();
             bytesPushed.add(bytes);
+            timeToFirstFrameNanos.compareAndSet(-1, now - startNano);
         } else {
             framesFail.increment();
         }
@@ -126,11 +135,18 @@ public final class PlaybackMetrics implements AutoCloseable {
         if (durationNanos >= SLOW_WRITE_NANOS) {
             slowWrites.increment();
         }
-        long now = System.nanoTime();
         long prev = lastFrameNano;
         lastFrameNano = now;
-        if (prev > 0 && (now - prev) >= STALL_NANOS) {
-            stalls.increment();
+        if (prev > 0) {
+            long gap = now - prev;
+            frameIntervalHighWaterNanos.accumulateAndGet(gap, Math::max);
+            if (gap >= STALL_NANOS) {
+                stalls.increment();
+            }
+            recentFrameIntervalNanos.add(gap);
+            while (recentFrameIntervalNanos.size() > LATENCY_WINDOW) {
+                recentFrameIntervalNanos.poll();
+            }
         }
         recentWriteNanos.add(durationNanos);
         while (recentWriteNanos.size() > LATENCY_WINDOW) {
@@ -183,7 +199,7 @@ public final class PlaybackMetrics implements AutoCloseable {
         long jvmRss = processRssBytes(ProcessHandle.current().pid());
         Long child = childPid;
         long childRss = child != null ? processRssBytes(child) : 0L;
-        rssHighWaterBytes.accumulateAndGet(Math.max(jvmRss, childRss), Math::max);
+        rssHighWaterBytes.accumulateAndGet(jvmRss + childRss, Math::max);
 
         double jvmCpu = processCpuPercent(ProcessHandle.current().pid(), true, nowNano);
         double childCpu = child != null ? processCpuPercent(child, false, nowNano) : 0.0;
@@ -373,14 +389,18 @@ public final class PlaybackMetrics implements AutoCloseable {
     }
 
     private String toJson(Duration wall) {
-        Percentiles end = percentiles(snapshotLatencies());
+        Percentiles writeEnd = percentiles(snapshotLatencies());
+        Percentiles intervalEnd = percentiles(snapshotFrameIntervals());
+        long ttffNanos = timeToFirstFrameNanos.get();
         StringBuilder sb = new StringBuilder(16_384);
         sb.append('{');
+        sb.append("\"schemaVersion\":").append(SCHEMA_VERSION).append(',');
         field(sb, "scenario", scenario, true);
         field(sb, "player", player, true);
         field(sb, "startedAt", startedAt.toString(), true);
         sb.append("\"wallMillis\":").append(wall.toMillis()).append(',');
         sb.append("\"targetFps\":30,");
+        sb.append("\"frameBudgetMs\":").append(fmt(1000.0 / 30.0)).append(',');
         sb.append("\"framesOk\":").append(framesOk.sum()).append(',');
         sb.append("\"framesFail\":").append(framesFail.sum()).append(',');
         sb.append("\"bytesPushed\":").append(bytesPushed.sum()).append(',');
@@ -388,11 +408,31 @@ public final class PlaybackMetrics implements AutoCloseable {
         sb.append("\"stalls\":").append(stalls.sum()).append(',');
         sb.append("\"rssHighWaterBytes\":").append(rssHighWaterBytes.get()).append(',');
         sb.append("\"heapUsedBytes\":").append(memoryMx.getHeapMemoryUsage().getUsed()).append(',');
+        if (ttffNanos >= 0) {
+            sb.append("\"timeToFirstFrameMs\":").append(fmt(ttffNanos / 1_000_000.0)).append(',');
+        } else {
+            sb.append("\"timeToFirstFrameMs\":null,");
+        }
+        appendEnvironment(sb);
+        sb.append(',');
+        // Sink write / pipe backpressure — NOT end-to-end display latency.
         sb.append("\"writeLatencyMs\":{");
-        sb.append("\"p50\":").append(fmt(end.p50Nanos() / 1_000_000.0)).append(',');
-        sb.append("\"p95\":").append(fmt(end.p95Nanos() / 1_000_000.0)).append(',');
-        sb.append("\"p99\":").append(fmt(end.p99Nanos() / 1_000_000.0)).append(',');
+        sb.append("\"p50\":").append(fmt(writeEnd.p50Nanos() / 1_000_000.0)).append(',');
+        sb.append("\"p95\":").append(fmt(writeEnd.p95Nanos() / 1_000_000.0)).append(',');
+        sb.append("\"p99\":").append(fmt(writeEnd.p99Nanos() / 1_000_000.0)).append(',');
         sb.append("\"max\":").append(fmt(writeLatencyHighWaterNanos.get() / 1_000_000.0));
+        sb.append("},");
+        sb.append("\"frameIntervalMs\":{");
+        sb.append("\"p50\":").append(fmt(intervalEnd.p50Nanos() / 1_000_000.0)).append(',');
+        sb.append("\"p95\":").append(fmt(intervalEnd.p95Nanos() / 1_000_000.0)).append(',');
+        sb.append("\"p99\":").append(fmt(intervalEnd.p99Nanos() / 1_000_000.0)).append(',');
+        sb.append("\"max\":").append(fmt(frameIntervalHighWaterNanos.get() / 1_000_000.0));
+        sb.append("},");
+        sb.append("\"notes\":{");
+        field(sb, "writeLatency", "onVideo sink write duration (backpressure), not end-to-end AirPlay latency", true);
+        field(sb, "frameInterval", "wall-clock gap between consecutive onVideo calls", true);
+        field(sb, "framesFail", "failed onVideo writes, not decoder drop counters", true);
+        field(sb, "missing", "end-to-end latency, decoded/rendered frames, decoder drops", false);
         sb.append("},");
         sb.append("\"samples\":[");
         synchronized (samplesLock) {
@@ -406,6 +446,61 @@ public final class PlaybackMetrics implements AutoCloseable {
         sb.append("]}");
         sb.append('\n');
         return sb.toString();
+    }
+
+    private long[] snapshotFrameIntervals() {
+        Long[] boxed = recentFrameIntervalNanos.toArray(Long[]::new);
+        long[] arr = new long[boxed.length];
+        for (int i = 0; i < boxed.length; i++) {
+            arr[i] = boxed[i];
+        }
+        return arr;
+    }
+
+    private void appendEnvironment(StringBuilder sb) {
+        String osName = System.getProperty("os.name", "unknown");
+        String osArch = System.getProperty("os.arch", "unknown");
+        String javaVersion = System.getProperty("java.version", "unknown");
+        String runnerOs = System.getenv().getOrDefault("RUNNER_OS", "");
+        String runnerArch = System.getenv().getOrDefault("RUNNER_ARCH", "");
+        sb.append("\"environment\":{");
+        field(sb, "osName", osName, true);
+        field(sb, "osArch", osArch, true);
+        field(sb, "javaVersion", javaVersion, true);
+        sb.append("\"availableProcessors\":").append(Runtime.getRuntime().availableProcessors()).append(',');
+        if (!runnerOs.isBlank()) {
+            field(sb, "runnerOs", runnerOs, true);
+        }
+        if (!runnerArch.isBlank()) {
+            field(sb, "runnerArch", runnerArch, true);
+        }
+        // Normalize for dashboards: linux | windows | macos | unknown
+        field(sb, "osFamily", osFamily(osName, runnerOs), false);
+        sb.append('}');
+    }
+
+    private static String osFamily(String osName, String runnerOs) {
+        String r = runnerOs == null ? "" : runnerOs.toLowerCase(Locale.ROOT);
+        if (r.contains("linux") || r.equals("ubuntu")) {
+            return "linux";
+        }
+        if (r.contains("windows")) {
+            return "windows";
+        }
+        if (r.contains("mac")) {
+            return "macos";
+        }
+        String n = osName.toLowerCase(Locale.ROOT);
+        if (n.contains("linux")) {
+            return "linux";
+        }
+        if (n.contains("win")) {
+            return "windows";
+        }
+        if (n.contains("mac")) {
+            return "macos";
+        }
+        return "unknown";
     }
 
     private static void field(StringBuilder sb, String name, String value, boolean more) {

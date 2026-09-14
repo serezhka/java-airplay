@@ -106,7 +106,7 @@ jobs:
       - if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: bench-${{ matrix.player }}
+          name: bench-${{ runner.os }}-${{ matrix.player }}
           path: player/harness/build/reports/playback-metrics/**
           if-no-files-found: ignore
 

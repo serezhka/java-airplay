@@ -77,7 +77,7 @@ final class BenchReportHtml {
                   <div class="sub" id="subtitle"></div>
                   <div class="cards" id="cards"></div>
                   <div class="grid">
-                    <div class="panel"><h2>Write latency (pipe / sink backpressure)</h2><canvas id="cLatency"></canvas></div>
+                    <div class="panel"><h2>Sink write latency (backpressure, not e2e)</h2><canvas id="cLatency"></canvas></div>
                     <div class="panel"><h2>Effective FPS</h2><canvas id="cFps"></canvas></div>
                     <div class="panel"><h2>Throughput</h2><canvas id="cTput"></canvas></div>
                     <div class="panel"><h2>Memory (RSS / heap)</h2><canvas id="cMem"></canvas></div>
