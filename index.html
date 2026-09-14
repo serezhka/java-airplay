@@ -1,13 +1,16 @@
 <!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"/><title>AirPlay CI reports</title>
+<html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>AirPlay CI reports</title>
 <style>
- body{margin:0;padding:24px;font-family:ui-sans-serif,system-ui,sans-serif;background:#0f1419;color:#e7ecf1}
- a{color:#3dd6c6} table{width:100%;border-collapse:collapse;background:#1a222c;border-radius:12px;overflow:hidden}
- th,td{padding:10px 12px;border-bottom:1px solid #2a3542;text-align:left}
- th{color:#8b9aab;font-size:.8rem;text-transform:uppercase}
+:root { color-scheme: dark light; --bg:#0f1419; --panel:#1a222c; --text:#e7ecf1; --muted:#8b9aab; --line:#2a3542; --accent:#3dd6c6; }
+@media (prefers-color-scheme: light) { :root { --bg:#f4f6f8; --panel:#fff; --text:#1a222c; --muted:#5b6b7c; --line:#d7dee7; --accent:#0d9488; } }
+body{margin:0;padding:24px;font-family:ui-sans-serif,system-ui,sans-serif;background:var(--bg);color:var(--text)}
+a{color:var(--accent)} table{width:100%;border-collapse:collapse;background:var(--panel);border-radius:12px;overflow:hidden}
+th,td{padding:10px 12px;border-bottom:1px solid var(--line);text-align:left}
+th{color:var(--muted);font-size:.8rem;text-transform:uppercase}
 </style></head><body>
 <h1>AirPlay CI reports</h1>
-<p style="color:#8b9aab">Latest playback / bench metrics from GitHub Actions.</p>
+<p style="color:var(--muted)">Playback / bench dashboards from GitHub Actions. Compare players within the same OS.</p>
 <table><thead><tr><th>Run</th><th>Branch</th><th>SHA</th><th>Scenarios</th><th>When (UTC)</th></tr></thead>
-<tbody><tr><td><a href="runs/14/index.html">#14</a></td><td>cursor/cicd-tests</td><td><code>379c36f</code></td><td>3</td><td>2026-09-14T13:13:19.172310+00:00</td></tr></tbody></table>
+<tbody><tr><td><a href="runs/15/index.html">#15</a></td><td>cursor/cicd-tests</td><td><code>bb91702</code></td><td>3</td><td>2026-09-14T14:13:27.897309+00:00</td></tr><tr><td><a href="runs/14/index.html">#14</a></td><td>cursor/cicd-tests</td><td><code>379c36f</code></td><td>3</td><td>2026-09-14T13:13:19.172310+00:00</td></tr></tbody></table>
 </body></html>
