@@ -7,19 +7,23 @@ import io.netty.handler.codec.http.FullHttpResponse;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 public class ControlHandler extends ChannelInboundHandlerAdapter {
 
     private final BlockingQueue<FullHttpResponse> responseQueue = new LinkedBlockingQueue<>(1);
+    private final CountDownLatch active = new CountDownLatch(1);
 
-    private ChannelHandlerContext ctx;
+    private volatile ChannelHandlerContext ctx;
 
     @Override
     public void channelActive(ChannelHandlerContext ctx) throws Exception {
         super.channelActive(ctx);
         this.ctx = ctx;
+        active.countDown();
         log.info("Control client connected");
     }
 
@@ -35,10 +39,18 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     }
 
     public void send(FullHttpRequest request) {
-        ctx.writeAndFlush(request);
+        try {
+            if (!active.await(5, TimeUnit.SECONDS) || this.ctx == null) {
+                throw new IllegalStateException("control channel not active");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("interrupted waiting for control channel", e);
+        }
+        this.ctx.writeAndFlush(request);
     }
 
     public FullHttpResponse receive() throws InterruptedException {
-        return responseQueue.take(); // or poll with timeout
+        return responseQueue.take();
     }
 }
