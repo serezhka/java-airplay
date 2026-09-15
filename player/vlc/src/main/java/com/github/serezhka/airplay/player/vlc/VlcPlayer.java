@@ -26,11 +26,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * VLC-backed AirPlay consumer.
- * <p>
- * Under CI / headless mode this shells out to {@code cvlc}/{@code vlc} with a dummy
- * interface instead of embedding libVLC via vlcj — native factory init has been observed
- * to stall indefinitely on Linux GitHub runners.
+ * VLC-backed AirPlay consumer (vlcj embedded UI by default).
+ * Headless/CI uses {@code cvlc}/{@code vlc} stdin because vlcj native init can hang on Linux runners.
  */
 @Slf4j
 public class VlcPlayer implements AirPlayConsumer {

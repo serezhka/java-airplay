@@ -25,15 +25,6 @@ REPO = os.environ.get("GITHUB_REPOSITORY", "")
 WARMUP_SEC = 5.0
 COOLDOWN_SEC = 5.0
 
-# Transparent optional score (same OS only). Higher is better.
-SCORE_WEIGHTS = {
-    "fps": 0.30,
-    "stability": 0.25,
-    "writeP95": 0.20,
-    "cpu": 0.15,
-    "memory": 0.10,
-}
-
 
 def mean(xs: list[float]) -> float | None:
     return statistics.fmean(xs) if xs else None
@@ -210,125 +201,33 @@ def derive(data: dict, path: Path) -> dict[str, Any]:
             "playerInitMs": None,
             "timeToStableMs": None,
         },
-        "series": {
-            "t": [s.get("t") for s in samples],
-            "fps": [s.get("fps") for s in samples],
-            "cpu": [
-                float(s.get("jvmCpuPercent") or 0) + float(s.get("childCpuPercent") or 0)
-                for s in samples
-            ],
-            "rssMb": [
-                round(
-                    (float(s.get("jvmRssBytes") or 0) + float(s.get("childRssBytes") or 0)) / 1024 / 1024,
-                    2,
-                )
-                for s in samples
-            ],
-            "writeP50": [s.get("latencyP50Ms") for s in samples],
-            "writeP95": [s.get("latencyP95Ms") for s in samples],
-            "writeP99": [s.get("latencyP99Ms") for s in samples],
-        },
+        # Charts start after warmup so startup spikes do not dominate the plots.
+        "series": _series_from(steady if steady else samples),
         "rawFile": path.name,
         "notes": data.get("notes"),
     }
 
 
-def quality_score(row: dict) -> dict | None:
-    """Optional transparent score. Returns None if essentials missing."""
-    fps = (row.get("fps") or {}).get("sustained")
-    stalls = (row.get("stability") or {}).get("stalls")
-    write_p95 = (row.get("writeLatencyMs") or {}).get("p95")
-    cpu = (row.get("cpu") or {}).get("avg")
-    rss = (row.get("memory") or {}).get("rssPeakMb")
-    target = row.get("targetFps") or 30
-    if None in (fps, stalls, write_p95, cpu, rss):
-        return None
-
-    fps_s = max(0.0, min(1.0, float(fps) / float(target)))
-    # 0 stalls → 1.0; each stall costs, floor at 0
-    stab_s = max(0.0, 1.0 - float(stalls) / 10.0)
-    # write p95: <1ms excellent, >50ms terrible
-    write_s = max(0.0, min(1.0, 1.0 - (float(write_p95) / 50.0)))
-    cpu_s = max(0.0, min(1.0, 1.0 - (float(cpu) / 100.0)))
-    mem_s = max(0.0, min(1.0, 1.0 - (float(rss) / 512.0)))
-
-    total = (
-        SCORE_WEIGHTS["fps"] * fps_s
-        + SCORE_WEIGHTS["stability"] * stab_s
-        + SCORE_WEIGHTS["writeP95"] * write_s
-        + SCORE_WEIGHTS["cpu"] * cpu_s
-        + SCORE_WEIGHTS["memory"] * mem_s
-    )
+def _series_from(samples: list[dict]) -> dict:
     return {
-        "value": round(100 * total, 1),
-        "parts": {
-            "fps": round(fps_s, 3),
-            "stability": round(stab_s, 3),
-            "writeP95": round(write_s, 3),
-            "cpu": round(cpu_s, 3),
-            "memory": round(mem_s, 3),
-        },
-        "weights": SCORE_WEIGHTS,
-        "formula": (
-            "100 * (0.30*fps/target + 0.25*stability(stalls) + 0.20*writeP95 "
-            "+ 0.15*cpu + 0.10*rssPeak) with each term clamped to [0,1]"
-        ),
+        "t": [s.get("t") for s in samples],
+        "fps": [s.get("fps") for s in samples],
+        "cpu": [
+            float(s.get("jvmCpuPercent") or 0) + float(s.get("childCpuPercent") or 0)
+            for s in samples
+        ],
+        "rssMb": [
+            round(
+                (float(s.get("jvmRssBytes") or 0) + float(s.get("childRssBytes") or 0)) / 1024 / 1024,
+                2,
+            )
+            for s in samples
+        ],
+        "writeP50": [s.get("latencyP50Ms") for s in samples],
+        "writeP95": [s.get("latencyP95Ms") for s in samples],
+        "writeP99": [s.get("latencyP99Ms") for s in samples],
     }
 
-
-def pick_best(rows: list[dict]) -> dict | None:
-    """Best within one OS — prefer transparent quality score when present."""
-    if len(rows) < 2:
-        return None
-    scored = [r for r in rows if (r.get("score") or {}).get("value") is not None]
-    if scored:
-        ranked = sorted(scored, key=lambda r: -float(r["score"]["value"]))
-        top = float(ranked[0]["score"]["value"])
-        near = [r for r in ranked if top - float(r["score"]["value"]) <= 1.0]
-        if len(near) > 1:
-            names = ", ".join(r["player"] for r in near)
-            winner = ranked[0]
-            return {
-                "player": winner["player"],
-                "os": winner["os"],
-                "reason": f"Near-tie on quality score (±1): {names}. Showing top score.",
-                "highlights": {
-                    "fps": (winner.get("fps") or {}).get("sustained"),
-                    "writeP95Ms": (winner.get("writeLatencyMs") or {}).get("p95"),
-                    "cpuAvg": (winner.get("cpu") or {}).get("avg"),
-                    "rssPeakMb": (winner.get("memory") or {}).get("rssPeakMb"),
-                    "stalls": (winner.get("stability") or {}).get("stalls"),
-                    "failPct": (winner.get("frames") or {}).get("failPct"),
-                    "score": (winner.get("score") or {}).get("value"),
-                },
-            }
-        winner = ranked[0]
-    else:
-        ranked = sorted(
-            rows,
-            key=lambda r: (
-                (r.get("stability") or {}).get("stalls") or 0,
-                (r.get("stability") or {}).get("slowWrites") or 0,
-                -((r.get("fps") or {}).get("sustained") or 0),
-                (r.get("cpu") or {}).get("avg") or 999,
-                (r.get("memory") or {}).get("rssPeakMb") or 999,
-            ),
-        )
-        winner = ranked[0]
-    return {
-        "player": winner["player"],
-        "os": winner["os"],
-        "reason": "Highest playback quality score (see formula in Details)",
-        "highlights": {
-            "fps": (winner.get("fps") or {}).get("sustained"),
-            "writeP95Ms": (winner.get("writeLatencyMs") or {}).get("p95"),
-            "cpuAvg": (winner.get("cpu") or {}).get("avg"),
-            "rssPeakMb": (winner.get("memory") or {}).get("rssPeakMb"),
-            "stalls": (winner.get("stability") or {}).get("stalls"),
-            "failPct": (winner.get("frames") or {}).get("failPct"),
-            "score": (winner.get("score") or {}).get("value"),
-        },
-    }
 
 
 def badges_for(rows: list[dict]) -> dict[str, list[str]]:
@@ -427,12 +326,9 @@ def build_dashboard(metrics: list[dict], previous_summary: dict | None) -> dict:
 
     os_sections = []
     for os_name, rows in sorted(by_os.items()):
-        for r in rows:
-            r["score"] = quality_score(r)
         os_sections.append(
             {
                 "os": os_name,
-                "best": pick_best(rows),
                 "badges": badges_for(rows),
                 "players": rows,
             }
@@ -472,10 +368,6 @@ def build_dashboard(metrics: list[dict], previous_summary: dict | None) -> dict:
                 "player init / time-to-stable",
                 "raw per-frame histogram dump",
             ],
-            "latencyNote": (
-                "Columns historically labeled latency are writeLatencyMs: how long onVideo "
-                "blocks on the player sink. They are not glass-to-glass latency."
-            ),
         },
         "osSections": os_sections,
         "playbackSmoke": playback,
@@ -551,7 +443,6 @@ summary{cursor:pointer;font-weight:600}
 <header>
   <h1 id="title">AirPlay playback dashboard</h1>
   <div class="header-meta" id="meta"></div>
-  <div class="callout" id="latencyNote"></div>
 </header>
 <main id="main"></main>
 <script id="dashboard-data" type="application/json">__DASHBOARD_HTML_PLACEHOLDER__</script>
@@ -566,9 +457,9 @@ document.getElementById('meta').innerHTML = [
   D.run.actionsUrl ? `<a class="chip" href="${D.run.actionsUrl}">Actions</a>` : '',
   `<a class="chip" href="../index.html">All runs</a>`,
   chip(D.run.when?.replace('T',' ').slice(0,19)+' UTC'),
-  D.previousRun ? chip('vs #'+D.previousRun.number) : ''
+  D.previousRun ? chip('vs #'+D.previousRun.number) : '',
+  chip('charts from t≥5s')
 ].join('');
-document.getElementById('latencyNote').textContent = D.instrumentation.latencyNote;
 
 function chip(t){ return t ? `<span class="chip">${t}</span>` : ''; }
 
@@ -596,25 +487,6 @@ function sectionOs(sec){
   wrap.innerHTML = `<div class="os-title"><h2>${sec.os}</h2>
     <div class="muted">${env.javaVersion?('Java '+env.javaVersion+' · '):''}${env.availableProcessors?(env.availableProcessors+' CPUs · '):''}${players[0]?.wallSec||'?'}s bench · target ${players[0]?.targetFps||30} FPS (budget ${players[0]?.frameBudgetMs||33.33} ms)</div></div>`;
 
-  if(sec.best){
-    const b = sec.best;
-    const h = b.highlights||{};
-    const best = document.createElement('div');
-    best.className = 'card best';
-    best.innerHTML = `<div class="muted">Best overall · ${sec.os}</div>
-      <div class="name">${b.player}</div>
-      <div class="muted" style="font-size:.85rem">${b.reason}</div>
-      <div class="metrics">
-        <div class="m"><label>FPS</label><b>${na(h.fps)}</b></div>
-        <div class="m"><label>Write p95</label><b>${na(h.writeP95Ms,' ms')}</b></div>
-        <div class="m"><label>CPU avg</label><b>${na(h.cpuAvg,'%')}</b></div>
-        <div class="m"><label>RSS peak</label><b>${na(h.rssPeakMb,' MB')}</b></div>
-        <div class="m"><label>Stalls</label><b>${na(h.stalls)}</b></div>
-        <div class="m"><label>Fail %</label><b>${na(h.failPct,'%')}</b></div>
-      </div>`;
-    wrap.appendChild(best);
-  }
-
   const cards = document.createElement('div');
   cards.className = 'grid cards';
   cards.style.marginTop = '14px';
@@ -635,15 +507,12 @@ function sectionOs(sec){
         <div class="m"><label>Frame interval p95</label><b>${na(p.frameIntervalMs?.p95,' ms')}</b></div>
         <div class="m"><label>Stalls / slow</label><b>${na(p.stability?.stalls)} / ${na(p.stability?.slowWrites)}${deltaHtml(vs.stalls)}</b></div>
         <div class="m"><label>TTFF</label><b>${na(p.startup?.timeToFirstFrameMs,' ms')}</b></div>
-        <div class="m"><label>E2E latency</label><b class="na">N/A</b></div>
-        <div class="m"><label>Quality score</label><b>${na(p.score?.value)}${p.score?'/100':''}</b></div>
       </div>
       <div class="badges">${badges.map(b=>`<span class="badge">${b}</span>`).join('')}</div>`;
     cards.appendChild(el);
   }
   wrap.appendChild(cards);
 
-  // Charts
   const charts = document.createElement('div');
   charts.className = 'grid charts';
   charts.style.marginTop = '14px';
@@ -660,20 +529,6 @@ function sectionOs(sec){
     <div class="panel"><h3>Memory RSS (MB) · ${sec.os}</h3><canvas id="${ids.mem}"></canvas></div>`;
   wrap.appendChild(charts);
 
-  // Stability table
-  const stab = document.createElement('div');
-  stab.className = 'panel';
-  stab.style.marginTop = '14px';
-  stab.innerHTML = `<h3>Stability · ${sec.os}</h3>
-    <table><thead><tr><th>Player</th><th>Failed writes</th><th>Fail %</th><th>Stalls</th><th>Slow writes</th><th>Jank % (FPS&lt;90% target)</th><th>Decoded/Rendered/Dropped</th></tr></thead>
-    <tbody>${players.map(p=>`<tr>
-      <td>${p.player}</td><td>${na(p.frames?.fail)}</td><td>${na(p.frames?.failPct,'%')}</td>
-      <td>${na(p.stability?.stalls)}</td><td>${na(p.stability?.slowWrites)}</td>
-      <td>${na(p.stability?.jankPct,'%')}</td>
-      <td class="na">N/A / N/A / N/A</td></tr>`).join('')}</tbody></table>`;
-  wrap.appendChild(stab);
-
-  // Time series per player
   for(const p of players){
     const panel = document.createElement('details');
     panel.open = players.length <= 3;
@@ -750,7 +605,6 @@ const details = document.createElement('details');
 details.innerHTML = `<summary>Instrumentation &amp; raw details</summary>
   <p class="muted"><b>Measured:</b> ${(D.instrumentation.available||[]).join('; ')}</p>
   <p class="muted"><b>Not measured (shown as N/A):</b> ${(D.instrumentation.missing||[]).join('; ')}</p>
-  <p class="muted"><b>Quality score formula:</b> ${((D.osSections[0]||{}).players[0]||{}).score?.formula || 'n/a'}</p>
   <p class="muted">Per-player JSON files are published next to this page. End-to-end latency is omitted from ranking.</p>`;
 main.appendChild(details);
 </script>

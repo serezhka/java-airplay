@@ -21,14 +21,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
         with:
           java-version: '21'
           distribution: temurin
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
       - run: ./gradlew test :player:harness:loopbackIntegrationTest --no-daemon
 
+  # Smoke only: each OS × player must start and accept frames.
   playback:
     needs: unit
     timeout-minutes: 20
@@ -39,12 +40,12 @@ jobs:
         player: [ffmpeg, gstreamer, vlc]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
         with:
           java-version: '21'
           distribution: temurin
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
       - uses: ./.github/actions/setup-native-player
         with:
           player: ${{ matrix.player }}
@@ -56,22 +57,15 @@ jobs:
         shell: bash
         run: |
           TASK="${{ matrix.player }}IntegrationTest"
-          EXTRA=(-Dairplay.harness.metrics=true -Dairplay.vlc.headless=true -Dairplay.gst.cli=true)
+          EXTRA=(-Dairplay.vlc.headless=true -Dairplay.gst.cli=true)
           if [ -n "${GSTREAMER_BIN:-}" ]; then EXTRA+=("-Dgstreamer.path=$GSTREAMER_BIN"); fi
           if [ "${{ runner.os }}" = "Linux" ]; then
             xvfb-run -a ./gradlew ":player:harness:$TASK" --no-daemon "${EXTRA[@]}"
           else
             ./gradlew ":player:harness:$TASK" --no-daemon "${EXTRA[@]}"
           fi
-      - if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playback-${{ matrix.os }}-${{ matrix.player }}
-          path: |
-            **/build/reports/playback-metrics/**
-            **/build/test-results/**
-          if-no-files-found: ignore
 
+  # Benchmarks: Linux only, one player per runner (matrix). Never parallelize players on one machine.
   bench:
     if: github.ref == 'refs/heads/cursor/cicd-tests' || (github.event_name == 'workflow_dispatch' && inputs.bench == 'true')
     needs: unit
@@ -85,12 +79,12 @@ jobs:
       AIRPLAY_VLC_HEADLESS: 'true'
       AIRPLAY_GST_CLI: 'true'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
         with:
           java-version: '21'
           distribution: temurin
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
       - uses: ./.github/actions/setup-native-player
         with:
           player: ${{ matrix.player }}
@@ -104,7 +98,7 @@ jobs:
             -Dairplay.vlc.headless=true \
             -Dairplay.gst.cli=true
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: bench-${{ runner.os }}-${{ matrix.player }}
           path: player/harness/build/reports/playback-metrics/**
@@ -118,12 +112,12 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
         continue-on-error: true
         with:
           path: pages-src
-          pattern: '{playback-*,bench-*}'
+          pattern: 'bench-*'
           merge-multiple: false
       - name: Build site
         env:
@@ -131,7 +125,6 @@ jobs:
           PAGES_OUT: pages-out
         run: |
           mkdir -p pages-src pages-out
-          # Preserve prior history from the live site when present.
           curl -fsSL "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/history.json" \
             -o pages-out/history.json || echo '[]' > pages-out/history.json
           python3 .github/scripts/build-pages-report.py

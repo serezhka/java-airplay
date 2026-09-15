@@ -11,10 +11,10 @@ sourceSets {
     }
 }
 
-val integrationTestImplementation by configurations.getting {
+configurations.named("integrationTestImplementation") {
     extendsFrom(configurations.testImplementation.get())
 }
-val integrationTestRuntimeOnly by configurations.getting {
+configurations.named("integrationTestRuntimeOnly") {
     extendsFrom(configurations.testRuntimeOnly.get())
 }
 
@@ -68,6 +68,9 @@ fun registerIntegrationTest(taskName: String, tag: String?, taskDescription: Str
         System.getenv("AIRPLAY_VLC_HEADLESS")?.let { systemProperty("airplay.vlc.headless", it) }
         // Defaults for bench when not overridden
         if (tag == "bench") {
+            // Never run benches in parallel on one machine (local or single runner).
+            maxParallelForks = 1
+            systemProperty("junit.jupiter.execution.parallel.enabled", "false")
             systemProperty(
                 "airplay.harness.metrics",
                 System.getProperty("airplay.harness.metrics", "true")
@@ -80,7 +83,6 @@ fun registerIntegrationTest(taskName: String, tag: String?, taskDescription: Str
                 "airplay.harness.bench.player",
                 System.getProperty("airplay.harness.bench.player", "ffmpeg")
             )
-            // Bench wall + JVM/native teardown budget.
             val seconds = System.getProperty("airplay.harness.bench.seconds", "300").toLongOrNull() ?: 300L
             timeout.set(Duration.ofSeconds(seconds + 120))
         }
