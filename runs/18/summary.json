@@ -1,0 +1,41 @@
+{
+  "run": {
+    "number": "18",
+    "id": "34956845598",
+    "sha": "7ab154c",
+    "ref": "cursor/cicd-tests",
+    "when": "2026-09-15T10:16:18.911045+00:00",
+    "actionsUrl": "https://github.com/serezhka/java-airplay/actions/runs/34956845598"
+  },
+  "instrumentation": {
+    "available": [
+      "sustained/instantaneous FPS (pushed frames)",
+      "framesOk / framesFail (failed writes)",
+      "writeLatencyMs percentiles (sink backpressure)",
+      "frameIntervalMs percentiles (schema v2+)",
+      "stalls / slowWrites",
+      "JVM+child CPU % samples",
+      "JVM+child RSS / heap",
+      "timeToFirstFrameMs (schema v2+)",
+      "GC time in samples"
+    ],
+    "missing": [
+      "end-to-end AirPlay display latency",
+      "decoded / rendered frame counts",
+      "decoder dropped-frame counters",
+      "player init / time-to-stable",
+      "raw per-frame histogram dump"
+    ]
+  },
+  "osSections": [],
+  "playbackSmoke": [],
+  "vsPrevious": {},
+  "previousRun": {
+    "number": "17",
+    "id": "34955689046",
+    "sha": "cb33697",
+    "ref": "cursor/cicd-tests",
+    "when": "2026-09-15T10:12:29.705978+00:00",
+    "actionsUrl": "https://github.com/serezhka/java-airplay/actions/runs/34955689046"
+  }
+}
