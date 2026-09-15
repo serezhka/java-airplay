@@ -1,0 +1,398 @@
+{
+  "run": {
+    "number": "17",
+    "id": "34955689046",
+    "sha": "cb33697",
+    "ref": "cursor/cicd-tests",
+    "when": "2026-09-15T10:12:29.705978+00:00",
+    "actionsUrl": "https://github.com/serezhka/java-airplay/actions/runs/34955689046"
+  },
+  "instrumentation": {
+    "available": [
+      "sustained/instantaneous FPS (pushed frames)",
+      "framesOk / framesFail (failed writes)",
+      "writeLatencyMs percentiles (sink backpressure)",
+      "frameIntervalMs percentiles (schema v2+)",
+      "stalls / slowWrites",
+      "JVM+child CPU % samples",
+      "JVM+child RSS / heap",
+      "timeToFirstFrameMs (schema v2+)",
+      "GC time in samples"
+    ],
+    "missing": [
+      "end-to-end AirPlay display latency",
+      "decoded / rendered frame counts",
+      "decoder dropped-frame counters",
+      "player init / time-to-stable",
+      "raw per-frame histogram dump"
+    ]
+  },
+  "osSections": [
+    {
+      "os": "linux",
+      "badges": {
+        "ffmpeg": [
+          "Fewest failed writes"
+        ],
+        "gstreamer": [
+          "Best FPS",
+          "Lowest memory",
+          "Lowest write p99",
+          "Fewest stalls",
+          "Fewest failed writes"
+        ],
+        "vlc": [
+          "Best FPS",
+          "Lowest CPU",
+          "Fewest stalls",
+          "Fewest failed writes"
+        ]
+      },
+      "players": [
+        {
+          "schemaVersion": 2,
+          "scenario": "bench-ffmpeg-300s",
+          "player": "ffmpeg",
+          "os": "linux",
+          "kind": "bench",
+          "startedAt": "2026-09-15T10:06:58.425804095Z",
+          "wallSec": 300.5,
+          "targetFps": 30.0,
+          "frameBudgetMs": 33.33,
+          "environment": {
+            "osName": "Linux",
+            "osArch": "amd64",
+            "javaVersion": "21.0.12.1",
+            "availableProcessors": 4,
+            "runnerOs": "Linux",
+            "osFamily": "linux"
+          },
+          "fps": {
+            "sustained": 29.69,
+            "avg": 30.14,
+            "p50": 30.0,
+            "p95": 31.0,
+            "min": 24.0
+          },
+          "frames": {
+            "ok": 8924,
+            "fail": 0,
+            "failPct": 0.0,
+            "decoded": null,
+            "rendered": null,
+            "dropped": null
+          },
+          "writeLatencyMs": {
+            "p50": 0.009,
+            "p95": 0.016,
+            "p99": 0.023,
+            "max": 4200.537,
+            "note": "Sink write / pipe backpressure \u2014 not end-to-end AirPlay latency"
+          },
+          "frameIntervalMs": {
+            "p50": 33.129,
+            "p95": 33.164,
+            "p99": 33.201,
+            "max": 4233.673,
+            "note": "Gap between onVideo calls; N/A on schema v1 artifacts"
+          },
+          "latencyE2E": null,
+          "cpu": {
+            "avg": 4.38,
+            "p95": 5.5,
+            "peak": 11.25,
+            "jvmAvg": 0.14,
+            "childAvg": 4.23
+          },
+          "memory": {
+            "rssAvgMb": 314.4,
+            "rssPeakMb": 349.0,
+            "rssHighWaterMb": 349.1,
+            "heapUsedMb": 80.9,
+            "jvmRssAvgMb": 148.2,
+            "childRssAvgMb": 166.2
+          },
+          "stability": {
+            "stalls": 1,
+            "slowWrites": 1,
+            "jankPct": 0.34,
+            "longestStallMs": 4233.673
+          },
+          "startup": {
+            "timeToFirstFrameMs": 517.952,
+            "playerInitMs": null,
+            "timeToStableMs": null
+          },
+          "rawFile": "bench-ffmpeg-300s.json",
+          "notes": {
+            "writeLatency": "onVideo sink write duration (backpressure), not end-to-end AirPlay latency",
+            "frameInterval": "wall-clock gap between consecutive onVideo calls",
+            "framesFail": "failed onVideo writes, not decoder drop counters",
+            "missing": "end-to-end latency, decoded/rendered frames, decoder drops"
+          }
+        },
+        {
+          "schemaVersion": 2,
+          "scenario": "bench-gstreamer-300s",
+          "player": "gstreamer",
+          "os": "linux",
+          "kind": "bench",
+          "startedAt": "2026-09-15T10:07:14.466215618Z",
+          "wallSec": 300.4,
+          "targetFps": 30.0,
+          "frameBudgetMs": 33.33,
+          "environment": {
+            "osName": "Linux",
+            "osArch": "amd64",
+            "javaVersion": "21.0.12.1",
+            "availableProcessors": 4,
+            "runnerOs": "Linux",
+            "osFamily": "linux"
+          },
+          "fps": {
+            "sustained": 30.13,
+            "avg": 30.17,
+            "p50": 30.0,
+            "p95": 31.0,
+            "min": 30.0
+          },
+          "frames": {
+            "ok": 9051,
+            "fail": 0,
+            "failPct": 0.0,
+            "decoded": null,
+            "rendered": null,
+            "dropped": null
+          },
+          "writeLatencyMs": {
+            "p50": 0.011,
+            "p95": 0.014,
+            "p99": 0.016,
+            "max": 0.076,
+            "note": "Sink write / pipe backpressure \u2014 not end-to-end AirPlay latency"
+          },
+          "frameIntervalMs": {
+            "p50": 33.146,
+            "p95": 33.162,
+            "p99": 33.173,
+            "max": 35.932,
+            "note": "Gap between onVideo calls; N/A on schema v1 artifacts"
+          },
+          "latencyE2E": null,
+          "cpu": {
+            "avg": 0.33,
+            "p95": 1.76,
+            "peak": 2.76,
+            "jvmAvg": 0.15,
+            "childAvg": 0.17
+          },
+          "memory": {
+            "rssAvgMb": 127.9,
+            "rssPeakMb": 160.0,
+            "rssHighWaterMb": 162.0,
+            "heapUsedMb": 75.1,
+            "jvmRssAvgMb": 116.9,
+            "childRssAvgMb": 11.0
+          },
+          "stability": {
+            "stalls": 0,
+            "slowWrites": 0,
+            "jankPct": 0.0,
+            "longestStallMs": 35.932
+          },
+          "startup": {
+            "timeToFirstFrameMs": 358.676,
+            "playerInitMs": null,
+            "timeToStableMs": null
+          },
+          "rawFile": "bench-gstreamer-300s.json",
+          "notes": {
+            "writeLatency": "onVideo sink write duration (backpressure), not end-to-end AirPlay latency",
+            "frameInterval": "wall-clock gap between consecutive onVideo calls",
+            "framesFail": "failed onVideo writes, not decoder drop counters",
+            "missing": "end-to-end latency, decoded/rendered frames, decoder drops"
+          }
+        },
+        {
+          "schemaVersion": 2,
+          "scenario": "bench-vlc-300s",
+          "player": "vlc",
+          "os": "linux",
+          "kind": "bench",
+          "startedAt": "2026-09-15T10:07:06.732202065Z",
+          "wallSec": 300.3,
+          "targetFps": 30.0,
+          "frameBudgetMs": 33.33,
+          "environment": {
+            "osName": "Linux",
+            "osArch": "amd64",
+            "javaVersion": "21.0.12.1",
+            "availableProcessors": 4,
+            "runnerOs": "Linux",
+            "osFamily": "linux"
+          },
+          "fps": {
+            "sustained": 30.13,
+            "avg": 30.15,
+            "p50": 30.0,
+            "p95": 31.0,
+            "min": 30.0
+          },
+          "frames": {
+            "ok": 9046,
+            "fail": 0,
+            "failPct": 0.0,
+            "decoded": null,
+            "rendered": null,
+            "dropped": null
+          },
+          "writeLatencyMs": {
+            "p50": 0.014,
+            "p95": 0.018,
+            "p99": 0.033,
+            "max": 0.128,
+            "note": "Sink write / pipe backpressure \u2014 not end-to-end AirPlay latency"
+          },
+          "frameIntervalMs": {
+            "p50": 33.159,
+            "p95": 33.181,
+            "p99": 33.194,
+            "max": 33.653,
+            "note": "Gap between onVideo calls; N/A on schema v1 artifacts"
+          },
+          "latencyE2E": null,
+          "cpu": {
+            "avg": 0.16,
+            "p95": 0.5,
+            "peak": 1.75,
+            "jvmAvg": 0.16,
+            "childAvg": 0
+          },
+          "memory": {
+            "rssAvgMb": 134.8,
+            "rssPeakMb": 161.2,
+            "rssHighWaterMb": 163.2,
+            "heapUsedMb": 69.1,
+            "jvmRssAvgMb": 134.8,
+            "childRssAvgMb": 0.0
+          },
+          "stability": {
+            "stalls": 0,
+            "slowWrites": 0,
+            "jankPct": 0.0,
+            "longestStallMs": 33.653
+          },
+          "startup": {
+            "timeToFirstFrameMs": 258.626,
+            "playerInitMs": null,
+            "timeToStableMs": null
+          },
+          "rawFile": "bench-vlc-300s.json",
+          "notes": {
+            "writeLatency": "onVideo sink write duration (backpressure), not end-to-end AirPlay latency",
+            "frameInterval": "wall-clock gap between consecutive onVideo calls",
+            "framesFail": "failed onVideo writes, not decoder drop counters",
+            "missing": "end-to-end latency, decoded/rendered frames, decoder drops"
+          }
+        }
+      ]
+    }
+  ],
+  "playbackSmoke": [],
+  "vsPrevious": {
+    "linux/ffmpeg": {
+      "fps": {
+        "current": 29.69,
+        "previous": 29.82,
+        "pct": -0.4,
+        "improved": false
+      },
+      "cpu": {
+        "current": 4.38,
+        "previous": 7.35,
+        "pct": -40.4,
+        "improved": true
+      },
+      "rss": {
+        "current": 349.0,
+        "previous": 340.8,
+        "pct": 2.4,
+        "improved": false
+      },
+      "stalls": {
+        "current": 1,
+        "previous": 1,
+        "pct": 0.0,
+        "improved": false
+      },
+      "writeP95": {
+        "current": 0.016,
+        "previous": 0.02,
+        "pct": -20.0,
+        "improved": true
+      }
+    },
+    "linux/gstreamer": {
+      "fps": {
+        "current": 30.13,
+        "previous": 30.11,
+        "pct": 0.1,
+        "improved": true
+      },
+      "cpu": {
+        "current": 0.33,
+        "previous": 0.43,
+        "pct": -23.3,
+        "improved": true
+      },
+      "rss": {
+        "current": 160.0,
+        "previous": 171.1,
+        "pct": -6.5,
+        "improved": true
+      },
+      "stalls": null,
+      "writeP95": {
+        "current": 0.014,
+        "previous": 0.016,
+        "pct": -12.5,
+        "improved": true
+      }
+    },
+    "linux/vlc": {
+      "fps": {
+        "current": 30.13,
+        "previous": 30.15,
+        "pct": -0.1,
+        "improved": false
+      },
+      "cpu": {
+        "current": 0.16,
+        "previous": 0.14,
+        "pct": 14.3,
+        "improved": false
+      },
+      "rss": {
+        "current": 161.2,
+        "previous": 170.1,
+        "pct": -5.2,
+        "improved": true
+      },
+      "stalls": null,
+      "writeP95": {
+        "current": 0.018,
+        "previous": 0.014,
+        "pct": 28.6,
+        "improved": false
+      }
+    }
+  },
+  "previousRun": {
+    "number": "15",
+    "id": "34853163376",
+    "sha": "bb91702",
+    "ref": "cursor/cicd-tests",
+    "when": "2026-09-14T14:13:27.897309+00:00",
+    "actionsUrl": "https://github.com/serezhka/java-airplay/actions/runs/34853163376"
+  }
+}
