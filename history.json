@@ -1,5 +1,14 @@
 [
   {
+    "runNumber": "20",
+    "runId": "34957195100",
+    "sha": "e99f839",
+    "ref": "cursor/cicd-tests",
+    "when": "2026-09-15T10:27:59.610796+00:00",
+    "scenarios": 3,
+    "url": "runs/20/index.html"
+  },
+  {
     "runNumber": "18",
     "runId": "34956845598",
     "sha": "7ab154c",
