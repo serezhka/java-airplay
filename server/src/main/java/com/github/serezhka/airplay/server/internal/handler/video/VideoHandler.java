@@ -73,7 +73,7 @@ public class VideoHandler extends ChannelInboundHandlerAdapter {
             payloadBuf.readBytes(pictureParameterSet);
 
             int spsPpsLen = spsLen + ppsLen + 8;
-            log.info("SPS PPS length: {}", spsPpsLen);
+            log.debug("SPS PPS length: {}", spsPpsLen);
             byte[] spsPps = new byte[spsPpsLen];
             spsPps[0] = 0;
             spsPps[1] = 0;

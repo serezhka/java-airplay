@@ -6,8 +6,12 @@ local.properties
 dump.h264
 dumps/
 /log
+/logs
 /log.*
 gst.log
 player/app/log
 /research/
 /.cursor
+player/harness/logs/
+**/build/reports/playback-metrics/
+__pycache__/

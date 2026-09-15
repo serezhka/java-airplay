@@ -129,18 +129,21 @@ YouTube (and other HLS senders) use `POST /play` plus a reverse HTTP event chann
 
 Screen mirroring typically has no cover art. Album artwork usually arrives as RTSP `SET_PARAMETER` with `Content-Type: image/jpeg` or `image/png`.
 
-## Playback smoke tests
+## Playback / integration tests
 
-Playback tests use a synthetic H264 test pattern, so an AirPlay sender is not required.
-They open the real player window for about two seconds and are deliberately not included
-in `build`, `check`, or the regular `test` task.
+Harness module `:player:harness` is **not** part of `build` / `check` / `test`.
+Default logging is INFO (no request/response bodies). Use DEBUG for wire dumps.
 
 ```shell
-# All supported playback implementations
-./gradlew playbackTest
-
-# One implementation
-./gradlew ffmpegPlaybackTest
-./gradlew gstreamerPlaybackTest
-./gradlew dumpPlaybackTest
+./gradlew test
+./gradlew :player:harness:loopbackIntegrationTest
+./gradlew :player:harness:ffmpegIntegrationTest
+./gradlew :player:harness:gstreamerIntegrationTest
+./gradlew :player:harness:vlcIntegrationTest
+./gradlew :player:harness:dumpIntegrationTest
+./gradlew :player:harness:benchIntegrationTest -Dairplay.harness.metrics=true -Dairplay.harness.bench.player=ffmpeg
 ```
+
+CI (`.github/workflows/ci.yaml`) runs unit + loopback, then Linux/Windows × ffmpeg/gstreamer/vlc playback.
+On `cursor/cicd-tests` (or `workflow_dispatch` with `bench=true`) it also runs 5-minute benches.
+Reports are published to GitHub Pages after each run.

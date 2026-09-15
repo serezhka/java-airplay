@@ -56,7 +56,9 @@ public class Pairing {
 
             ecdhOurs = curve25519KeyPair.getPublicKey();
             ecdhSecret = curve25519.calculateAgreement(ecdhTheirs, curve25519KeyPair.getPrivateKey());
-            log.info("Shared secret: " + Utils.bytesToHex(ecdhSecret));
+            if (log.isDebugEnabled()) {
+                log.debug("Shared secret: {}", Utils.bytesToHex(ecdhSecret));
+            }
 
             Cipher aesCtr128Encrypt = initCipher();
 

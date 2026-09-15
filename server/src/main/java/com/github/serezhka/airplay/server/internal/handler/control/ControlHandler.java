@@ -310,7 +310,9 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
 
     private void handlePlay(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
         var play = (NSDictionary) BinaryPropertyListParser.parse(new ByteBufInputStream(request.content()));
-        log.info("Request content:\n{}", play.toXMLPropertyList());
+        if (log.isDebugEnabled()) {
+            log.debug("POST /play body:\n{}", play.toXMLPropertyList());
+        }
 
         var clientProcName = play.get("clientProcName") != null
                 ? play.get("clientProcName").toJavaObject(String.class)
@@ -343,9 +345,11 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
 
     private void handleSetProperty(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
         var decoder = new QueryStringDecoder(request.uri());
-        log.info("Path: {}, Query params: {}", decoder.path(), decoder.parameters());
+        log.debug("SET_PARAMETER path={}, params={}", decoder.path(), decoder.parameters());
         var play = (NSDictionary) BinaryPropertyListParser.parse(new ByteBufInputStream(request.content()));
-        log.info("Request content:\n{}", play.toXMLPropertyList());
+        if (log.isDebugEnabled()) {
+            log.debug("SET_PARAMETER body:\n{}", play.toXMLPropertyList());
+        }
 
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
         sendResponse(ctx, request, response);
@@ -375,7 +379,9 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
 
     private void handleAction(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
         NSDictionary action = parseActionPlist(request);
-        log.info("Action request:\n{}", action.toXMLPropertyList());
+        if (log.isDebugEnabled()) {
+            log.debug("POST /action body:\n{}", action.toXMLPropertyList());
+        }
 
         var type = action.get("type").toJavaObject(String.class);
         log.info("Action type: {}", type);
@@ -407,7 +413,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     private void handleGetProperty(ChannelHandlerContext ctx, FullHttpRequest request) {
         // TODO get requested param and respond accordingly
         var decoder = new QueryStringDecoder(request.uri());
-        log.info("Path: {}, Query params: {}", decoder.path(), decoder.parameters());
+        log.debug("GET_PARAMETER path={}, params={}", decoder.path(), decoder.parameters());
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
         sendResponse(ctx, request, response);
     }

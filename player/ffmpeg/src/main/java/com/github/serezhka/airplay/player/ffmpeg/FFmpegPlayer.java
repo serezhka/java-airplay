@@ -124,6 +124,11 @@ public class FFmpegPlayer implements AirPlayConsumer {
         return h264Process != null && h264Process.isAlive();
     }
 
+    /** PID of the ffplay video process, or {@code -1} if not running. */
+    public long videoProcessPid() {
+        return h264Process != null && h264Process.isAlive() ? h264Process.pid() : -1L;
+    }
+
     boolean isHlsProcessAlive() {
         return hlsProcess != null && hlsProcess.isAlive();
     }

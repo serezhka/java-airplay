@@ -1,0 +1,60 @@
+name: Setup native player
+
+description: Install ffmpeg, gstreamer, or vlc for harness tests
+
+inputs:
+  player:
+    description: ffmpeg, gstreamer, or vlc
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Linux packages
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        case "${{ inputs.player }}" in
+          ffmpeg) sudo apt-get install -y ffmpeg xvfb ;;
+          gstreamer) sudo apt-get install -y gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad xvfb ;;
+          vlc) sudo apt-get install -y vlc xvfb ;;
+          *) echo "Unknown player: ${{ inputs.player }}"; exit 1 ;;
+        esac
+
+    - name: Windows FFmpeg
+      if: runner.os == 'Windows' && inputs.player == 'ffmpeg'
+      shell: pwsh
+      run: |
+        $dest = "$env:RUNNER_TEMP\ffmpeg"
+        New-Item -ItemType Directory -Force -Path $dest | Out-Null
+        Invoke-WebRequest -Uri 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip' -OutFile "$env:RUNNER_TEMP\ffmpeg.zip"
+        Expand-Archive "$env:RUNNER_TEMP\ffmpeg.zip" "$env:RUNNER_TEMP\ffmpeg-extract" -Force
+        $inner = Get-ChildItem "$env:RUNNER_TEMP\ffmpeg-extract" | Select-Object -First 1
+        Copy-Item -Recurse -Force "$($inner.FullName)\*" $dest
+        Add-Content $env:GITHUB_PATH "$dest\bin"
+
+    - name: Windows GStreamer
+      if: runner.os == 'Windows' && inputs.player == 'gstreamer'
+      shell: pwsh
+      run: |
+        $ver = '1.26.11'
+        $msi = "$env:RUNNER_TEMP\gstreamer.msi"
+        $prefix = 'C:\gstreamer\1.0\msvc_x86_64'
+        Invoke-WebRequest -Uri "https://gstreamer.freedesktop.org/data/pkg/windows/$ver/msvc/gstreamer-1.0-msvc-x86_64-$ver.msi" -OutFile $msi
+        Start-Process msiexec.exe -Wait -ArgumentList "/a `"$msi`" /qn TARGETDIR=$prefix"
+        $exe = Get-ChildItem $prefix -Recurse -Filter gst-launch-1.0.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $exe) { throw "gst-launch-1.0 missing after MSI extract under $prefix" }
+        $bin = $exe.Directory.FullName
+        $root = (Resolve-Path (Join-Path $bin '..')).Path
+        Add-Content $env:GITHUB_PATH $bin
+        Add-Content $env:GITHUB_ENV "GSTREAMER_1_0_ROOT_MSVC_X86_64=$root"
+        Add-Content $env:GITHUB_ENV "GSTREAMER_BIN=$bin"
+
+    - name: Windows VLC
+      if: runner.os == 'Windows' && inputs.player == 'vlc'
+      shell: pwsh
+      run: |
+        choco install vlc -y --no-progress
+        Add-Content $env:GITHUB_PATH 'C:\Program Files\VideoLAN\VLC'

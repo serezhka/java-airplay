@@ -25,20 +25,30 @@ public class RTSP {
         if (setup.containsKey("ekey") || setup.containsKey("eiv")) {
             ekey = (byte[]) setup.get("ekey").toJavaObject();
             eiv = (byte[]) setup.get("eiv").toJavaObject();
-            log.info("Encrypted AES key: {}, iv: {}", Utils.bytesToHex(ekey), Utils.bytesToHex(eiv));
+            if (log.isDebugEnabled()) {
+                log.debug("Encrypted AES key: {}, iv: {}", Utils.bytesToHex(ekey), Utils.bytesToHex(eiv));
+            }
             return Optional.empty();
         } else if (setup.containsKey("streams")) {
-            log.debug("RTSP SETUP streams:\n{}", setup.toXMLPropertyList());
+            if (log.isDebugEnabled()) {
+                log.debug("RTSP SETUP streams:\n{}", setup.toXMLPropertyList());
+            }
             return Optional.ofNullable(getMediaStreamInfo(setup));
         } else {
-            log.error("Unknown RTSP setup content\n{}", setup.toXMLPropertyList());
+            if (log.isDebugEnabled()) {
+                log.error("Unknown RTSP setup content\n{}", setup.toXMLPropertyList());
+            } else {
+                log.error("Unknown RTSP setup content");
+            }
             return Optional.empty();
         }
     }
 
     public Optional<MediaStreamInfo> teardown(InputStream rtspTeardownPayload) throws Exception {
         var teardown = (NSDictionary) BinaryPropertyListParser.parse(rtspTeardownPayload);
-        log.debug("RTSP TEARDOWN streams:\n{}", teardown.toXMLPropertyList());
+        if (log.isDebugEnabled()) {
+            log.debug("RTSP TEARDOWN streams:\n{}", teardown.toXMLPropertyList());
+        }
         if (teardown.containsKey("streams")) {
             return Optional.ofNullable(getMediaStreamInfo(teardown));
         }
