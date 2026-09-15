@@ -98,7 +98,7 @@ jobs:
             -Dairplay.vlc.headless=true \
             -Dairplay.gst.cli=true
       - if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: bench-${{ runner.os }}-${{ matrix.player }}
           path: player/harness/build/reports/playback-metrics/**
@@ -113,7 +113,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         continue-on-error: true
         with:
           path: pages-src
