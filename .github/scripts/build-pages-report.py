@@ -201,8 +201,8 @@ def derive(data: dict, path: Path) -> dict[str, Any]:
             "playerInitMs": None,
             "timeToStableMs": None,
         },
-        # Charts start after warmup so startup spikes do not dominate the plots.
-        "series": _series_from(steady if steady else samples),
+        # Full timeline for charts; summary cards still use steady_samples() (warmup trimmed).
+        "series": _series_from(samples),
         "rawFile": path.name,
         "notes": data.get("notes"),
     }
@@ -457,8 +457,7 @@ document.getElementById('meta').innerHTML = [
   D.run.actionsUrl ? `<a class="chip" href="${D.run.actionsUrl}">Actions</a>` : '',
   `<a class="chip" href="../index.html">All runs</a>`,
   chip(D.run.when?.replace('T',' ').slice(0,19)+' UTC'),
-  D.previousRun ? chip('vs #'+D.previousRun.number) : '',
-  chip('charts from t≥5s')
+  D.previousRun ? chip('vs #'+D.previousRun.number) : ''
 ].join('');
 
 function chip(t){ return t ? `<span class="chip">${t}</span>` : ''; }
@@ -471,14 +470,85 @@ function deltaHtml(d){
   return ` <span class="${dir} ${cls}">${arrow} ${d.pct>0?'+':''}${d.pct}%</span>`;
 }
 
-const chartDefaults = {
-  responsive:true, animation:false,
-  plugins:{ legend:{ labels:{ color: getComputedStyle(document.documentElement).getPropertyValue('--text') } } },
-  scales:{
-    x:{ ticks:{color:'#8b9aab'}, grid:{color:'#2a3542'} },
-    y:{ ticks:{color:'#8b9aab'}, grid:{color:'#2a3542'} }
+const tickColor = '#8b9aab';
+const gridColor = '#2a3542';
+const textColor = getComputedStyle(document.documentElement).getPropertyValue('--text').trim() || '#e7ecf1';
+
+function nums(arr){
+  return (arr||[]).map(Number).filter(v => Number.isFinite(v));
+}
+
+function percentile(sorted, p){
+  if(!sorted.length) return 0;
+  const idx = Math.min(sorted.length-1, Math.max(0, Math.ceil(p*sorted.length)-1));
+  return sorted[idx];
+}
+
+/** Cap Y so rare spikes do not flatten the rest of the series. */
+function robustAxisMax(values, {floor=0.05, pad=1.2}={}){
+  const xs = nums(values).filter(v => v >= 0).sort((a,b)=>a-b);
+  if(!xs.length) return {max: floor, peak: 0, clipped: false};
+  const peak = xs[xs.length-1];
+  const p95 = percentile(xs, 0.95);
+  const p99 = percentile(xs, 0.99);
+  let cap = Math.max(p99, p95 * 1.5, floor);
+  const clipped = peak > cap * 2.5;
+  if(!clipped) cap = Math.max(peak, floor);
+  return {max: Math.max(cap * pad, floor), peak, clipped};
+}
+
+function niceCeil(v, step){
+  if(!Number.isFinite(v) || v <= 0) return step;
+  return Math.ceil(v / step) * step;
+}
+
+/** Fill transient 0% CPU holes (MXBean noise), then light EMA for readability. */
+function smoothCpu(arr){
+  const out = [];
+  let last = null;
+  for(const raw of (arr||[])){
+    let v = Number(raw);
+    if(!Number.isFinite(v) || v < 0) v = last ?? 0;
+    // Treat isolated zeros as missing when neighbours are busy.
+    if(v === 0 && last != null && last > 0.5) v = last;
+    if(last == null) last = v;
+    else last = 0.35 * v + 0.65 * last;
+    out.push(Math.round(last * 1000) / 1000);
   }
-};
+  return out;
+}
+
+function lineOpts(y){
+  return {
+    responsive:true, animation:false,
+    interaction:{ mode:'index', intersect:false },
+    plugins:{
+      legend:{ labels:{ color:textColor } },
+      tooltip:{ callbacks:{
+        label(ctx){
+          const v = ctx.parsed.y;
+          return `${ctx.dataset.label}: ${v == null ? 'n/a' : Number(v).toFixed(3)}`;
+        }
+      }}
+    },
+    scales:{
+      x:{ ticks:{ color:tickColor, maxTicksLimit:8 }, grid:{ color:gridColor } },
+      y:{ min:y.min ?? 0, max:y.max, ticks:{ color:tickColor }, grid:{ color:gridColor },
+          title: y.title ? { display:true, text:y.title, color:tickColor } : undefined }
+    }
+  };
+}
+
+function barOpts(y){
+  return {
+    responsive:true, animation:false,
+    plugins:{ legend:{ labels:{ color:textColor } } },
+    scales:{
+      x:{ ticks:{ color:tickColor }, grid:{ color:gridColor } },
+      y:{ min:y.min ?? 0, max:y.max, ticks:{ color:tickColor }, grid:{ color:gridColor } }
+    }
+  };
+}
 
 function sectionOs(sec){
   const wrap = document.createElement('section');
@@ -524,7 +594,7 @@ function sectionOs(sec){
   };
   charts.innerHTML = `
     <div class="panel"><h3>FPS · ${sec.os}</h3><canvas id="${ids.fps}"></canvas></div>
-    <div class="panel"><h3>Write latency percentiles (ms) · ${sec.os} · lower better</h3><canvas id="${ids.write}"></canvas></div>
+    <div class="panel"><h3>Write latency p50/p95/p99 (ms) · ${sec.os} · lower better</h3><canvas id="${ids.write}"></canvas></div>
     <div class="panel"><h3>CPU vs FPS · ${sec.os}</h3><canvas id="${ids.scatter}"></canvas></div>
     <div class="panel"><h3>Memory RSS (MB) · ${sec.os}</h3><canvas id="${ids.mem}"></canvas></div>`;
   wrap.appendChild(charts);
@@ -536,55 +606,84 @@ function sectionOs(sec){
     panel.innerHTML = `<summary>Time series · ${p.player} · ${sec.os}</summary>
       <div class="grid charts" style="margin-top:10px">
         <div class="panel"><h3>FPS over time</h3><canvas id="${cid}-fps"></canvas></div>
-        <div class="panel"><h3>CPU over time</h3><canvas id="${cid}-cpu"></canvas></div>
+        <div class="panel"><h3>CPU over time <span class="muted" style="font-weight:400">(smoothed)</span></h3><canvas id="${cid}-cpu"></canvas></div>
         <div class="panel"><h3>RSS over time</h3><canvas id="${cid}-rss"></canvas></div>
-        <div class="panel"><h3>Write latency over time</h3><canvas id="${cid}-w"></canvas></div>
+        <div class="panel"><h3>Write latency over time</h3><p class="muted" id="${cid}-w-note" style="margin:0 0 8px;font-size:.8rem"></p><canvas id="${cid}-w"></canvas></div>
       </div>`;
     wrap.appendChild(panel);
     queueMicrotask(()=>{
       const s = p.series||{};
-      const budget = p.frameBudgetMs;
+      const target = p.targetFps || 30;
+      const fpsAxisMax = niceCeil(Math.max(target * 1.25, ...nums(s.fps), 1), 5);
       new Chart(document.getElementById(`${cid}-fps`), {type:'line', data:{labels:s.t, datasets:[
-        {label:'fps', data:s.fps, borderColor:'#3dd6c6', pointRadius:0, borderWidth:1.5},
-        {label:'target', data:s.t.map(()=>p.targetFps), borderColor:'#8b9aab', borderDash:[4,4], pointRadius:0, borderWidth:1}
-      ]}, options:chartDefaults});
+        {label:'fps', data:s.fps, borderColor:'#3dd6c6', pointRadius:0, borderWidth:1.5, tension:0.15},
+        {label:'target', data:(s.t||[]).map(()=>target), borderColor:'#8b9aab', borderDash:[4,4], pointRadius:0, borderWidth:1}
+      ]}, options:lineOpts({ min:0, max:fpsAxisMax, title:'FPS' })});
+
+      const cpuSmooth = smoothCpu(s.cpu);
+      const cpuMax = niceCeil(Math.max(5, ...nums(cpuSmooth), ...nums(s.cpu)), 5);
       new Chart(document.getElementById(`${cid}-cpu`), {type:'line', data:{labels:s.t, datasets:[
-        {label:'cpu %', data:s.cpu, borderColor:'#f0a202', pointRadius:0, borderWidth:1.5}
-      ]}, options:chartDefaults});
+        {label:'cpu % (raw)', data:s.cpu, borderColor:'rgba(240,162,2,0.25)', pointRadius:0, borderWidth:1},
+        {label:'cpu % (smooth)', data:cpuSmooth, borderColor:'#f0a202', pointRadius:0, borderWidth:1.8, tension:0.2}
+      ]}, options:lineOpts({ min:0, max:cpuMax, title:'CPU %' })});
+
+      const rssMax = niceCeil(Math.max(16, ...nums(s.rssMb)), 16);
       new Chart(document.getElementById(`${cid}-rss`), {type:'line', data:{labels:s.t, datasets:[
-        {label:'rss MB', data:s.rssMb, borderColor:'#7aa2f7', pointRadius:0, borderWidth:1.5}
-      ]}, options:chartDefaults});
+        {label:'rss MB', data:s.rssMb, borderColor:'#7aa2f7', pointRadius:0, borderWidth:1.5, tension:0.15, fill:false}
+      ]}, options:lineOpts({ min:0, max:rssMax, title:'MB' })});
+
+      const writeVals = [...nums(s.writeP50), ...nums(s.writeP95), ...nums(s.writeP99)];
+      const wAxis = robustAxisMax(writeVals, {floor:0.05, pad:1.25});
+      const note = document.getElementById(`${cid}-w-note`);
+      if(wAxis.clipped){
+        note.textContent = `Y-axis capped at ${wAxis.max.toFixed(2)} ms so outliers do not flatten the chart (series peak ${wAxis.peak.toFixed(1)} ms).`;
+      } else {
+        note.textContent = 'Sink write / backpressure latency (not end-to-end display latency).';
+      }
       new Chart(document.getElementById(`${cid}-w`), {type:'line', data:{labels:s.t, datasets:[
-        {label:'p50', data:s.writeP50, borderColor:'#3dd6c6', pointRadius:0, borderWidth:1.2},
-        {label:'p95', data:s.writeP95, borderColor:'#f0a202', pointRadius:0, borderWidth:1.2},
-        {label:'p99', data:s.writeP99, borderColor:'#ff6b6b', pointRadius:0, borderWidth:1.2},
-      ]}, options:chartDefaults});
+        {label:'p50', data:s.writeP50, borderColor:'#3dd6c6', pointRadius:0, borderWidth:1.2, tension:0.15},
+        {label:'p95', data:s.writeP95, borderColor:'#f0a202', pointRadius:0, borderWidth:1.2, tension:0.15},
+        {label:'p99', data:s.writeP99, borderColor:'#ff6b6b', pointRadius:0, borderWidth:1.2, tension:0.15},
+      ]}, options:lineOpts({ min:0, max:wAxis.max, title:'ms' })});
     });
   }
 
   queueMicrotask(()=>{
     const labels = players.map(p=>p.player);
+    const fpsMax = niceCeil(Math.max(players[0]?.targetFps || 30, ...players.map(p=>p.fps?.sustained||0)) * 1.15, 5);
     new Chart(document.getElementById(ids.fps), {type:'bar', data:{labels, datasets:[
       {label:'sustained FPS', data:players.map(p=>p.fps?.sustained), backgroundColor:'#3dd6c6'}
-    ]}, options:chartDefaults});
+    ]}, options:barOpts({ min:0, max:fpsMax })});
+
+    // Omit raw max from comparison bars — a single stall spike (seconds) hides p50/p95/p99.
+    const writeSeries = players.flatMap(p => [p.writeLatencyMs?.p50, p.writeLatencyMs?.p95, p.writeLatencyMs?.p99]);
+    const wBar = robustAxisMax(writeSeries, {floor:0.05, pad:1.3});
     new Chart(document.getElementById(ids.write), {type:'bar', data:{labels, datasets:[
       {label:'p50', data:players.map(p=>p.writeLatencyMs?.p50), backgroundColor:'#3dd6c6'},
       {label:'p95', data:players.map(p=>p.writeLatencyMs?.p95), backgroundColor:'#f0a202'},
       {label:'p99', data:players.map(p=>p.writeLatencyMs?.p99), backgroundColor:'#ff6b6b'},
-      {label:'max', data:players.map(p=>p.writeLatencyMs?.max), backgroundColor:'#a78bfa'},
-    ]}, options:chartDefaults});
+    ]}, options:barOpts({ min:0, max:wBar.max })});
+
+    const cpuScatterMax = niceCeil(Math.max(5, ...players.map(p=>p.cpu?.avg||0)) * 1.4, 5);
     new Chart(document.getElementById(ids.scatter), {type:'scatter', data:{datasets: players.map((p,i)=>({
       label:p.player,
       data:[{x:p.cpu?.avg, y:p.fps?.sustained}],
-      backgroundColor:['#3dd6c6','#f0a202','#7aa2f7'][i%3]
-    }))}, options:{...chartDefaults, scales:{
-      x:{ title:{display:true,text:'CPU %',color:'#8b9aab'}, ticks:{color:'#8b9aab'}, grid:{color:'#2a3542'} },
-      y:{ title:{display:true,text:'FPS',color:'#8b9aab'}, ticks:{color:'#8b9aab'}, grid:{color:'#2a3542'} }
-    }}});
+      backgroundColor:['#3dd6c6','#f0a202','#7aa2f7'][i%3],
+      pointRadius:8
+    }))}, options:{
+      responsive:true, animation:false,
+      plugins:{ legend:{ labels:{ color:textColor } } },
+      scales:{
+        x:{ min:0, max:cpuScatterMax, title:{display:true,text:'CPU % (avg)',color:tickColor}, ticks:{color:tickColor}, grid:{color:gridColor} },
+        y:{ min:0, max:fpsMax, title:{display:true,text:'FPS',color:tickColor}, ticks:{color:tickColor}, grid:{color:gridColor} }
+      }
+    }});
+
+    const memMax = niceCeil(Math.max(32, ...players.map(p=>p.memory?.rssPeakMb||0)), 32);
     new Chart(document.getElementById(ids.mem), {type:'bar', data:{labels, datasets:[
       {label:'avg RSS', data:players.map(p=>p.memory?.rssAvgMb), backgroundColor:'#7aa2f7'},
       {label:'peak RSS', data:players.map(p=>p.memory?.rssPeakMb), backgroundColor:'#a78bfa'},
-    ]}, options:chartDefaults});
+    ]}, options:barOpts({ min:0, max:memMax })});
   });
 
   return wrap;
