@@ -13,3 +13,4 @@ player/app/log
 /.cursor
 player/harness/logs/
 **/build/reports/playback-metrics/
+__pycache__/
