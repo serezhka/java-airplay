@@ -53,19 +53,16 @@ public class HlsFcupService {
             hls.setWaitingForMasterChange(false);
             hls.setPlaybackRate(0);
 
+            // Never signal "stopped" on EOS: YouTube treats it as end-of-item, closes the
+            // reverse /event channel, and often never delivers the next master (live
+            // preroll ad → content; historically also VOD ad hangs). Keep the session and
+            // poll until master/mediadata changes. playlistRemove + POST /play can still
+            // arrive while we wait. "paused" looks like a user pause — use "loading".
             int action = hls.getActionAtItemEnd();
-            // actionAtItemEnd=pause means the *player* must not auto-advance; the client
-            // (YouTube) advances the queue. Signal end-of-item with "stopped" — "paused"
-            // looks like a user pause and YouTube never sends the next /play.
-            // Do not FCUP-poll here: next item arrives as playlistRemove + POST /play.
-            if (action == 1 || action == 2) {
-                log.info("HLS ended, actionAtItemEnd={} → stopped (await next item) session={}",
-                        action, session.getId());
-                sendPlaybackStateEvent(session, "stopped");
-                continue;
-            }
-            log.info("HLS ended, actionAtItemEnd=advance, requesting master refresh session={}",
-                    session.getId());
+            String reason = hls.isLivePlaylist()
+                    ? "live playlist"
+                    : "actionAtItemEnd=" + action;
+            log.info("HLS ended ({}), refreshing master (keep session) {}", reason, session.getId());
             hls.setWaitingForMasterChange(true);
             hls.resetPostEosMediaSweep();
             sendPlaybackStateEvent(session, "loading");

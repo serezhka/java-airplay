@@ -97,13 +97,20 @@ class HlsPlaylistStateTest {
         hls.putPlaylist("mlhls://localhost/itag/229/mediadata.m3u8",
                 "#EXTM3U\n#EXTINF:15.0,\nad.ts\n#EXT-X-ENDLIST\n");
         assertEquals(15.0, hls.getMediaDurationSeconds(), 0.001);
+        assertFalse(hls.isLivePlaylist());
         // Sliding window without ENDLIST must not inflate past the ad VOD length.
         hls.putPlaylist("mlhls://localhost/itag/230/mediadata.m3u8",
                 "#EXTM3U\n#EXTINF:3600.0,\nlive.ts\n");
-        assertEquals(15.0, hls.getMediaDurationSeconds(), 0.001);
-        hls.putPlaylist("mlhls://localhost/itag/231/mediadata.m3u8",
-                "#EXTM3U\n#EXTINF:20.0,\nad2.ts\n#EXT-X-ENDLIST\n");
-        assertEquals(20.0, hls.getMediaDurationSeconds(), 0.001);
+        assertTrue(hls.isLivePlaylist());
+        assertEquals(0.0, hls.getMediaDurationSeconds(), 0.001);
+    }
+
+    @Test
+    void shouldRefreshPlaylistRateLimits() {
+        var hls = new HlsPlaylistState("mlhls://localhost/master.m3u8", "http://localhost/playlist/master.m3u8?session=x");
+        String uri = "mlhls://localhost/itag/229/mediadata.m3u8";
+        assertTrue(hls.shouldRefreshPlaylist(uri, 1_000_000_000L));
+        assertFalse(hls.shouldRefreshPlaylist(uri, 1_000_000_000L));
     }
 
     @Test

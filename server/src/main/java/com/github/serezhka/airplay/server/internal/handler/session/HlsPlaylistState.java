@@ -22,6 +22,8 @@ public class HlsPlaylistState {
     private final Map<String, String> playlists = new LinkedHashMap<>();
     /** Hashes of last-seen mediadata bodies; survive {@link #invalidatePlaylists()} for EOS compare. */
     private final Map<String, Integer> mediaBodyHashes = new HashMap<>();
+    /** Last FCUP refresh nanoTime per remote playlist URI (rate-limit live re-fetch). */
+    private final Map<String, Long> lastFcupRefreshNanos = new HashMap<>();
 
     private int nextMediaUriIndex;
     private int fcupRequestId = 1;
@@ -35,6 +37,8 @@ public class HlsPlaylistState {
     private volatile boolean postEosMediaChanged;
     /** After EOS, at most one full mediadata FCUP sweep; further polls are master-only. */
     private volatile boolean postEosMediaSweepDone;
+    /** True once any mediadata lacked {@code #EXT-X-ENDLIST} (sliding live / event window). */
+    private volatile boolean livePlaylist;
     private Double pendingSeekSeconds;
     /** Best-effort VOD duration from media playlist {@code #EXTINF} sums. */
     private volatile double mediaDurationSeconds;
@@ -79,11 +83,16 @@ public class HlsPlaylistState {
         String key = normalizeUri(remoteUri);
         playlists.put(key, body);
         if (remoteUri.contains("mediadata.m3u8")) {
-            // Only VOD (#EXT-X-ENDLIST) may raise duration. Sliding-window live sums used to
-            // inflate a 15s ad to multi-hour lengths and broke YouTube's item state machine.
-            double duration = sumMediaDurationSeconds(body);
-            if (duration > 0 && body.contains("#EXT-X-ENDLIST") && duration > mediaDurationSeconds) {
-                mediaDurationSeconds = duration;
+            boolean endList = body.contains("#EXT-X-ENDLIST");
+            if (!endList) {
+                livePlaylist = true;
+                mediaDurationSeconds = 0;
+            } else if (!livePlaylist) {
+                // Only finite VOD may raise duration. Live windows must not.
+                double duration = sumMediaDurationSeconds(body);
+                if (duration > 0 && duration > mediaDurationSeconds) {
+                    mediaDurationSeconds = duration;
+                }
             }
             int hash = body.hashCode();
             Integer prev = mediaBodyHashes.put(key, hash);
@@ -91,6 +100,24 @@ public class HlsPlaylistState {
                 postEosMediaChanged = true;
             }
         }
+    }
+
+    public boolean isLivePlaylist() {
+        return livePlaylist;
+    }
+
+    /**
+     * @return true if a FCUP refresh for this URI should be sent now (rate-limited).
+     */
+    public boolean shouldRefreshPlaylist(String remoteUri, long minIntervalNanos) {
+        String key = normalizeUri(remoteUri);
+        long now = System.nanoTime();
+        Long prev = lastFcupRefreshNanos.get(key);
+        if (prev != null && now - prev < minIntervalNanos) {
+            return false;
+        }
+        lastFcupRefreshNanos.put(key, now);
+        return true;
     }
 
     public void setPlaybackRate(double playbackRate) {
@@ -107,6 +134,7 @@ public class HlsPlaylistState {
 
     public void invalidatePlaylists() {
         playlists.clear();
+        lastFcupRefreshNanos.clear();
         mediaDurationSeconds = 0;
     }
 

@@ -189,7 +189,12 @@ final class GstHlsPipeline {
     }
 
     void seek(double positionSeconds) {
-        if (positionSeconds < 0) {
+        if (positionSeconds < 0 || Double.isNaN(positionSeconds) || Double.isInfinite(positionSeconds)) {
+            return;
+        }
+        // Guard against CLOCK_TIME_NONE /overflow-style targets (seen as ~2.5e6 hours in demux).
+        if (positionSeconds > 86_400.0 * 7) {
+            log.warn("Ignoring absurd HLS seek to {}s", positionSeconds);
             return;
         }
         ended = false;

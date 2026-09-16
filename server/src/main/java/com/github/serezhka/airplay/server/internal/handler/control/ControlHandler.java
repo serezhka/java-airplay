@@ -563,13 +563,17 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         double position = fromPlayer.position();
         double rate = fromPlayer.rate();
         if (hls != null) {
-            // ENDLIST mediadata duration is authoritative. Consumer-reported durations can be
-            // multi-hour for short YouTube ads; advertising those makes YouTube abort the queue.
-            double playlistDur = hls.getMediaDurationSeconds();
-            if (playlistDur > 0) {
-                duration = playlistDur;
-            } else if (duration > 600) {
+            // Live / sliding windows: duration unknown. Finite ENDLIST VOD is authoritative.
+            // Consumer clocks alone can report multi-hour values for short ads.
+            if (hls.isLivePlaylist()) {
                 duration = 0;
+            } else {
+                double playlistDur = hls.getMediaDurationSeconds();
+                if (playlistDur > 0) {
+                    duration = playlistDur;
+                } else if (duration > 600) {
+                    duration = 0;
+                }
             }
             if (duration > 0) {
                 position = Math.min(position, duration);
@@ -828,13 +832,15 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         var hls = session.getHlsPlaylistState();
         var cached = hls != null ? hls.getPlaylist(playlistUriRemote) : null;
         boolean isMasterPlaylist = playlistUriRemote.contains("master.m3u8");
-        // Prefer cache. Re-FCUP on every media GET starves the reverse channel.
+        // Prefer cache so the consumer is not blocked; re-FCUP in the background so live
+        // mediadata keeps growing (stale cache freezes livestreams after the first window).
         boolean refreshPlaylist = isMasterPlaylist && hls != null && hls.isPlaybackStarted() && cached == null;
 
         if (cached != null) {
             log.info("Serving cached playlist {}", playlistUriRemote);
             replyPlaylist(pending, cached);
-            if (isMasterPlaylist && hls.isPlaybackStarted()) {
+            if (hls != null && hls.isPlaybackStarted()
+                    && hls.shouldRefreshPlaylist(playlistUriRemote, TimeUnit.MILLISECONDS.toNanos(1500))) {
                 hlsFcupService.sendFcupRequest(session, playlistUriRemote);
             }
             return;
