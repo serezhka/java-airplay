@@ -1,49 +1,54 @@
-# Java AirPlay Server
+<!-- markdownlint-disable-next-line -->
+<div align="center">
 
-[![GitHub release](https://img.shields.io/github/v/release/serezhka/java-airplay)](https://github.com/serezhka/java-airplay/releases)
-[![build](https://github.com/serezhka/java-airplay/actions/workflows/build.yaml/badge.svg)](https://github.com/serezhka/java-airplay/actions/workflows/build.yaml)
-![ViewCount](https://views.whatilearened.today/views/github/serezhka/java-airplay.svg)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](http://opensource.org/licenses/MIT)
+  <!-- markdownlint-disable-next-line -->
+  # Java AirPlay
 
-This project unites the [java-airplay-lib](https://github.com/serezhka/java-airplay-lib), [java-airplay-server](https://github.com/serezhka/java-airplay-server)
-and [java-airplay-server-examples](https://github.com/serezhka/java-airplay-server-examples) into one.
-It makes development a lot easier when all parts of the code are put together.
+  Open-source AirPlay audio + screen-mirroring receiver in Java.
 
-😩 Due to lack of free time and other priorities, this project is not actively maintained. 😩
+  [![CI][badge-ci]][ci]&nbsp;
+  [![GitHub release][badge-release]][releases]&nbsp;
+  [![License: MIT][badge-license]][license]&nbsp;
+  [![Java][badge-java]][openjdk]&nbsp;
+  ![ViewCount][badge-views]
+
+</div>
 
 ## Demo
 
-* Raspberry pi 4 model B (1280 x 720 @ 24 fps)
+- [Raspberry Pi 4 Model B (1280×720 @ 24 fps)](https://youtu.be/uRvgVkLWfSI)
+- [Windows laptop (1920×1080 @ 30 fps)](https://youtu.be/RT1hVWGJzos)
 
-[![RASPBERRY](https://img.youtube.com/vi/uRvgVkLWfSI/hqdefault.jpg)](https://youtu.be/uRvgVkLWfSI)
+## Features
 
-* Windows laptop (1920 x 1080 @ 30 fps)
+- AirPlay audio + screen mirroring
+- FairPlay decryption for mirrored streams
+- Playbacks: GStreamer, FFmpeg (`ffplay`), VLC
+- Optional session dump (protocol + decrypted media) for debugging
 
-[![RASPBERRY](https://img.youtube.com/vi/RT1hVWGJzos/hqdefault.jpg)](https://youtu.be/RT1hVWGJzos)
+## Quick start
 
-## How to Run
-
-### From sources
+### From source
 
 ```shell
-git clone https://github.com/serezhka/java-airplay
-cd ./java-airplay
+git clone https://github.com/serezhka/java-airplay.git
+cd java-airplay
 ./gradlew bootRun
 ```
 
-### Pre-built app
+### Pre-built jar
 
-Download the latest release
+Download the [latest release](https://github.com/serezhka/java-airplay/releases/latest), then:
 
 ```shell
 java -jar java-airplay-server-{version}.jar
 ```
 
+Open **Screen Mirroring** on the iPhone / iPad / Mac and pick the receiver name (default from config, e.g. `srzhka`).
+
 ## Configuration
 
-Create `application.properties` file in working dir
-
-### Available properties
+Create `application.properties` in the working directory:
 
 ```properties
 # airplay
@@ -54,7 +59,7 @@ airplay.fps=24
 # player (gstreamer, ffmpeg, vlc)
 player.implementation=gstreamer
 player.tray.enabled=true
-# dump (optional sidecar, independent of the player)
+# dump (optional sidecar)
 dump.enabled=false
 dump.directory=dumps
 dump.protocol=true
@@ -65,84 +70,54 @@ dump.artwork=true
 dump.videoFps=60
 ```
 
-## Players
+## Playback
 
-### Gstreamer
+Pick a backend with `player.implementation` (`gstreamer`, `ffmpeg`, or `vlc`). Install the matching native player first.
 
-Supports both video and audio (alac + aac_eld) streams <br>
-Gstreamer installation is required (see https://github.com/gstreamer-java/gst1-java-core)
+### GStreamer (recommended)
 
-AirPlay audio is routed by the sender OS. When an iPhone or iPad mirrors to this
-receiver, iOS/iPadOS may move playback audio from the device speaker to the
-AirPlay receiver. The receiver can play the audio it receives, but it cannot
-force the sender device speaker to play at the same time. Dual playback requires
-an additional sender-side or companion-device audio path outside the AirPlay
-receiver protocol.
+Best option for video **and** audio (including AAC-ELD mirroring audio).
+
+Install: [GStreamer documentation](https://gstreamer.freedesktop.org/documentation/installing/) · [Downloads](https://gstreamer.freedesktop.org/download/)
 
 ### FFmpeg
 
-`ffplay` must be on PATH. Logs are written under `logs/` in the working directory.
+Uses `ffplay` on `PATH`. Video works; **mirroring audio is unreliable** on stock builds (AAC-ELD usually needs a custom ffmpeg with `libfdk-aac`). Prefer GStreamer when you need audio.
 
-| Mode | Stock distro ffmpeg | Notes |
-|------|---------------------|-------|
-| Screen mirroring video | yes | H.264 pipe to ffplay |
-| Music (ALAC) | yes | native `alac` decoder |
-| YouTube / HLS | yes | `ffplay <local playlist uri>` |
-| Test-client audio (AAC-LC ADTS) | yes | `ffplay -f aac` |
-| Mirroring audio (AAC-ELD) | usually no | needs `--enable-libfdk-aac` build |
-
-`libfdk-aac` is still not in default Debian/Ubuntu ffmpeg packages because of
-license/patent constraints. Distro builds use the native `aac` encoder/decoder
-instead, which does not cover AirPlay's AAC-ELD mirroring audio. Music over
-AirPlay is ALAC, not AAC-ELD, so Apple Music works without libfdk-aac.
-
-For mirroring audio use the GStreamer player (`avdec_aac`), or install a custom
-ffmpeg build with `--enable-nonfree --enable-libfdk-aac`. Keep player backends
-separate — `FFmpegPlayer` does not fall back to GStreamer.
-
-Logs (created in `./logs/` next to the process working directory):
-
-- `airplay-app-<timestamp>-<pid>.log` — Spring / Netty application log
-- `airplay-gst-<timestamp>-<pid>.log` — GStreamer (`-Dairplay.gst.debug.file=...`)
-- `airplay-ffmpeg-<timestamp>-<pid>.log` — ffplay (`-Dairplay.ffmpeg.debug.file=...`)
-- `airplay-vlc-<timestamp>-<pid>.log` — VLC (`-Dairplay.vlc.debug.file=...`)
-
-Override directory with `-Dairplay.logs.directory=...`.
+Install: [FFmpeg download](https://ffmpeg.org/download.html)
 
 ### VLC
 
-Playback stops after few seconds <br>
-VLC installation is required
+**Very unstable** in this project (sessions often drop). Use only for experiments.
 
-### dump
+Install: [VLC download](https://www.videolan.org/vlc/)
 
-Set `dump.enabled=true` to record the session beside gstreamer, ffmpeg, or vlc. Dumps go under `dumps/<timestamp>_<sessionId>/`:
+## Session dump
 
-- `protocol/` — RTSP/HTTP request and response captures, including HLS `GET /playlist`
-- `media/video-NNN.h264` plus `media/video-NNN.mp4` when `ffmpeg` is on PATH — decrypted video remuxed at `dump.videoFps` (default 60)
-- `media/audio-NNN.caf` — ALAC in a CAF container with a magic cookie and packet table; AAC is dumped as `.aac`
-- `extras/` — HLS playlist URI, master/media `m3u8` from YouTube FCUP, artwork, and DMAP metadata when the sender provides them
+Set `dump.enabled=true` to record beside the live player under `dumps/<timestamp>_<sessionId>/`:
 
-Play `*.mp4` / `*.caf` in ffplay or VLC. Raw `.h264` has no timestamps, so players often guess 25 fps and look sluggish.
+- `protocol/` — RTSP/HTTP captures
+- `media/` — decrypted `.h264` / remuxed `.mp4`, audio `.caf` / `.aac`
+- `extras/` — HLS playlists, artwork, DMAP metadata when present
 
-YouTube (and other HLS senders) use `POST /play` plus a reverse HTTP event channel. The receiver answers `/play` first, then fetches playlists through FCUP.
+## Related projects
 
-Screen mirroring typically has no cover art. Album artwork usually arrives as RTSP `SET_PARAMETER` with `Content-Type: image/jpeg` or `image/png`.
+This monorepo unites the former:
 
-## Playback / integration tests
+- [java-airplay-lib](https://github.com/serezhka/java-airplay-lib)
+- [java-airplay-server](https://github.com/serezhka/java-airplay-server)
+- [java-airplay-server-examples](https://github.com/serezhka/java-airplay-server-examples)
 
-Harness module `:player:harness` is **not** part of `build` / `check` / `test`.
-Default logging is INFO (no request/response bodies). Use DEBUG for wire dumps.
+## License
 
-```shell
-./gradlew test
-./gradlew :player:harness:loopbackIntegrationTest
-./gradlew :player:harness:ffmpegIntegrationTest
-./gradlew :player:harness:gstreamerIntegrationTest
-./gradlew :player:harness:vlcIntegrationTest
-./gradlew :player:harness:dumpIntegrationTest
-./gradlew :player:harness:benchIntegrationTest -Dairplay.harness.metrics=true -Dairplay.harness.bench.player=ffmpeg
-```
+[MIT](http://opensource.org/licenses/MIT)
 
-CI (`.github/workflows/ci.yaml`) runs unit + loopback, then Linux/Windows × ffmpeg/gstreamer/vlc playback.
-Five-minute benches run only via `workflow_dispatch` with `bench=true`. Reports go to GitHub Pages.
+[badge-ci]: https://github.com/serezhka/java-airplay/actions/workflows/ci.yaml/badge.svg
+[badge-release]: https://img.shields.io/github/v/release/serezhka/java-airplay
+[badge-license]: https://img.shields.io/badge/license-MIT-blue.svg
+[badge-java]: https://img.shields.io/badge/Java-21-orange?logo=openjdk&logoColor=white
+[badge-views]: https://views.whatilearened.today/views/github/serezhka/java-airplay.svg
+[ci]: https://github.com/serezhka/java-airplay/actions/workflows/ci.yaml
+[releases]: https://github.com/serezhka/java-airplay/releases
+[license]: https://opensource.org/licenses/MIT
+[openjdk]: https://openjdk.org/
