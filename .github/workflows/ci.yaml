@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main, cursor/cicd-tests]
+    branches: [main]
   workflow_dispatch:
     inputs:
       bench:
@@ -67,7 +67,7 @@ jobs:
 
   # Benchmarks: Linux only, one player per runner (matrix). Never parallelize players on one machine.
   bench:
-    if: github.ref == 'refs/heads/cursor/cicd-tests' || (github.event_name == 'workflow_dispatch' && inputs.bench == 'true')
+    if: github.event_name == 'workflow_dispatch' && inputs.bench == 'true'
     needs: unit
     timeout-minutes: 12
     strategy:
@@ -106,7 +106,7 @@ jobs:
 
   pages:
     needs: [playback, bench]
-    if: always() && !cancelled() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/cursor/cicd-tests')
+    if: always() && !cancelled() && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
