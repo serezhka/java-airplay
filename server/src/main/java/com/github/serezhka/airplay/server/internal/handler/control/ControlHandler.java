@@ -138,7 +138,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/scrub")) {
                     handleScrub(ctx, request);
                 } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/stop")) {
-                    log.info(request.uri()); // TODO
+                    handleStop(ctx, request);
                 } else if (HttpMethod.GET.equals(request.method()) && decoder.path().startsWith("/playlist")) {
                     handleGetPlaylist(ctx, request);
                 } else {
@@ -426,6 +426,16 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         sendResponse(ctx, request, response);
     }
 
+    private void handleStop(ChannelHandlerContext ctx, FullHttpRequest request) {
+        log.info("POST /stop");
+        hlsFcupService.cancelAllMasterPolls();
+        var session = resolveSession(request);
+        session.setHlsPlaylistState(null);
+        airPlayConsumer.onMediaPlaylistRemove();
+        var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+        sendResponse(ctx, request, response);
+    }
+
     private void handlePlaybackInfo(ChannelHandlerContext ctx, FullHttpRequest request) {
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
         response.headers().add(HttpHeaderNames.CONTENT_TYPE, "text/x-apple-plist+xml");
@@ -651,24 +661,26 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
 
         var hls = session.getHlsPlaylistState();
         var cached = hls != null ? hls.getPlaylist(playlistUriRemote) : null;
-        boolean isMediaPlaylist = playlistUriRemote.contains("mediadata.m3u8");
         boolean isMasterPlaylist = playlistUriRemote.contains("master.m3u8");
-        boolean refreshPlaylist = isMediaPlaylist || (isMasterPlaylist && hls != null && hls.isPlaybackStarted());
+        // Serve cache when present. Forcing FCUP on every media GET starves the reverse
+        // channel (YouTube ABR then sees HTTP status 0 / stalls). Refresh master only.
+        boolean refreshPlaylist = isMasterPlaylist && hls != null && hls.isPlaybackStarted() && cached == null;
 
-        if (cached != null && !refreshPlaylist) {
+        if (cached != null) {
             log.info("Serving cached playlist {}", playlistUriRemote);
             replyPlaylist(pending, cached);
+            if (isMasterPlaylist && hls.isPlaybackStarted()) {
+                // Soft background refresh of master for live/DVR; do not block the player.
+                hlsFcupService.sendFcupRequest(session, playlistUriRemote);
+            }
             return;
         }
 
         session.enqueuePlaylistRequest(playlistUriRemote, pending);
         recordPendingPlaylistRequest(pending);
 
-        if (refreshPlaylist) {
-            log.info("GET /playlist {} requesting FCUP refresh", playlistUriRemote);
-            hlsFcupService.sendFcupRequest(session, playlistUriRemote);
-        } else if (hls == null) {
-            log.info("GET /playlist {} without HLS prefetch, requesting FCUP", playlistUriRemote);
+        if (refreshPlaylist || hls == null) {
+            log.info("GET /playlist {} requesting FCUP", playlistUriRemote);
             hlsFcupService.sendFcupRequest(session, playlistUriRemote);
         } else {
             log.info("GET /playlist {} waiting for HLS prefetch ({})", playlistUriRemote, hls);
@@ -695,7 +707,12 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     }
 
     private String masterPlaylistToLocalUrls(String masterPlaylist, String baseUrl, String sessionId) {
-        return HlsUriRewrite.rewritePlaylist(masterPlaylist, baseUrl, sessionId);
+        String rewritten = HlsUriRewrite.rewritePlaylist(masterPlaylist, baseUrl, sessionId);
+        String filtered = HlsUriRewrite.preferAvcVariants(rewritten);
+        if (!filtered.equals(rewritten)) {
+            log.info("Filtered HLS master to AVC-only variants (drop VP9/AV1/subtitles)");
+        }
+        return filtered;
     }
 
     private DefaultFullHttpResponse createRtspResponse(FullHttpRequest request) {

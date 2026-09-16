@@ -76,8 +76,14 @@ public class HlsPlaylistState {
         return playlists.get(normalizeUri(remoteUri));
     }
 
-    public void storeMasterPlaylist(String rewrittenMaster, String rawMaster) throws PlaylistParserException {
-        List<String> mediaUris = HlsUriRewrite.extractMediaUris(rawMaster);
+                public void storeMasterPlaylist(String rewrittenMaster, String rawMaster) throws PlaylistParserException {
+        // Prefer rewritten/filtered master so we don't FCUP-prefetch VP9/AV1 variants we dropped.
+        List<String> mediaUris;
+        try {
+            mediaUris = HlsUriRewrite.extractMediaUris(rewrittenMaster);
+        } catch (PlaylistParserException e) {
+            mediaUris = HlsUriRewrite.extractMediaUris(rawMaster);
+        }
         if (mediaUris.isEmpty()) {
             throw new PlaylistParserException("No media playlists found in master playlist");
         }
