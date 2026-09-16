@@ -3,6 +3,7 @@ package com.github.serezhka.airplay.server.internal.handler.util;
 import com.dd.plist.BinaryPropertyListWriter;
 import com.dd.plist.NSArray;
 import com.dd.plist.NSDictionary;
+import com.github.serezhka.airplay.lib.ReceiverProfile;
 import com.github.serezhka.airplay.server.AirPlayConfig;
 import com.github.serezhka.airplay.server.AirPlayConsumer;
 import lombok.extern.slf4j.Slf4j;
@@ -57,14 +58,14 @@ public class PropertyListUtil {
         response.put("audioFormats", audioFormats);
         response.put("audioLatencies", audioLatencies);
         response.put("displays", displays);
-        response.put("features", 0x527FFEE6L);
+        response.put("features", ReceiverProfile.FEATURES);
         response.put("keepAliveSendStatsAsBody", 1);
-        response.put("model", "AppleTV3,2");
+        response.put("model", ReceiverProfile.MODEL);
         response.put("name", "Apple TV");
         response.put("pi", "b08f5a79-db29-4384-b456-a4784d9e6055");
-        response.put("sourceVersion", "220.68");
-        response.put("statusFlags", 68);
-        response.put("vv", 2);
+        response.put("sourceVersion", ReceiverProfile.SOURCE_VERSION);
+        response.put("statusFlags", ReceiverProfile.STATUS_FLAGS);
+        response.put("vv", ReceiverProfile.VV);
         // response.put("pk", new NSData("XYMxJlYMsZoUGTcneJbw/UN7poAeshCsTDnZAHLXDag="));
 
         return BinaryPropertyListWriter.writeToArray(response);

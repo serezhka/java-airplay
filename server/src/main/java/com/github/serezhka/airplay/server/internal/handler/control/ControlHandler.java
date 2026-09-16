@@ -14,6 +14,7 @@ import com.github.serezhka.airplay.server.internal.handler.session.HlsUriRewrite
 import com.github.serezhka.airplay.server.internal.handler.session.PlaylistRequest;
 import com.github.serezhka.airplay.server.internal.handler.session.Session;
 import com.github.serezhka.airplay.server.internal.handler.session.SessionManager;
+import com.github.serezhka.airplay.server.internal.handler.util.AirPlayVolume;
 import com.github.serezhka.airplay.server.internal.handler.util.PropertyListUtil;
 import io.lindstrom.m3u8.model.*;
 import io.lindstrom.m3u8.parser.MediaPlaylistParser;
@@ -135,7 +136,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/getProperty")) {
                     handleGetProperty(ctx, request);
                 } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/scrub")) {
-                    log.info(request.uri()); // TODO
+                    handleScrub(ctx, request);
                 } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/stop")) {
                     log.info(request.uri()); // TODO
                 } else if (HttpMethod.GET.equals(request.method()) && decoder.path().startsWith("/playlist")) {
@@ -229,8 +230,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     }
 
     private void handleRtspGetParameter(ChannelHandlerContext ctx, FullHttpRequest request) {
-        // TODO get requested param and respond accordingly
-        byte[] content = "volume: 0.000000\r\n".getBytes(StandardCharsets.US_ASCII);
+        byte[] content = AirPlayVolume.formatRtspParameter(airPlayConsumer.volume()).getBytes(StandardCharsets.US_ASCII);
         var response = createRtspResponse(request);
         response.content().writeBytes(content);
         sendResponse(ctx, request, response);
@@ -244,7 +244,22 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     }
 
     private void handleRtspSetParameter(ChannelHandlerContext ctx, FullHttpRequest request) {
-        // TODO get requested param and respond accordingly
+        var contentType = Optional.ofNullable(request.headers().get(HttpHeaderNames.CONTENT_TYPE)).orElse("");
+        if (contentType.contains("text/parameters") && request.content().isReadable()) {
+            String body = request.content().toString(StandardCharsets.US_ASCII);
+            for (String line : body.split("\r?\n")) {
+                if (line.regionMatches(true, 0, "volume:", 0, 7)) {
+                    try {
+                        double db = Double.parseDouble(line.substring(7).trim());
+                        double linear = AirPlayVolume.fromDecibels(db);
+                        airPlayConsumer.onVolume(linear);
+                        log.info("RTSP volume {} dB -> linear {}", db, linear);
+                    } catch (NumberFormatException e) {
+                        log.warn("Invalid RTSP volume line: {}", line);
+                    }
+                }
+            }
+        }
         var response = createRtspResponse(request);
         response.headers().add("Audio-Jack-Status", "connected; type=analog");
         sendResponse(ctx, request, response);
@@ -314,6 +329,24 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             log.debug("POST /play body:\n{}", play.toXMLPropertyList());
         }
 
+        if (play.get("volume") != null) {
+            try {
+                double linear = AirPlayVolume.clampLinear(play.get("volume").toJavaObject(Double.class));
+                airPlayConsumer.onVolume(linear);
+            } catch (Exception e) {
+                log.debug("Ignoring /play volume", e);
+            }
+        }
+
+        Double startPositionSeconds = null;
+        if (play.get("Start-Position-Seconds") != null) {
+            try {
+                startPositionSeconds = play.get("Start-Position-Seconds").toJavaObject(Double.class);
+            } catch (Exception e) {
+                log.debug("Ignoring Start-Position-Seconds", e);
+            }
+        }
+
         var clientProcName = play.get("clientProcName") != null
                 ? play.get("clientProcName").toJavaObject(String.class)
                 : "";
@@ -331,10 +364,16 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             if (remotePlaylistUri.contains("master.m3u8")) {
                 var hls = new HlsPlaylistState(remotePlaylistUri, playlistUriLocal);
                 session.setHlsPlaylistState(hls);
+                if (startPositionSeconds != null && startPositionSeconds > 0) {
+                    hls.setPendingSeekSeconds(startPositionSeconds);
+                }
                 log.info("HLS play from [{}]: prefetching playlists via FCUP, localUri={}", clientProcName, playlistUriLocal);
                 hlsFcupService.sendFcupRequest(session, remotePlaylistUri);
             } else {
                 airPlayConsumer.onMediaPlaylist(playlistUriLocal);
+                if (startPositionSeconds != null && startPositionSeconds > 0) {
+                    airPlayConsumer.onMediaPlaylistSeek(startPositionSeconds);
+                }
             }
         } else {
             log.error("Client proc name [{}] has no Content-Location playlist", clientProcName);
@@ -365,6 +404,24 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             airPlayConsumer.onMediaPlaylistResume();
         }
 
+        var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+        sendResponse(ctx, request, response);
+    }
+
+    private void handleScrub(ChannelHandlerContext ctx, FullHttpRequest request) {
+        var decoder = new QueryStringDecoder(request.uri());
+        var positions = decoder.parameters().get("position");
+        if (positions != null && !positions.isEmpty()) {
+            try {
+                double position = Double.parseDouble(positions.get(0));
+                log.info("POST /scrub position={}", position);
+                airPlayConsumer.onMediaPlaylistSeek(position);
+            } catch (NumberFormatException e) {
+                log.warn("Invalid /scrub position: {}", positions.get(0));
+            }
+        } else {
+            log.warn("POST /scrub without position: {}", request.uri());
+        }
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
         sendResponse(ctx, request, response);
     }
@@ -474,7 +531,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                         if (!hls.isPlaybackStarted()) {
                             hls.markPlaybackStarted();
                             log.info("HLS starting playback after master: {}", hls.getPlaylistUriLocal());
-                            airPlayConsumer.onMediaPlaylist(hls.getPlaylistUriLocal());
+                            startHlsPlayback(hls);
                         }
                     }
                 } else {
@@ -496,6 +553,14 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             airPlayConsumer.onMediaPlaylistContent(fcupResponseURL, body);
         } else {
             log.warn("No pending GET /playlist for {}", fcupResponseURL);
+        }
+    }
+
+    private void startHlsPlayback(HlsPlaylistState hls) {
+        airPlayConsumer.onMediaPlaylist(hls.getPlaylistUriLocal());
+        Double seek = hls.takePendingSeekSeconds();
+        if (seek != null && seek > 0) {
+            airPlayConsumer.onMediaPlaylistSeek(seek);
         }
     }
 

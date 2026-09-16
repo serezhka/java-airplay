@@ -35,6 +35,22 @@ public interface AirPlayConsumer {
     default void onMediaPlaylistResume() {
     }
 
+    /**
+     * Seek media (HLS / YouTube) to {@code positionSeconds}.
+     */
+    default void onMediaPlaylistSeek(double positionSeconds) {
+    }
+
+    /**
+     * Linear volume in {@code [0, 1]} (HTTP {@code /play} and UI). RTSP dB values are converted by the control layer.
+     */
+    default void onVolume(double volumeLinear) {
+    }
+
+    default double volume() {
+        return 1.0;
+    }
+
     default void onControlExchange(ControlExchange exchange) {
     }
 

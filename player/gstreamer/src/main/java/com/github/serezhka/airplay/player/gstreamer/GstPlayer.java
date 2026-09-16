@@ -48,6 +48,7 @@ public class GstPlayer implements AirPlayConsumer {
     private String hlsUri;
     private JFrame hlsWindow;
     private Canvas hlsCanvas;
+    private volatile double volumeLinear = 1.0;
 
     private AudioStreamInfo.CompressionType audioCompressionType;
 
@@ -226,6 +227,7 @@ public class GstPlayer implements AirPlayConsumer {
         Element videoSink = createHlsVideoSink();
         hlsPipeline = (Pipeline) Gst.parseLaunch("playbin3 name=hls");
         hlsPipeline.set("uri", playlistUri);
+        hlsPipeline.set("volume", volumeLinear);
         hlsPipeline.set("video-sink", videoSink);
         if (useXimage && hlsCanvas != null) {
             GstFullscreenWindow.show(hlsWindow);
@@ -301,6 +303,30 @@ public class GstPlayer implements AirPlayConsumer {
         if (hlsPipeline != null && !hlsPipeline.isPlaying()) {
             hlsPipeline.play();
         }
+    }
+
+    @Override
+    public void onMediaPlaylistSeek(double positionSeconds) {
+        if (hlsPipeline == null || positionSeconds < 0) {
+            return;
+        }
+        long ns = (long) (positionSeconds * 1_000_000_000L);
+        boolean ok = hlsPipeline.seek(ns, TimeUnit.NANOSECONDS);
+        log.info("HLS seek to {}s -> {}", positionSeconds, ok);
+    }
+
+    @Override
+    public void onVolume(double volumeLinear) {
+        this.volumeLinear = Math.max(0.0, Math.min(1.0, volumeLinear));
+        if (hlsPipeline != null) {
+            hlsPipeline.set("volume", this.volumeLinear);
+        }
+        log.debug("Volume set to {}", this.volumeLinear);
+    }
+
+    @Override
+    public double volume() {
+        return volumeLinear;
     }
 
     @Override

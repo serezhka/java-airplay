@@ -85,6 +85,21 @@ public class DumpingAirPlayConsumer implements AirPlayConsumer {
     }
 
     @Override
+    public void onMediaPlaylistSeek(double positionSeconds) {
+        player.onMediaPlaylistSeek(positionSeconds);
+    }
+
+    @Override
+    public void onVolume(double volumeLinear) {
+        player.onVolume(volumeLinear);
+    }
+
+    @Override
+    public double volume() {
+        return player.volume();
+    }
+
+    @Override
     public void onControlExchange(ControlExchange exchange) {
         player.onControlExchange(exchange);
         dumpSafely(() -> dump.onControlExchange(exchange));

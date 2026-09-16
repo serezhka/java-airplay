@@ -22,10 +22,21 @@ public class HlsPlaylistState {
     private boolean playbackStarted;
     private String lastMasterBody;
     private volatile boolean waitingForMasterChange;
+    private Double pendingSeekSeconds;
 
     public HlsPlaylistState(String remoteMasterUri, String playlistUriLocal) {
         this.remoteMasterUri = remoteMasterUri;
         this.playlistUriLocal = playlistUriLocal;
+    }
+
+    public void setPendingSeekSeconds(Double pendingSeekSeconds) {
+        this.pendingSeekSeconds = pendingSeekSeconds;
+    }
+
+    public Double takePendingSeekSeconds() {
+        Double seek = pendingSeekSeconds;
+        pendingSeekSeconds = null;
+        return seek;
     }
 
     public int nextFcupRequestId() {

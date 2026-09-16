@@ -68,13 +68,12 @@ public class AirPlayBonjour {
     private Map<String, String> airPlayMDNSProps(String deviceId) {
         HashMap<String, String> airPlayMDNSProps = new HashMap<>();
         airPlayMDNSProps.put("deviceid", deviceId);
-        // Bit 27 (legacy pairing) off: clients skip pair-pin-start and go FairPlay → SETUP.
-        // Legacy Pairing code remains for senders that still use it.
-        airPlayMDNSProps.put("features", "0x527FFEE6,0x0");
-        airPlayMDNSProps.put("srcvers", "220.68");
-        airPlayMDNSProps.put("flags", "0x44");
-        airPlayMDNSProps.put("vv", "2");
-        airPlayMDNSProps.put("model", "AppleTV3,2");
+        // Bit 27 off (legacy pairing); LO bits 0/4/8 restored — see ReceiverProfile.
+        airPlayMDNSProps.put("features", ReceiverProfile.FEATURES_TXT);
+        airPlayMDNSProps.put("srcvers", ReceiverProfile.SOURCE_VERSION);
+        airPlayMDNSProps.put("flags", ReceiverProfile.MDNS_FLAGS);
+        airPlayMDNSProps.put("vv", Integer.toString(ReceiverProfile.VV));
+        airPlayMDNSProps.put("model", ReceiverProfile.MODEL);
         airPlayMDNSProps.put("rhd", "5.6.0.0");
         airPlayMDNSProps.put("pw", "false");
         airPlayMDNSProps.put("pk", "f3769a660475d27b4f6040381d784645e13e21c53e6d2da6a8c3d757086fc336");
@@ -88,8 +87,8 @@ public class AirPlayBonjour {
         airTunesMDNSProps.put("da", "true");
         airTunesMDNSProps.put("et", "0,3,5");
         airTunesMDNSProps.put("ek", "1");
-        airTunesMDNSProps.put("ft", "0x527FFEE6,0x0");
-        airTunesMDNSProps.put("am", "AppleTV3,2");
+        airTunesMDNSProps.put("ft", ReceiverProfile.FEATURES_TXT);
+        airTunesMDNSProps.put("am", ReceiverProfile.MODEL);
         airTunesMDNSProps.put("md", "0,1,2");
         airTunesMDNSProps.put("sr", "44100");
         airTunesMDNSProps.put("ss", "16");
@@ -97,8 +96,8 @@ public class AirPlayBonjour {
         airTunesMDNSProps.put("sm", "false");
         airTunesMDNSProps.put("tp", "UDP");
         airTunesMDNSProps.put("txtvers", "1");
-        airTunesMDNSProps.put("sf", "0x44");
-        airTunesMDNSProps.put("vs", "220.68");
+        airTunesMDNSProps.put("sf", ReceiverProfile.MDNS_FLAGS);
+        airTunesMDNSProps.put("vs", ReceiverProfile.SOURCE_VERSION);
         airTunesMDNSProps.put("vn", "65537");
         airTunesMDNSProps.put("pk", "f3769a660475d27b4f6040381d784645e13e21c53e6d2da6a8c3d757086fc336");
         return airTunesMDNSProps;

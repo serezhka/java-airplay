@@ -75,6 +75,21 @@ public final class InstrumentedConsumer implements AirPlayConsumer {
         delegate.onMediaPlaylistResume();
     }
 
+    @Override
+    public void onMediaPlaylistSeek(double positionSeconds) {
+        delegate.onMediaPlaylistSeek(positionSeconds);
+    }
+
+    @Override
+    public void onVolume(double volumeLinear) {
+        delegate.onVolume(volumeLinear);
+    }
+
+    @Override
+    public double volume() {
+        return delegate.volume();
+    }
+
     public AirPlayConsumer delegate() {
         return delegate;
     }

@@ -60,6 +60,10 @@ public class HlsFcupService {
             cancelMasterPoll(session.getId());
             hls.setWaitingForMasterChange(false);
             airPlayConsumer.onMediaPlaylist(hls.getPlaylistUriLocal());
+            Double seek = hls.takePendingSeekSeconds();
+            if (seek != null && seek > 0) {
+                airPlayConsumer.onMediaPlaylistSeek(seek);
+            }
         } else if (hls.isWaitingForMasterChange()) {
             log.info("HLS master unchanged, scheduling poll session {}", session.getId());
             scheduleMasterPoll(session);
