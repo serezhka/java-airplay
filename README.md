@@ -145,5 +145,4 @@ Default logging is INFO (no request/response bodies). Use DEBUG for wire dumps.
 ```
 
 CI (`.github/workflows/ci.yaml`) runs unit + loopback, then Linux/Windows × ffmpeg/gstreamer/vlc playback.
-On `cursor/cicd-tests` (or `workflow_dispatch` with `bench=true`) it also runs 5-minute benches.
-Reports are published to GitHub Pages after each run.
+Five-minute benches run only via `workflow_dispatch` with `bench=true`. Reports go to GitHub Pages.
