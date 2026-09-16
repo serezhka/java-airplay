@@ -96,7 +96,9 @@ public class GstPlayer implements AirPlayConsumer {
         h264Src.set("do-timestamp", true);
         h264Src.set("emit-signals", true);
 
-        alacPipeline = (Pipeline) Gst.parseLaunch("appsrc name=alac-src ! avdec_alac ! audioconvert ! audioresample ! autoaudiosink sync=false");
+        alacPipeline = (Pipeline) Gst.parseLaunch(
+                "appsrc name=alac-src ! avdec_alac ! audioconvert ! audioresample"
+                        + " ! volume name=alac-vol ! autoaudiosink sync=false");
 
         alacSrc = (AppSrc) alacPipeline.getElementByName("alac-src");
         alacSrc.setStreamType(AppSrc.StreamType.STREAM);
@@ -105,7 +107,9 @@ public class GstPlayer implements AirPlayConsumer {
         alacSrc.set("format", Format.TIME);
         alacSrc.set("emit-signals", true);
 
-        aacEldPipeline = (Pipeline) Gst.parseLaunch("appsrc name=aac-eld-src ! avdec_aac ! audioconvert ! audioresample ! autoaudiosink sync=false");
+        aacEldPipeline = (Pipeline) Gst.parseLaunch(
+                "appsrc name=aac-eld-src ! avdec_aac ! audioconvert ! audioresample"
+                        + " ! volume name=aac-eld-vol ! autoaudiosink sync=false");
 
         aacEldSrc = (AppSrc) aacEldPipeline.getElementByName("aac-eld-src");
         aacEldSrc.setStreamType(AppSrc.StreamType.STREAM);
@@ -116,7 +120,8 @@ public class GstPlayer implements AirPlayConsumer {
 
         // AAC-LC (ct=4): accept ADTS (test client) or raw AUs with LC ASC.
         aacLcPipeline = (Pipeline) Gst.parseLaunch(
-                "appsrc name=aac-lc-src ! aacparse ! avdec_aac ! audioconvert ! audioresample ! autoaudiosink sync=false");
+                "appsrc name=aac-lc-src ! aacparse ! avdec_aac ! audioconvert ! audioresample"
+                        + " ! volume name=aac-lc-vol ! autoaudiosink sync=false");
         aacLcSrc = (AppSrc) aacLcPipeline.getElementByName("aac-lc-src");
         aacLcSrc.setStreamType(AppSrc.StreamType.STREAM);
         aacLcSrc.setCaps(Caps.fromString("audio/mpeg,mpegversion=(int)4,stream-format=adts,channels=(int)2,rate=(int)44100"));
@@ -318,10 +323,20 @@ public class GstPlayer implements AirPlayConsumer {
     @Override
     public void onVolume(double volumeLinear) {
         this.volumeLinear = Math.max(0.0, Math.min(1.0, volumeLinear));
+        applyVolume(alacPipeline, "alac-vol");
+        applyVolume(aacEldPipeline, "aac-eld-vol");
+        applyVolume(aacLcPipeline, "aac-lc-vol");
         if (hlsPipeline != null) {
             hlsPipeline.set("volume", this.volumeLinear);
         }
-        log.debug("Volume set to {}", this.volumeLinear);
+        log.info("Volume set to {}", this.volumeLinear);
+    }
+
+    private void applyVolume(Pipeline pipeline, String elementName) {
+        Element vol = pipeline.getElementByName(elementName);
+        if (vol != null) {
+            vol.set("volume", volumeLinear);
+        }
     }
 
     @Override
