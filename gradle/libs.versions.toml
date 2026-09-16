@@ -18,6 +18,8 @@ gstreamerSwing = "0.9.0"
 m3u8 = "0.30"
 systemTray = "4.4"
 vlcj = "4.11.0"
+javacv = "1.5.11"
+ffmpegPlatform = "7.1-1.5.11"
 spf4j = "8.9.8"
 flatlaf = "3.5.4"
 avro = "1.12.0"
@@ -39,6 +41,8 @@ gst1-java-swing = { module = "org.freedesktop.gstreamer:gst1-java-swing", versio
 m3u8-parser = { module = "io.lindstrom:m3u8-parser", version.ref = "m3u8" }
 system-tray = { module = "com.dorkbox:SystemTray", version.ref = "systemTray" }
 vlcj = { module = "uk.co.caprica:vlcj", version.ref = "vlcj" }
+javacv = { module = "org.bytedeco:javacv", version.ref = "javacv" }
+ffmpeg-platform = { module = "org.bytedeco:ffmpeg-platform", version.ref = "ffmpegPlatform" }
 spf4j-core = { module = "org.spf4j:spf4j-core", version.ref = "spf4j" }
 flatlaf = { module = "com.formdev:flatlaf", version.ref = "flatlaf" }
 avro = { module = "org.apache.avro:avro", version.ref = "avro" }
