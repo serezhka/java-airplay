@@ -1,3 +1,8 @@
+<!--
+  Working draft. Same body as README.md on this branch (for side-by-side edits).
+  Promote by keeping README.md; drop this file when done.
+-->
+
 <!-- markdownlint-disable-next-line -->
 <div align="center">
 
