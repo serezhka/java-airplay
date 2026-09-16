@@ -39,16 +39,31 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Slf4j
 public class ControlHandler extends ChannelInboundHandlerAdapter {
 
+    private static final long SCRUB_PAUSE_GRACE_NANOS = TimeUnit.SECONDS.toNanos(2);
+    /** YouTube often waits ~120–250ms between rate=0 and /scrub; leave headroom. */
+    private static final long PAUSE_DEBOUNCE_MS = 400;
+
     private final SessionManager sessionManager;
     private final HlsFcupService hlsFcupService;
     private final AirPlayConfig airPlayConfig;
     private final AirPlayConsumer airPlayConsumer;
+    private final ScheduledExecutorService rateScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "airplay-rate-debounce");
+        t.setDaemon(true);
+        return t;
+    });
+    private final ConcurrentHashMap<String, ScheduledFuture<?>> pendingPauses = new ConcurrentHashMap<>();
 
     public ControlHandler(SessionManager sessionManager,
                           HlsFcupService hlsFcupService,
@@ -75,6 +90,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     }
 
     private void stopHlsPlayback(Session session) {
+        cancelPendingPause(session.getId());
         hlsFcupService.cancelAllMasterPolls();
         hlsFcupService.clearReverseQueue(session);
         session.setHlsPlaylistState(null);
@@ -444,12 +460,20 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         log.info("POST /rate value={}", value);
 
         if (value == 0) {
-            if (hls != null) {
-                hls.setPlaybackRate(0);
+            cancelPendingPause(session.getId());
+            if (hls != null && hls.shouldIgnorePause()) {
+                // Client brackets scrub with rate=0; keep pipeline + phone UI on "playing".
+                log.info("Ignoring rate=0 during scrub grace session={}", session.getId());
+                hls.setPlaybackRate(1);
+                hlsFcupService.sendPlaybackStateEvent(session, "playing");
+            } else {
+                // YouTube sends rate=0 immediately before /scrub; debounce so scrub can cancel it.
+                ScheduledFuture<?> future = rateScheduler.schedule(
+                        () -> applyPause(session), PAUSE_DEBOUNCE_MS, TimeUnit.MILLISECONDS);
+                pendingPauses.put(session.getId(), future);
             }
-            airPlayConsumer.onMediaPlaylistPause();
-            hlsFcupService.sendPlaybackStateEvent(session, "paused");
         } else {
+            cancelPendingPause(session.getId());
             if (hls != null) {
                 hls.setPlaybackRate(1);
             }
@@ -461,6 +485,26 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         sendResponse(ctx, request, response);
     }
 
+    private void applyPause(Session session) {
+        var hls = session.getHlsPlaylistState();
+        if (hls != null && hls.shouldIgnorePause()) {
+            log.info("Skipping debounced pause during scrub grace session={}", session.getId());
+            return;
+        }
+        if (hls != null) {
+            hls.setPlaybackRate(0);
+        }
+        airPlayConsumer.onMediaPlaylistPause();
+        hlsFcupService.sendPlaybackStateEvent(session, "paused");
+    }
+
+    private void cancelPendingPause(String sessionId) {
+        ScheduledFuture<?> future = pendingPauses.remove(sessionId);
+        if (future != null) {
+            future.cancel(false);
+        }
+    }
+
     private void handleScrub(ChannelHandlerContext ctx, FullHttpRequest request) {
         var decoder = new QueryStringDecoder(request.uri());
         var positions = decoder.parameters().get("position");
@@ -469,12 +513,18 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 double position = Double.parseDouble(positions.get(0));
                 log.info("POST /scrub position={}", position);
                 var session = resolveSession(request);
+                cancelPendingPause(session.getId());
                 var hls = session.getHlsPlaylistState();
+                if (hls != null) {
+                    hls.markScrubGrace(SCRUB_PAUSE_GRACE_NANOS);
+                    hls.setPlaybackRate(1);
+                }
                 if (hls != null && !hls.isPlaybackStarted()) {
                     hls.setPendingSeekSeconds(position);
                     log.info("Deferring /scrub to pending seek until HLS starts");
                 } else {
                     airPlayConsumer.onMediaPlaylistSeek(position);
+                    hlsFcupService.sendPlaybackStateEvent(session, "playing");
                 }
             } catch (NumberFormatException e) {
                 log.warn("Invalid /scrub position: {}", positions.get(0));
@@ -611,9 +661,10 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             try {
                 if (fcupResponseURL.contains("master.m3u8")) {
                     if (hls.isPlaybackStarted()) {
-                        hlsFcupService.onMasterRefreshDuringPlayback(session, body);
+                        hlsFcupService.onMasterRefreshDuringPlayback(session, body, fcupResponse, remoteMediaUris);
                     } else {
                         hls.storeMasterPlaylist(body, remoteMediaUris);
+                        hls.recordRawMasterIfChanged(fcupResponse);
                         log.info("HLS master received: {} media playlists queued, state={}", hls.pendingMediaUriCount(), hls);
                         if (!hls.isPlaybackStarted()) {
                             hls.markPlaybackStarted();
@@ -632,7 +683,16 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
 
             replyPendingPlaylists(session, fcupResponseURL, body);
 
-            if (!hls.isWaitingForMasterChange()) {
+            if (hls.isPostEosMediaRefreshing()) {
+                // Only advance on mediadata responses — master handler already queued the first URI.
+                if (fcupResponseURL.contains("mediadata.m3u8")) {
+                    if (hls.hasMoreMediaUris()) {
+                        hlsFcupService.sendFcupRequest(session, hls.nextMediaUri());
+                    } else {
+                        hlsFcupService.onPostEosMediaRefreshComplete(session);
+                    }
+                }
+            } else if (!hls.isWaitingForMasterChange()) {
                 continueMediaPrefetch(session, hls);
             }
             return;
@@ -781,7 +841,9 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
 
     private String playlistBaseUrl(ChannelHandlerContext ctx) {
         var port = ((ServerSocketChannel) ctx.channel().parent()).localAddress().getPort();
-        return String.format("http://localhost:%s/playlist", port);
+        // Use IPv4 loopback: on Windows "localhost" often resolves to ::1 while the
+        // control server listens on IPv4, so the local HLS consumer cannot fetch playlists.
+        return String.format("http://127.0.0.1:%s/playlist", port);
     }
 
     private String masterPlaylistToLocalUrls(String masterPlaylist, String baseUrl, String sessionId) {

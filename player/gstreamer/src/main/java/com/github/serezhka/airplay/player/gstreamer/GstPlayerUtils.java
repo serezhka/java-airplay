@@ -69,6 +69,14 @@ class GstPlayerUtils {
                     Kernel32.INSTANCE.SetEnvironmentVariable("PATH", gstPath
                             + File.pathSeparator + systemPath);
                 }
+                File binDir = new File(gstPath);
+                File rootDir = binDir.getName().equalsIgnoreCase("bin") ? binDir.getParentFile() : binDir;
+                if (rootDir != null) {
+                    File plugins = new File(rootDir, "lib\\gstreamer-1.0");
+                    if (plugins.isDirectory()) {
+                        Kernel32.INSTANCE.SetEnvironmentVariable("GST_PLUGIN_PATH", plugins.getAbsolutePath());
+                    }
+                }
             }
         } else {
             StringBuilder jnaPath = new StringBuilder(System.getProperty("jna.library.path", "").trim());

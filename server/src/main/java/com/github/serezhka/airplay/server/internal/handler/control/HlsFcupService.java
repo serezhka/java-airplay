@@ -12,6 +12,7 @@ import io.netty.handler.codec.http.HttpVersion;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayDeque;
+import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
@@ -47,26 +48,42 @@ public class HlsFcupService {
             if (hls == null || !hls.isPlaybackStarted()) {
                 continue;
             }
-            log.info("HLS ended, notifying client + polling master session {}", session.getId());
+            // Do NOT send "stopped": YouTube treats that as end-of-item, closes the reverse
+            // event channel, and never delivers the next master (ad → content hang).
+            log.info("HLS ended, requesting master refresh (keep session) {}", session.getId());
             hls.abortMediaPrefetch();
             hls.setWaitingForMasterChange(true);
             hls.invalidatePlaylists();
-            sendPlaybackStateEvent(session, "stopped");
+            sendPlaybackStateEvent(session, "loading");
             requestMasterRefresh(session);
             scheduleMasterPoll(session);
         }
     }
 
-    public void onMasterRefreshDuringPlayback(Session session, String rewrittenBody) {
+    public void onMasterRefreshDuringPlayback(Session session, String rewrittenBody, String rawBody,
+                                              List<String> remoteMediaUris) {
         var hls = session.getHlsPlaylistState();
         if (hls == null || !hls.isPlaybackStarted()) {
             return;
         }
-        boolean changed = hls.recordMasterIfChanged(rewrittenBody);
+        boolean rewrittenChanged = hls.recordMasterIfChanged(rewrittenBody);
+        boolean rawChanged = hls.recordRawMasterIfChanged(rawBody);
+        boolean changed = rewrittenChanged || rawChanged;
         if (changed) {
-            log.info("HLS master changed, restarting playback session {}", session.getId());
+            log.info("HLS master changed (rewritten={}, raw={}), restarting playback session {}",
+                    rewrittenChanged, rawChanged, session.getId());
             cancelMasterPoll(session.getId());
             hls.setWaitingForMasterChange(false);
+            if (remoteMediaUris != null && !remoteMediaUris.isEmpty()) {
+                try {
+                    hls.storeMasterPlaylist(rewrittenBody, remoteMediaUris);
+                } catch (Exception e) {
+                    log.warn("Failed to refresh media URI list after master change", e);
+                    hls.updateMasterPlaylist(rewrittenBody);
+                }
+            } else {
+                hls.updateMasterPlaylist(rewrittenBody);
+            }
             airPlayConsumer.onMediaPlaylist(hls.getPlaylistUriLocal());
             sendPlaybackStateEvent(session, "playing");
             Double seek = hls.takePendingSeekSeconds();
@@ -74,10 +91,41 @@ public class HlsFcupService {
                 airPlayConsumer.onMediaPlaylistSeek(seek);
             }
         } else if (hls.isWaitingForMasterChange()) {
-            log.info("HLS master unchanged, scheduling poll session {}", session.getId());
-            scheduleMasterPoll(session);
+            if (hls.isPostEosMediaRefreshing()) {
+                log.debug("HLS master unchanged, media refresh still in flight session={}", session.getId());
+                return;
+            }
+            // Same master URI list — YouTube often only updates mediadata (ad → content).
+            log.info("HLS master unchanged after EOS, refreshing media playlists session={}", session.getId());
+            hls.updateMasterPlaylist(rewrittenBody);
+            hls.beginPostEosMediaRefresh(remoteMediaUris);
+            String first = hls.nextMediaUri();
+            if (first != null) {
+                sendFcupRequest(session, first);
+            } else {
+                scheduleMasterPoll(session);
+            }
         } else {
             log.info("HLS master refreshed during playback, bytes={}", rewrittenBody.length());
+        }
+    }
+
+    /** Called when a post-EOS media FCUP round finishes (all queued mediadata fetched). */
+    public void onPostEosMediaRefreshComplete(Session session) {
+        var hls = session.getHlsPlaylistState();
+        if (hls == null || !hls.isPostEosMediaRefreshing()) {
+            return;
+        }
+        boolean mediaChanged = hls.finishPostEosMediaRefresh();
+        if (mediaChanged) {
+            log.info("HLS media playlists changed after EOS, restarting playback session {}", session.getId());
+            cancelMasterPoll(session.getId());
+            hls.setWaitingForMasterChange(false);
+            airPlayConsumer.onMediaPlaylist(hls.getPlaylistUriLocal());
+            sendPlaybackStateEvent(session, "playing");
+        } else {
+            log.info("HLS media unchanged after EOS, polling master session {}", session.getId());
+            scheduleMasterPoll(session);
         }
     }
 

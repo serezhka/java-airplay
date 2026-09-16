@@ -1,0 +1,317 @@
+package com.github.serezhka.airplay.player.gstreamer;
+
+import com.github.serezhka.airplay.lib.HlsLifecycle;
+import com.sun.jna.Native;
+import lombok.extern.slf4j.Slf4j;
+import org.freedesktop.gstreamer.Bus;
+import org.freedesktop.gstreamer.BusSyncReply;
+import org.freedesktop.gstreamer.Element;
+import org.freedesktop.gstreamer.ElementFactory;
+import org.freedesktop.gstreamer.Format;
+import org.freedesktop.gstreamer.Gst;
+import org.freedesktop.gstreamer.Pipeline;
+import org.freedesktop.gstreamer.State;
+import org.freedesktop.gstreamer.event.SeekFlags;
+import org.freedesktop.gstreamer.event.SeekType;
+import org.freedesktop.gstreamer.interfaces.VideoOverlay;
+
+import javax.swing.JFrame;
+import java.util.EnumSet;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+
+/**
+ * HLS URI playback via {@code playbin3} (fallback {@code playbin}).
+ * <p>
+ * Modern {@code hlsdemux2} needs a streams-aware context; plain {@code uridecodebin} does not
+ * provide one. A custom demux graph is a follow-up.
+ */
+@Slf4j
+final class GstHlsPipeline {
+
+    private final ScheduledExecutorService seekScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "hls-seek-retry");
+        t.setDaemon(true);
+        return t;
+    });
+
+    private Pipeline pipeline;
+    private Element videoSink;
+    private JFrame window;
+    private String uri;
+    private volatile Double pendingSeekSeconds;
+    private final AtomicInteger seekAttempts = new AtomicInteger();
+    private ScheduledFuture<?> seekRetry;
+    private volatile boolean paused;
+    private volatile double positionBaseSeconds;
+    private volatile long positionAnchorNanos;
+    private volatile double playlistDurationSeconds;
+
+    void start(String playlistUri, double volumeLinear) {
+        stop();
+        uri = playlistUri;
+        paused = false;
+        positionBaseSeconds = 0;
+        positionAnchorNanos = System.nanoTime();
+
+        boolean headless = Boolean.parseBoolean(System.getProperty("airplay.gst.hls.headless", "false"));
+        GstVideoSinkFactory.Result display = null;
+        if (headless) {
+            videoSink = ElementFactory.make("fakesink", "hls-sink");
+            // Keep clock sync in headless smoke tests too.
+            videoSink.set("sync", true);
+            videoSink.set("async", false);
+        } else {
+            // sync=true: share pipeline clock with playbin audio (avoids free-run desync).
+            display = GstVideoSinkFactory.create("hls", true);
+            videoSink = display.sink();
+        }
+
+        String launch = ElementFactory.find("playbin3") != null ? "playbin3 name=hls" : "playbin name=hls";
+        pipeline = (Pipeline) Gst.parseLaunch(launch);
+        pipeline.set("uri", playlistUri);
+        pipeline.set("volume", clampVolume(volumeLinear));
+        pipeline.set("video-sink", videoSink);
+        log.info("HLS pipeline using {} headless={}", launch.split(" ")[0], headless);
+
+        if (!headless && display != null && display.overlay() && display.canvas() != null) {
+            window = GstFullscreenWindow.create(display.canvas());
+            GstFullscreenWindow.show(window);
+            Element overlaySink = GstVideoSinkFactory.overlayTarget(videoSink, "hls-sink");
+            VideoOverlay overlay = VideoOverlay.wrap(overlaySink);
+            long hwnd = Native.getComponentID(display.canvas());
+            pipeline.getBus().setSyncHandler(message -> {
+                if (!VideoOverlay.isPrepareWindowHandleMessage(message)) {
+                    return BusSyncReply.PASS;
+                }
+                // Never invokeAndWait(EDT) from a GST sync handler — deadlocks d3d11 on Windows.
+                overlay.setWindowHandle(hwnd);
+                return BusSyncReply.DROP;
+            });
+        }
+
+        pipeline.getBus().connect((Bus.EOS) source -> {
+            if (uri == null) {
+                return;
+            }
+            log.info("HLS ended, requesting playlist refresh for {}", uri);
+            HlsLifecycle.notifyEnded();
+        });
+        pipeline.getBus().connect((Bus.ERROR) (source, code, message) ->
+                log.error("HLS pipeline error: code={} message={}", code, message));
+        pipeline.getBus().connect((Bus.WARNING) (source, code, message) ->
+                log.warn("HLS pipeline warning: code={} message={}", code, message));
+        pipeline.getBus().connect((Bus.ASYNC_DONE) source -> {
+            tryPendingSeek("async-done");
+            ensurePlaying("async-done");
+        });
+        pipeline.getBus().connect((Bus.DURATION_CHANGED) source -> tryPendingSeek("duration"));
+        pipeline.getBus().connect((Bus.STATE_CHANGED) (source, old, current, pending) -> {
+            if (source == pipeline && current == State.PLAYING) {
+                tryPendingSeek("playing");
+            }
+        });
+
+        pipeline.play();
+        tryPendingSeek("start");
+        log.info("HLS pipeline started uri={}", playlistUri);
+    }
+
+    void stop() {
+        cancelSeekRetry();
+        pendingSeekSeconds = null;
+        seekAttempts.set(0);
+        paused = false;
+        positionBaseSeconds = 0;
+        positionAnchorNanos = 0;
+        playlistDurationSeconds = 0;
+        uri = null;
+        if (pipeline != null) {
+            try {
+                pipeline.setState(State.NULL);
+            } catch (Throwable t) {
+                log.debug("HLS setState(NULL) failed: {}", t.toString());
+            }
+            try {
+                pipeline.dispose();
+            } catch (Throwable t) {
+                log.debug("HLS dispose failed: {}", t.toString());
+            }
+            pipeline = null;
+        }
+        videoSink = null;
+        if (window != null) {
+            GstFullscreenWindow.hide(window);
+            window = null;
+        }
+    }
+
+    void pause() {
+        if (pipeline == null) {
+            return;
+        }
+        double gstPos = querySeconds(false);
+        positionBaseSeconds = gstPos > 0 ? gstPos : currentPositionSeconds();
+        paused = true;
+        pipeline.pause();
+        log.info("HLS paused at {}s", positionBaseSeconds);
+    }
+
+    void resume() {
+        if (pipeline == null) {
+            return;
+        }
+        paused = false;
+        positionAnchorNanos = System.nanoTime();
+        double pos = positionBaseSeconds;
+        pipeline.play();
+        // playbin3 often stays frozen after PAUSED→PLAYING without a flush seek.
+        if (pos > 0.05) {
+            pendingSeekSeconds = pos;
+            seekAttempts.set(0);
+            tryPendingSeek("resume");
+        }
+        log.info("HLS resumed from {}s", pos);
+    }
+
+    void seek(double positionSeconds) {
+        if (positionSeconds < 0) {
+            return;
+        }
+        positionBaseSeconds = positionSeconds;
+        positionAnchorNanos = System.nanoTime();
+        paused = false;
+        if (pipeline != null) {
+            pipeline.play();
+        }
+        pendingSeekSeconds = positionSeconds;
+        seekAttempts.set(0);
+        tryPendingSeek("request");
+    }
+
+    void noteMediaDuration(double seconds) {
+        if (seconds > playlistDurationSeconds) {
+            playlistDurationSeconds = seconds;
+        }
+    }
+
+    void setVolume(double volumeLinear) {
+        if (pipeline != null) {
+            pipeline.set("volume", clampVolume(volumeLinear));
+        }
+    }
+
+    boolean isActive() {
+        return pipeline != null || uri != null;
+    }
+
+    double currentPositionSeconds() {
+        if (paused || positionAnchorNanos == 0) {
+            return positionBaseSeconds;
+        }
+        double elapsed = (System.nanoTime() - positionAnchorNanos) / 1_000_000_000.0;
+        return Math.max(0, positionBaseSeconds + elapsed);
+    }
+
+    /** Raw pipeline clock position (0 if unknown) — for smoke tests. */
+    double pipelinePositionSeconds() {
+        return querySeconds(false);
+    }
+
+    double durationSeconds() {
+        double gst = querySeconds(true);
+        return gst > 0 ? gst : playlistDurationSeconds;
+    }
+
+    boolean isPaused() {
+        return paused;
+    }
+
+    private void ensurePlaying(String reason) {
+        if (pipeline == null || paused) {
+            return;
+        }
+        pipeline.play();
+        log.debug("HLS ensure PLAYING ({})", reason);
+    }
+
+    private void tryPendingSeek(String reason) {
+        Double seek = pendingSeekSeconds;
+        Pipeline pipe = pipeline;
+        if (seek == null || pipe == null) {
+            return;
+        }
+        if (seek < 0.05 && ("start".equals(reason) || reason.startsWith("retry-"))) {
+            pendingSeekSeconds = null;
+            seekAttempts.set(0);
+            cancelSeekRetry();
+            positionBaseSeconds = 0;
+            positionAnchorNanos = System.nanoTime();
+            log.debug("Skipping no-op HLS seek to {}s ({})", seek, reason);
+            return;
+        }
+        long ns = (long) (seek * 1_000_000_000L);
+        boolean ok = pipe.seek(
+                1.0,
+                Format.TIME,
+                EnumSet.of(SeekFlags.FLUSH, SeekFlags.KEY_UNIT),
+                SeekType.SET,
+                ns,
+                SeekType.NONE,
+                -1);
+        log.info("HLS seek to {}s -> {} ({})", seek, ok, reason);
+        if (ok) {
+            pendingSeekSeconds = null;
+            seekAttempts.set(0);
+            cancelSeekRetry();
+            positionBaseSeconds = seek;
+            positionAnchorNanos = System.nanoTime();
+            if (!paused) {
+                pipe.play();
+            }
+            return;
+        }
+        int attempt = seekAttempts.incrementAndGet();
+        if (attempt > 40) {
+            log.warn("Giving up HLS seek to {}s after {} attempts", seek, attempt);
+            pendingSeekSeconds = null;
+            cancelSeekRetry();
+            return;
+        }
+        cancelSeekRetry();
+        seekRetry = seekScheduler.schedule(() -> tryPendingSeek("retry-" + attempt), 250, TimeUnit.MILLISECONDS);
+    }
+
+    private void cancelSeekRetry() {
+        ScheduledFuture<?> future = seekRetry;
+        seekRetry = null;
+        if (future != null) {
+            future.cancel(false);
+        }
+    }
+
+    private double querySeconds(boolean duration) {
+        Pipeline pipe = pipeline;
+        if (pipe == null) {
+            return 0;
+        }
+        try {
+            long nanos = duration
+                    ? pipe.queryDuration(TimeUnit.NANOSECONDS)
+                    : pipe.queryPosition(TimeUnit.NANOSECONDS);
+            if (nanos <= 0 || nanos == Long.MAX_VALUE) {
+                return 0;
+            }
+            return nanos / 1_000_000_000.0;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    private static double clampVolume(double volumeLinear) {
+        return Math.max(0.0, Math.min(1.0, volumeLinear));
+    }
+}

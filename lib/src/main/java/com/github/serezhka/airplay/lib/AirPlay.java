@@ -65,7 +65,13 @@ public class AirPlay {
      * Sets encrypted EAS key and IV or retrieves media stream info
      */
     public Optional<MediaStreamInfo> rtspSetup(InputStream in) throws Exception {
-        return rtsp.setup(in);
+        Optional<MediaStreamInfo> mediaStreamInfo = rtsp.setup(in);
+        // YouTube ads / next item send a new type-110 stream with a new streamConnectionID.
+        // Reusing the previous AES-CTR decryptor yields garbage NALs for the new stream.
+        if (mediaStreamInfo.isPresent() && mediaStreamInfo.get() instanceof VideoStreamInfo) {
+            fairPlayVideoDecryptor = null;
+        }
+        return mediaStreamInfo;
     }
 
     /**
@@ -74,7 +80,11 @@ public class AirPlay {
      * Retrieves media stream info
      */
     public Optional<MediaStreamInfo> rtspTeardown(InputStream in) throws Exception {
-        return rtsp.teardown(in);
+        Optional<MediaStreamInfo> mediaStreamInfo = rtsp.teardown(in);
+        if (mediaStreamInfo.isPresent() && mediaStreamInfo.get() instanceof VideoStreamInfo) {
+            fairPlayVideoDecryptor = null;
+        }
+        return mediaStreamInfo;
     }
 
 

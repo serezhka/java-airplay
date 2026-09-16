@@ -8,6 +8,7 @@ import io.lindstrom.m3u8.parser.PlaylistParserException;
 import lombok.Getter;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,22 +20,38 @@ public class HlsPlaylistState {
     private final String playlistUriLocal;
     private final List<String> pendingMediaUris = new ArrayList<>();
     private final Map<String, String> playlists = new LinkedHashMap<>();
+    /** Hashes of last-seen mediadata bodies; survive {@link #invalidatePlaylists()} for EOS compare. */
+    private final Map<String, Integer> mediaBodyHashes = new HashMap<>();
 
     private int nextMediaUriIndex;
     private int fcupRequestId = 1;
     private boolean masterReceived;
     private boolean playbackStarted;
     private String lastMasterBody;
+    /** Unfiltered FCUP master — AVC rewrite can hide ad→content changes. */
+    private String lastRawMasterBody;
     private volatile boolean waitingForMasterChange;
+    private volatile boolean postEosMediaRefreshing;
+    private volatile boolean postEosMediaChanged;
     private Double pendingSeekSeconds;
     /** Best-effort VOD duration from media playlist {@code #EXTINF} sums. */
     private volatile double mediaDurationSeconds;
     /** AirPlay playback rate: {@code 0} paused, {@code 1} playing. */
     private volatile double playbackRate = 1;
+    /** Ignore rate=0 until this nanoTime (YouTube pauses around /scrub). */
+    private volatile long ignorePauseUntilNanos;
 
     public HlsPlaylistState(String remoteMasterUri, String playlistUriLocal) {
         this.remoteMasterUri = remoteMasterUri;
         this.playlistUriLocal = playlistUriLocal;
+    }
+
+    public void markScrubGrace(long durationNanos) {
+        ignorePauseUntilNanos = System.nanoTime() + Math.max(0, durationNanos);
+    }
+
+    public boolean shouldIgnorePause() {
+        return System.nanoTime() < ignorePauseUntilNanos;
     }
 
     public void setPendingSeekSeconds(Double pendingSeekSeconds) {
@@ -52,11 +69,17 @@ public class HlsPlaylistState {
     }
 
     public void putPlaylist(String remoteUri, String body) {
-        playlists.put(normalizeUri(remoteUri), body);
+        String key = normalizeUri(remoteUri);
+        playlists.put(key, body);
         if (remoteUri.contains("mediadata.m3u8")) {
             double duration = sumMediaDurationSeconds(body);
             if (duration > mediaDurationSeconds) {
                 mediaDurationSeconds = duration;
+            }
+            int hash = body.hashCode();
+            Integer prev = mediaBodyHashes.put(key, hash);
+            if (postEosMediaRefreshing && prev != null && prev != hash) {
+                postEosMediaChanged = true;
             }
         }
     }
@@ -114,12 +137,60 @@ public class HlsPlaylistState {
         return true;
     }
 
+    /** Track raw (pre-AVC-filter) master; returns true when bytes differ from last EOS cycle. */
+    public boolean recordRawMasterIfChanged(String rawMaster) {
+        if (rawMaster == null) {
+            return false;
+        }
+        if (lastRawMasterBody != null && rawMaster.equals(lastRawMasterBody)) {
+            return false;
+        }
+        lastRawMasterBody = rawMaster;
+        return true;
+    }
+
+    /**
+     * After ad EOS YouTube often keeps the same master URI list and only updates mediadata.
+     * Re-queue media FCUP so we can detect that and restart.
+     */
+    public void beginPostEosMediaRefresh(List<String> remoteMediaUris) {
+        postEosMediaRefreshing = true;
+        postEosMediaChanged = false;
+        pendingMediaUris.clear();
+        if (remoteMediaUris != null) {
+            for (String uri : remoteMediaUris) {
+                pendingMediaUris.add(normalizeUri(uri));
+            }
+        }
+        nextMediaUriIndex = 0;
+    }
+
+    public boolean isPostEosMediaRefreshing() {
+        return postEosMediaRefreshing;
+    }
+
+    /** @return true if any mediadata body changed during the refresh */
+    public boolean finishPostEosMediaRefresh() {
+        postEosMediaRefreshing = false;
+        boolean changed = postEosMediaChanged;
+        postEosMediaChanged = false;
+        return changed;
+    }
+
+    public void cancelPostEosMediaRefresh() {
+        postEosMediaRefreshing = false;
+        postEosMediaChanged = false;
+    }
+
     public boolean isWaitingForMasterChange() {
         return waitingForMasterChange;
     }
 
     public void setWaitingForMasterChange(boolean waitingForMasterChange) {
         this.waitingForMasterChange = waitingForMasterChange;
+        if (!waitingForMasterChange) {
+            cancelPostEosMediaRefresh();
+        }
     }
 
     public String getPlaylist(String remoteUri) {

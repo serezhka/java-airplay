@@ -74,20 +74,28 @@ class HlsPlaylistStateTest {
     }
 
     @Test
-    void putPlaylistTracksLongestMediaDuration() {
+    void postEosMediaRefreshDetectsChangedMediadata() {
         var hls = new HlsPlaylistState("mlhls://localhost/master.m3u8", "http://localhost/playlist/master.m3u8?session=x");
-        hls.putPlaylist("mlhls://localhost/itag/229/mediadata.m3u8", """
-                #EXTM3U
-                #EXTINF:10.0,
-                a.ts
-                #EXT-X-ENDLIST
-                """);
-        hls.putPlaylist("mlhls://localhost/itag/233/mediadata.m3u8", """
-                #EXTM3U
-                #EXTINF:3.0,
-                a.ts
-                #EXT-X-ENDLIST
-                """);
-        assertEquals(10.0, hls.getMediaDurationSeconds(), 0.001);
+        String uri = "mlhls://localhost/itag/229/mediadata.m3u8";
+        hls.putPlaylist(uri, "#EXTM3U\n#EXTINF:6.0,\nad.ts\n#EXT-X-ENDLIST\n");
+        hls.beginPostEosMediaRefresh(List.of(uri));
+        assertTrue(hls.isPostEosMediaRefreshing());
+        assertEquals(uri, hls.nextMediaUri());
+        hls.putPlaylist(uri, "#EXTM3U\n#EXTINF:6.0,\nad.ts\n#EXT-X-ENDLIST\n");
+        assertFalse(hls.finishPostEosMediaRefresh());
+
+        hls.putPlaylist(uri, "#EXTM3U\n#EXTINF:6.0,\nad.ts\n#EXT-X-ENDLIST\n");
+        hls.beginPostEosMediaRefresh(List.of(uri));
+        hls.nextMediaUri();
+        hls.putPlaylist(uri, "#EXTM3U\n#EXTINF:30.0,\ncontent.ts\n#EXT-X-ENDLIST\n");
+        assertTrue(hls.finishPostEosMediaRefresh());
+    }
+
+    @Test
+    void recordRawMasterIfChangedIgnoresIdenticalBodies() {
+        var hls = new HlsPlaylistState("mlhls://localhost/master.m3u8", "http://localhost/playlist/master.m3u8?session=x");
+        assertTrue(hls.recordRawMasterIfChanged("raw-v1"));
+        assertFalse(hls.recordRawMasterIfChanged("raw-v1"));
+        assertTrue(hls.recordRawMasterIfChanged("raw-v2"));
     }
 }
