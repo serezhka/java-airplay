@@ -229,6 +229,10 @@ public class GstPlayer implements AirPlayConsumer {
         if (playlistUri == null || !playlistUri.contains("mediadata.m3u8") || content == null) {
             return;
         }
+        // Ignore sliding-window live playlists — their EXTINF sums inflate ad duration.
+        if (!content.contains("#EXT-X-ENDLIST")) {
+            return;
+        }
         double sum = 0;
         for (String line : content.split("\n")) {
             if (line.startsWith("#EXTINF:")) {

@@ -33,11 +33,18 @@ public class HlsPlaylistState {
     private volatile boolean waitingForMasterChange;
     private volatile boolean postEosMediaRefreshing;
     private volatile boolean postEosMediaChanged;
+    /** After EOS, at most one full mediadata FCUP sweep; further polls are master-only. */
+    private volatile boolean postEosMediaSweepDone;
     private Double pendingSeekSeconds;
     /** Best-effort VOD duration from media playlist {@code #EXTINF} sums. */
     private volatile double mediaDurationSeconds;
     /** AirPlay playback rate: {@code 0} paused, {@code 1} playing. */
     private volatile double playbackRate = 1;
+    /**
+     * {@code AVPlayerActionAtItemEnd}: 0=advance, 1=pause, 2=none.
+     * YouTube sets pause (1) — on EOS we must pause and wait for the next {@code /play}.
+     */
+    private volatile int actionAtItemEnd = 1;
     /** Ignore rate=0 until this nanoTime (YouTube pauses around /scrub). */
     private volatile long ignorePauseUntilNanos;
 
@@ -72,8 +79,10 @@ public class HlsPlaylistState {
         String key = normalizeUri(remoteUri);
         playlists.put(key, body);
         if (remoteUri.contains("mediadata.m3u8")) {
+            // Only VOD (#EXT-X-ENDLIST) may raise duration. Sliding-window live sums used to
+            // inflate a 15s ad to multi-hour lengths and broke YouTube's item state machine.
             double duration = sumMediaDurationSeconds(body);
-            if (duration > mediaDurationSeconds) {
+            if (duration > 0 && body.contains("#EXT-X-ENDLIST") && duration > mediaDurationSeconds) {
                 mediaDurationSeconds = duration;
             }
             int hash = body.hashCode();
@@ -86,6 +95,14 @@ public class HlsPlaylistState {
 
     public void setPlaybackRate(double playbackRate) {
         this.playbackRate = playbackRate <= 0 ? 0 : 1;
+    }
+
+    public void setActionAtItemEnd(int actionAtItemEnd) {
+        this.actionAtItemEnd = actionAtItemEnd;
+    }
+
+    public int getActionAtItemEnd() {
+        return actionAtItemEnd;
     }
 
     public void invalidatePlaylists() {
@@ -182,6 +199,18 @@ public class HlsPlaylistState {
         postEosMediaChanged = false;
     }
 
+    public void resetPostEosMediaSweep() {
+        postEosMediaSweepDone = false;
+    }
+
+    public void markPostEosMediaSweepDone() {
+        postEosMediaSweepDone = true;
+    }
+
+    public boolean isPostEosMediaSweepDone() {
+        return postEosMediaSweepDone;
+    }
+
     public boolean isWaitingForMasterChange() {
         return waitingForMasterChange;
     }
@@ -190,6 +219,7 @@ public class HlsPlaylistState {
         this.waitingForMasterChange = waitingForMasterChange;
         if (!waitingForMasterChange) {
             cancelPostEosMediaRefresh();
+            postEosMediaSweepDone = false;
         }
     }
 

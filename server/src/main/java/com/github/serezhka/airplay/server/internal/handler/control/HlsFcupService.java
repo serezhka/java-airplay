@@ -48,12 +48,26 @@ public class HlsFcupService {
             if (hls == null || !hls.isPlaybackStarted()) {
                 continue;
             }
-            // Do NOT send "stopped": YouTube treats that as end-of-item, closes the reverse
-            // event channel, and never delivers the next master (ad → content hang).
-            log.info("HLS ended, requesting master refresh (keep session) {}", session.getId());
+            cancelMasterPoll(session.getId());
             hls.abortMediaPrefetch();
+            hls.setWaitingForMasterChange(false);
+            hls.setPlaybackRate(0);
+
+            int action = hls.getActionAtItemEnd();
+            // actionAtItemEnd=pause means the *player* must not auto-advance; the client
+            // (YouTube) advances the queue. Signal end-of-item with "stopped" — "paused"
+            // looks like a user pause and YouTube never sends the next /play.
+            // Do not FCUP-poll here: next item arrives as playlistRemove + POST /play.
+            if (action == 1 || action == 2) {
+                log.info("HLS ended, actionAtItemEnd={} → stopped (await next item) session={}",
+                        action, session.getId());
+                sendPlaybackStateEvent(session, "stopped");
+                continue;
+            }
+            log.info("HLS ended, actionAtItemEnd=advance, requesting master refresh session={}",
+                    session.getId());
             hls.setWaitingForMasterChange(true);
-            hls.invalidatePlaylists();
+            hls.resetPostEosMediaSweep();
             sendPlaybackStateEvent(session, "loading");
             requestMasterRefresh(session);
             scheduleMasterPoll(session);
@@ -95,14 +109,21 @@ public class HlsFcupService {
                 log.debug("HLS master unchanged, media refresh still in flight session={}", session.getId());
                 return;
             }
-            // Same master URI list — YouTube often only updates mediadata (ad → content).
-            log.info("HLS master unchanged after EOS, refreshing media playlists session={}", session.getId());
             hls.updateMasterPlaylist(rewrittenBody);
-            hls.beginPostEosMediaRefresh(remoteMediaUris);
-            String first = hls.nextMediaUri();
-            if (first != null) {
-                sendFcupRequest(session, first);
+            // One full mediadata sweep after EOS; further polls only hit master so we do not
+            // starve the reverse /event channel (playlistRemove / next /play).
+            if (!hls.isPostEosMediaSweepDone()) {
+                log.info("HLS master unchanged after EOS, refreshing media playlists session={}", session.getId());
+                hls.beginPostEosMediaRefresh(remoteMediaUris);
+                String first = hls.nextMediaUri();
+                if (first != null) {
+                    sendFcupRequest(session, first);
+                } else {
+                    hls.markPostEosMediaSweepDone();
+                    scheduleMasterPoll(session);
+                }
             } else {
+                log.debug("HLS master still unchanged, master-only poll session={}", session.getId());
                 scheduleMasterPoll(session);
             }
         } else {
@@ -117,6 +138,7 @@ public class HlsFcupService {
             return;
         }
         boolean mediaChanged = hls.finishPostEosMediaRefresh();
+        hls.markPostEosMediaSweepDone();
         if (mediaChanged) {
             log.info("HLS media playlists changed after EOS, restarting playback session {}", session.getId());
             cancelMasterPoll(session.getId());

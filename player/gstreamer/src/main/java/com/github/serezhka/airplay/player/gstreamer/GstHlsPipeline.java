@@ -46,16 +46,20 @@ final class GstHlsPipeline {
     private final AtomicInteger seekAttempts = new AtomicInteger();
     private ScheduledFuture<?> seekRetry;
     private volatile boolean paused;
+    private volatile boolean ended;
     private volatile double positionBaseSeconds;
     private volatile long positionAnchorNanos;
     private volatile double playlistDurationSeconds;
+    private volatile long lastEndedNotifyNanos;
 
     void start(String playlistUri, double volumeLinear) {
         stop();
         uri = playlistUri;
         paused = false;
+        ended = false;
         positionBaseSeconds = 0;
         positionAnchorNanos = System.nanoTime();
+        lastEndedNotifyNanos = 0;
 
         boolean headless = Boolean.parseBoolean(System.getProperty("airplay.gst.hls.headless", "false"));
         GstVideoSinkFactory.Result display = null;
@@ -97,11 +101,15 @@ final class GstHlsPipeline {
             if (uri == null) {
                 return;
             }
-            log.info("HLS ended, requesting playlist refresh for {}", uri);
-            HlsLifecycle.notifyEnded();
+            markEndedAndRefresh("EOS");
         });
-        pipeline.getBus().connect((Bus.ERROR) (source, code, message) ->
-                log.error("HLS pipeline error: code={} message={}", code, message));
+        pipeline.getBus().connect((Bus.ERROR) (source, code, message) -> {
+            log.error("HLS pipeline error: code={} message={}", code, message);
+            // hlsdemux2 "Invalid manifest" after ad often never delivers bus EOS — treat as end.
+            if (uri != null && message != null && message.toLowerCase().contains("manifest")) {
+                markEndedAndRefresh("ERROR " + message);
+            }
+        });
         pipeline.getBus().connect((Bus.WARNING) (source, code, message) ->
                 log.warn("HLS pipeline warning: code={} message={}", code, message));
         pipeline.getBus().connect((Bus.ASYNC_DONE) source -> {
@@ -125,9 +133,11 @@ final class GstHlsPipeline {
         pendingSeekSeconds = null;
         seekAttempts.set(0);
         paused = false;
+        ended = false;
         positionBaseSeconds = 0;
         positionAnchorNanos = 0;
         playlistDurationSeconds = 0;
+        lastEndedNotifyNanos = 0;
         uri = null;
         if (pipeline != null) {
             try {
@@ -150,7 +160,7 @@ final class GstHlsPipeline {
     }
 
     void pause() {
-        if (pipeline == null) {
+        if (pipeline == null || ended) {
             return;
         }
         double gstPos = querySeconds(false);
@@ -164,6 +174,7 @@ final class GstHlsPipeline {
         if (pipeline == null) {
             return;
         }
+        ended = false;
         paused = false;
         positionAnchorNanos = System.nanoTime();
         double pos = positionBaseSeconds;
@@ -181,6 +192,7 @@ final class GstHlsPipeline {
         if (positionSeconds < 0) {
             return;
         }
+        ended = false;
         positionBaseSeconds = positionSeconds;
         positionAnchorNanos = System.nanoTime();
         paused = false;
@@ -209,11 +221,22 @@ final class GstHlsPipeline {
     }
 
     double currentPositionSeconds() {
+        if (ended) {
+            double dur = durationSeconds();
+            return dur > 0 ? dur : positionBaseSeconds;
+        }
+        double playlist = playlistDurationSeconds;
+        double gst = querySeconds(false);
+        // Ignore GST positions past the VOD length — hlsdemux2 sometimes uses a huge media clock.
+        if (gst > 0 && (playlist <= 0 || gst <= playlist + 1.0)) {
+            return gst;
+        }
         if (paused || positionAnchorNanos == 0) {
             return positionBaseSeconds;
         }
         double elapsed = (System.nanoTime() - positionAnchorNanos) / 1_000_000_000.0;
-        return Math.max(0, positionBaseSeconds + elapsed);
+        double wall = Math.max(0, positionBaseSeconds + elapsed);
+        return playlist > 0 ? Math.min(wall, playlist) : wall;
     }
 
     /** Raw pipeline clock position (0 if unknown) — for smoke tests. */
@@ -222,12 +245,36 @@ final class GstHlsPipeline {
     }
 
     double durationSeconds() {
+        // Playlist ENDLIST sum is the item length YouTube expects. GST duration for HLS ads
+        // is often hours (wrong demux timeline) and must not win.
+        if (playlistDurationSeconds > 0) {
+            return playlistDurationSeconds;
+        }
         double gst = querySeconds(true);
-        return gst > 0 ? gst : playlistDurationSeconds;
+        if (gst > 0 && gst <= 600) {
+            return gst;
+        }
+        return 0;
     }
 
     boolean isPaused() {
-        return paused;
+        return paused || ended;
+    }
+
+    private void markEndedAndRefresh(String reason) {
+        long now = System.nanoTime();
+        if (now - lastEndedNotifyNanos < 1_500_000_000L) {
+            log.debug("Skipping duplicate HLS end notify ({})", reason);
+            return;
+        }
+        lastEndedNotifyNanos = now;
+        ended = true;
+        double dur = durationSeconds();
+        if (dur > 0) {
+            positionBaseSeconds = dur;
+        }
+        log.info("HLS ended ({}), requesting playlist refresh for {}", reason, uri);
+        HlsLifecycle.notifyEnded();
     }
 
     private void ensurePlaying(String reason) {

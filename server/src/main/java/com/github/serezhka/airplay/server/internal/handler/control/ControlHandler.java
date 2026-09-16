@@ -438,13 +438,25 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     private void handleSetProperty(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
         var decoder = new QueryStringDecoder(request.uri());
         var path = decoder.path();
+        var params = decoder.parameters();
         var play = (NSDictionary) BinaryPropertyListParser.parse(new ByteBufInputStream(request.content()));
-        if (path.contains("actionAtItemEnd") || path.contains("selectedMediaArray")) {
-            log.info("SET_PROPERTY {}: {}", path, play.toXMLPropertyList().replaceAll("\\s+", " ").trim());
+        boolean isActionAtItemEnd = params.containsKey("actionAtItemEnd") || request.uri().contains("actionAtItemEnd");
+        boolean isSelectedMedia = params.containsKey("selectedMediaArray") || request.uri().contains("selectedMediaArray");
+        if (isActionAtItemEnd || isSelectedMedia) {
+            log.info("SET_PROPERTY {}: {}", request.uri(), play.toXMLPropertyList().replaceAll("\\s+", " ").trim());
         } else {
-            log.debug("SET_PARAMETER path={}, params={}", path, decoder.parameters());
+            log.debug("SET_PARAMETER path={}, params={}", path, params);
             if (log.isDebugEnabled()) {
                 log.debug("SET_PARAMETER body:\n{}", play.toXMLPropertyList());
+            }
+        }
+        if (isActionAtItemEnd && play.get("value") != null) {
+            var session = resolveSession(request);
+            var hls = session.getHlsPlaylistState();
+            if (hls != null) {
+                int action = ((Number) play.get("value").toJavaObject()).intValue();
+                hls.setActionAtItemEnd(action);
+                log.info("actionAtItemEnd={} session={}", action, session.getId());
             }
         }
 
@@ -462,7 +474,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         if (value == 0) {
             cancelPendingPause(session.getId());
             if (hls != null && hls.shouldIgnorePause()) {
-                // Client brackets scrub with rate=0; keep pipeline + phone UI on "playing".
+                // Client brackets scrub with rate=0; keep reported state as playing.
                 log.info("Ignoring rate=0 during scrub grace session={}", session.getId());
                 hls.setPlaybackRate(1);
                 hlsFcupService.sendPlaybackStateEvent(session, "playing");
@@ -551,10 +563,24 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         double position = fromPlayer.position();
         double rate = fromPlayer.rate();
         if (hls != null) {
-            if (duration <= 0 && hls.getMediaDurationSeconds() > 0) {
-                duration = hls.getMediaDurationSeconds();
+            // ENDLIST mediadata duration is authoritative. Consumer-reported durations can be
+            // multi-hour for short YouTube ads; advertising those makes YouTube abort the queue.
+            double playlistDur = hls.getMediaDurationSeconds();
+            if (playlistDur > 0) {
+                duration = playlistDur;
+            } else if (duration > 600) {
+                duration = 0;
             }
-            rate = hls.getPlaybackRate();
+            if (duration > 0) {
+                position = Math.min(position, duration);
+            }
+            if (hls.getPlaybackRate() <= 0 || fromPlayer.rate() <= 0) {
+                rate = 0;
+            } else {
+                rate = hls.getPlaybackRate();
+            }
+        } else if (duration > 600) {
+            duration = 0;
         }
         var playbackInfo = new AirPlayConsumer.PlaybackInfo(duration, position, rate);
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
