@@ -36,6 +36,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.regex.Pattern;
@@ -59,6 +60,27 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         this.airPlayConsumer = airPlayConsumer;
     }
 
+    @Override
+    public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+        for (Session session : sessionManager.allSessions()) {
+            var reverse = session.getReverseContexts();
+            ChannelHandlerContext eventCtx = reverse.get("event");
+            if (eventCtx == ctx) {
+                log.info("Reverse event channel closed, stopping HLS session {}", session.getId());
+                stopHlsPlayback(session);
+            }
+            reverse.entrySet().removeIf(entry -> entry.getValue() == ctx);
+        }
+        super.channelInactive(ctx);
+    }
+
+    private void stopHlsPlayback(Session session) {
+        hlsFcupService.cancelAllMasterPolls();
+        hlsFcupService.clearReverseQueue(session);
+        session.setHlsPlaylistState(null);
+        airPlayConsumer.onMediaPlaylistRemove();
+    }
+
     private byte[] pendingRequestBody = new byte[0];
 
     @Override
@@ -73,6 +95,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 }
             } else if (msg instanceof FullHttpResponse response) {
                 log.debug("Reverse channel response: {} {}", response.status(), response.content().readableBytes());
+                hlsFcupService.onReverseEventResponse(ctx);
             } else {
                 log.error("Unknown control message type: {}", msg);
             }
@@ -291,6 +314,11 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             session.getAudioServer().stop();
             session.getAudioControlServer().stop();
             session.getVideoServer().stop();
+            // Full session teardown only — stream-specific TEARDOWN must not stop HLS.
+            if (session.getHlsPlaylistState() != null) {
+                log.info("RTSP TEARDOWN (full): stopping HLS session {}", session.getId());
+                stopHlsPlayback(session);
+            }
         }
         var response = createRtspResponse(request);
         sendResponse(ctx, request, response);
@@ -354,27 +382,9 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 ? play.get("Content-Location").toJavaObject(String.class)
                 : null;
         if (playlistUri != null && !playlistUri.isBlank()) {
-            var session = resolveSession(request);
-            var playlistUriLocal = playlistUriToLocal(playlistUri, playlistBaseUrl(ctx), session.getId());
-            var remotePlaylistUri = playlistUri.split("\\?")[0];
-
             var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
             sendResponse(ctx, request, response);
-
-            if (remotePlaylistUri.contains("master.m3u8")) {
-                var hls = new HlsPlaylistState(remotePlaylistUri, playlistUriLocal);
-                session.setHlsPlaylistState(hls);
-                if (startPositionSeconds != null && startPositionSeconds > 0) {
-                    hls.setPendingSeekSeconds(startPositionSeconds);
-                }
-                log.info("HLS play from [{}]: prefetching playlists via FCUP, localUri={}", clientProcName, playlistUriLocal);
-                hlsFcupService.sendFcupRequest(session, remotePlaylistUri);
-            } else {
-                airPlayConsumer.onMediaPlaylist(playlistUriLocal);
-                if (startPositionSeconds != null && startPositionSeconds > 0) {
-                    airPlayConsumer.onMediaPlaylistSeek(startPositionSeconds);
-                }
-            }
+            startMediaPlaylist(ctx, resolveSession(request), playlistUri, clientProcName, startPositionSeconds);
         } else {
             log.error("Client proc name [{}] has no Content-Location playlist", clientProcName);
             var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.NOT_IMPLEMENTED);
@@ -382,12 +392,44 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         }
     }
 
+    /**
+     * Start (or restart) media/HLS playback from a Content-Location URI.
+     * Used by POST /play and by playlistInsert (e.g. quality switch).
+     */
+    private void startMediaPlaylist(ChannelHandlerContext ctx, Session session, String playlistUri,
+                                    String clientProcName, Double startPositionSeconds) {
+        var playlistUriLocal = playlistUriToLocal(playlistUri, playlistBaseUrl(ctx), session.getId());
+        var remotePlaylistUri = playlistUri.split("\\?")[0];
+
+        if (remotePlaylistUri.contains("master.m3u8")) {
+            hlsFcupService.cancelAllMasterPolls();
+            var hls = new HlsPlaylistState(remotePlaylistUri, playlistUriLocal);
+            hls.setPlaybackRate(1);
+            session.setHlsPlaylistState(hls);
+            if (startPositionSeconds != null && startPositionSeconds > 0) {
+                hls.setPendingSeekSeconds(startPositionSeconds);
+            }
+            log.info("HLS play from [{}]: prefetching playlists via FCUP, localUri={}", clientProcName, playlistUriLocal);
+            hlsFcupService.sendFcupRequest(session, remotePlaylistUri);
+        } else {
+            airPlayConsumer.onMediaPlaylist(playlistUriLocal);
+            if (startPositionSeconds != null && startPositionSeconds > 0) {
+                airPlayConsumer.onMediaPlaylistSeek(startPositionSeconds);
+            }
+        }
+    }
+
     private void handleSetProperty(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
         var decoder = new QueryStringDecoder(request.uri());
-        log.debug("SET_PARAMETER path={}, params={}", decoder.path(), decoder.parameters());
+        var path = decoder.path();
         var play = (NSDictionary) BinaryPropertyListParser.parse(new ByteBufInputStream(request.content()));
-        if (log.isDebugEnabled()) {
-            log.debug("SET_PARAMETER body:\n{}", play.toXMLPropertyList());
+        if (path.contains("actionAtItemEnd") || path.contains("selectedMediaArray")) {
+            log.info("SET_PROPERTY {}: {}", path, play.toXMLPropertyList().replaceAll("\\s+", " ").trim());
+        } else {
+            log.debug("SET_PARAMETER path={}, params={}", path, decoder.parameters());
+            if (log.isDebugEnabled()) {
+                log.debug("SET_PARAMETER body:\n{}", play.toXMLPropertyList());
+            }
         }
 
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
@@ -396,12 +438,23 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
 
     private void handleRate(ChannelHandlerContext ctx, FullHttpRequest request) {
         var decoder = new QueryStringDecoder(request.uri());
-        var rate = (int) Double.parseDouble(decoder.parameters().get("value").get(0));
+        double value = Double.parseDouble(decoder.parameters().get("value").get(0));
+        var session = resolveSession(request);
+        var hls = session.getHlsPlaylistState();
+        log.info("POST /rate value={}", value);
 
-        if (rate == 0) {
+        if (value == 0) {
+            if (hls != null) {
+                hls.setPlaybackRate(0);
+            }
             airPlayConsumer.onMediaPlaylistPause();
+            hlsFcupService.sendPlaybackStateEvent(session, "paused");
         } else {
+            if (hls != null) {
+                hls.setPlaybackRate(1);
+            }
             airPlayConsumer.onMediaPlaylistResume();
+            hlsFcupService.sendPlaybackStateEvent(session, "playing");
         }
 
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
@@ -415,7 +468,14 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             try {
                 double position = Double.parseDouble(positions.get(0));
                 log.info("POST /scrub position={}", position);
-                airPlayConsumer.onMediaPlaylistSeek(position);
+                var session = resolveSession(request);
+                var hls = session.getHlsPlaylistState();
+                if (hls != null && !hls.isPlaybackStarted()) {
+                    hls.setPendingSeekSeconds(position);
+                    log.info("Deferring /scrub to pending seek until HLS starts");
+                } else {
+                    airPlayConsumer.onMediaPlaylistSeek(position);
+                }
             } catch (NumberFormatException e) {
                 log.warn("Invalid /scrub position: {}", positions.get(0));
             }
@@ -428,19 +488,28 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
 
     private void handleStop(ChannelHandlerContext ctx, FullHttpRequest request) {
         log.info("POST /stop");
-        hlsFcupService.cancelAllMasterPolls();
-        var session = resolveSession(request);
-        session.setHlsPlaylistState(null);
-        airPlayConsumer.onMediaPlaylistRemove();
+        stopHlsPlayback(resolveSession(request));
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
         sendResponse(ctx, request, response);
     }
 
     private void handlePlaybackInfo(ChannelHandlerContext ctx, FullHttpRequest request) {
+        var session = resolveSession(request);
+        var hls = session.getHlsPlaylistState();
+        var fromPlayer = airPlayConsumer.playbackInfo();
+        double duration = fromPlayer.duration();
+        double position = fromPlayer.position();
+        double rate = fromPlayer.rate();
+        if (hls != null) {
+            if (duration <= 0 && hls.getMediaDurationSeconds() > 0) {
+                duration = hls.getMediaDurationSeconds();
+            }
+            rate = hls.getPlaybackRate();
+        }
+        var playbackInfo = new AirPlayConsumer.PlaybackInfo(duration, position, rate);
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
         response.headers().add(HttpHeaderNames.CONTENT_TYPE, "text/x-apple-plist+xml");
-        var playbackInfo = PropertyListUtil.preparePlaybackInfoResponse(airPlayConsumer.playbackInfo());
-        response.content().writeBytes(playbackInfo);
+        response.content().writeBytes(PropertyListUtil.preparePlaybackInfoResponse(playbackInfo));
         sendResponse(ctx, request, response);
     }
 
@@ -455,33 +524,38 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         if ("unhandledURLResponse".equals(type)) {
             handleUnhandledUrlResponse(ctx, request, action);
         } else if ("playlistRemove".equals(type)) {
-            /*<plist version="1.0">
-            <dict>
-            	<key>type</key>
-            	<string>playlistRemove</string>
-            	<key>params</key>
-            	<dict>
-            		<key>item</key>
-            		<dict>
-            			<key>uuid</key>
-            			<string>59F93E62-4E79-4A8F-A55A-D7DA65247AF1</string>
-            		</dict>
-            	</dict>
-            </dict>
-            </plist>*/
-            airPlayConsumer.onMediaPlaylistRemove();
-            hlsFcupService.cancelAllMasterPolls();
+            stopHlsPlayback(resolveSession(request));
+        } else if ("playlistInsert".equals(type)) {
+            handlePlaylistInsert(ctx, request, action);
         }
 
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
         sendResponse(ctx, request, response);
     }
 
+    private void handlePlaylistInsert(ChannelHandlerContext ctx, FullHttpRequest request, NSDictionary action) {
+        var params = action.get("params") instanceof NSDictionary dictionary ? dictionary : null;
+        var item = params != null && params.get("item") instanceof NSDictionary dictionary ? dictionary : null;
+        if (item == null || item.get("Content-Location") == null) {
+            log.warn("playlistInsert without Content-Location: {}", action.toXMLPropertyList());
+            return;
+        }
+        var playlistUri = item.get("Content-Location").toJavaObject(String.class);
+        var clientProcName = item.get("clientProcName") != null
+                ? item.get("clientProcName").toJavaObject(String.class)
+                : "";
+        log.info("playlistInsert Content-Location={} from [{}]", playlistUri, clientProcName);
+        startMediaPlaylist(ctx, resolveSession(request), playlistUri, clientProcName, null);
+    }
+
     private void handleGetProperty(ChannelHandlerContext ctx, FullHttpRequest request) {
-        // TODO get requested param and respond accordingly
         var decoder = new QueryStringDecoder(request.uri());
         log.debug("GET_PARAMETER path={}, params={}", decoder.path(), decoder.parameters());
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+        response.headers().add(HttpHeaderNames.CONTENT_TYPE, "text/x-apple-plist+xml");
+        byte[] body = PropertyListUtil.prepareEmptyPropertyResponse();
+        response.content().writeBytes(body);
+        HttpUtil.setContentLength(response, body.length);
         sendResponse(ctx, request, response);
     }
 
@@ -501,12 +575,12 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             log.warn("FCUP response is missing URL: {}", action.toXMLPropertyList());
             return;
         }
-        var fcupResponseURL = params.get("FCUP_Response_URL").toJavaObject(String.class);
+        var fcupResponseURL = normalizeFcupUrl(params.get("FCUP_Response_URL").toJavaObject(String.class));
         var session = resolveSession(request);
         if (params.get("FCUP_Response_Data") == null) {
             log.warn("FCUP response without data: url={}, session={}", fcupResponseURL, session.getId());
             var hls = session.getHlsPlaylistState();
-            if (hls != null) {
+            if (hls != null && !hls.isWaitingForMasterChange()) {
                 continueMediaPrefetch(session, hls);
             }
             return;
@@ -516,9 +590,12 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         log.info("FCUP response: url={}, bytes={}, session={}", fcupResponseURL, fcupResponse.length(), session.getId());
 
         String body;
+        List<String> remoteMediaUris = null;
         try {
             if (fcupResponseURL.contains("master.m3u8")) {
-                body = masterPlaylistToLocalUrls(fcupResponse, playlistBaseUrl(ctx), session.getId());
+                var rewritten = rewriteMasterPlaylist(fcupResponse, playlistBaseUrl(ctx), session.getId());
+                body = rewritten.localBody();
+                remoteMediaUris = rewritten.remoteMediaUris();
             } else if (fcupResponseURL.contains("mediadata.m3u8")) {
                 body = mediaPlaylistBody(fcupResponse);
             } else {
@@ -536,12 +613,12 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                     if (hls.isPlaybackStarted()) {
                         hlsFcupService.onMasterRefreshDuringPlayback(session, body);
                     } else {
-                        hls.storeMasterPlaylist(body, fcupResponse);
+                        hls.storeMasterPlaylist(body, remoteMediaUris);
                         log.info("HLS master received: {} media playlists queued, state={}", hls.pendingMediaUriCount(), hls);
                         if (!hls.isPlaybackStarted()) {
                             hls.markPlaybackStarted();
                             log.info("HLS starting playback after master: {}", hls.getPlaylistUriLocal());
-                            startHlsPlayback(hls);
+                            startHlsPlayback(session, hls);
                         }
                     }
                 } else {
@@ -555,7 +632,9 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
 
             replyPendingPlaylists(session, fcupResponseURL, body);
 
-            continueMediaPrefetch(session, hls);
+            if (!hls.isWaitingForMasterChange()) {
+                continueMediaPrefetch(session, hls);
+            }
             return;
         }
 
@@ -566,8 +645,9 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         }
     }
 
-    private void startHlsPlayback(HlsPlaylistState hls) {
+    private void startHlsPlayback(Session session, HlsPlaylistState hls) {
         airPlayConsumer.onMediaPlaylist(hls.getPlaylistUriLocal());
+        hlsFcupService.sendPlaybackStateEvent(session, "playing");
         Double seek = hls.takePendingSeekSeconds();
         if (seek != null && seek > 0) {
             airPlayConsumer.onMediaPlaylistSeek(seek);
@@ -662,15 +742,13 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         var hls = session.getHlsPlaylistState();
         var cached = hls != null ? hls.getPlaylist(playlistUriRemote) : null;
         boolean isMasterPlaylist = playlistUriRemote.contains("master.m3u8");
-        // Serve cache when present. Forcing FCUP on every media GET starves the reverse
-        // channel (YouTube ABR then sees HTTP status 0 / stalls). Refresh master only.
+        // Prefer cache. Re-FCUP on every media GET starves the reverse channel.
         boolean refreshPlaylist = isMasterPlaylist && hls != null && hls.isPlaybackStarted() && cached == null;
 
         if (cached != null) {
             log.info("Serving cached playlist {}", playlistUriRemote);
             replyPlaylist(pending, cached);
             if (isMasterPlaylist && hls.isPlaybackStarted()) {
-                // Soft background refresh of master for live/DVR; do not block the player.
                 hlsFcupService.sendFcupRequest(session, playlistUriRemote);
             }
             return;
@@ -679,7 +757,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         session.enqueuePlaylistRequest(playlistUriRemote, pending);
         recordPendingPlaylistRequest(pending);
 
-        if (refreshPlaylist || hls == null) {
+        if (cached == null && (refreshPlaylist || hls == null || !hls.hasMoreMediaUris())) {
             log.info("GET /playlist {} requesting FCUP", playlistUriRemote);
             hlsFcupService.sendFcupRequest(session, playlistUriRemote);
         } else {
@@ -707,12 +785,43 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     }
 
     private String masterPlaylistToLocalUrls(String masterPlaylist, String baseUrl, String sessionId) {
-        String rewritten = HlsUriRewrite.rewritePlaylist(masterPlaylist, baseUrl, sessionId);
-        String filtered = HlsUriRewrite.preferAvcVariants(rewritten);
-        if (!filtered.equals(rewritten)) {
+        return rewriteMasterPlaylist(masterPlaylist, baseUrl, sessionId).localBody();
+    }
+
+    private record MasterRewrite(String localBody, List<String> remoteMediaUris) {
+    }
+
+    /**
+     * Prefer AVC on the remote (mlhls) master so FCUP URIs stay mlhls://…,
+     * then rewrite those URIs to local http for the media consumer.
+     */
+    private MasterRewrite rewriteMasterPlaylist(String masterPlaylist, String baseUrl, String sessionId) {
+        String filteredRemote = HlsUriRewrite.preferAvcVariants(masterPlaylist);
+        if (!filteredRemote.equals(masterPlaylist)) {
             log.info("Filtered HLS master to AVC-only variants (drop VP9/AV1/subtitles)");
         }
-        return filtered;
+        List<String> remoteMediaUris;
+        try {
+            remoteMediaUris = HlsUriRewrite.extractMediaUris(filteredRemote);
+        } catch (PlaylistParserException e) {
+            log.warn("Failed to extract media URIs from filtered master", e);
+            remoteMediaUris = List.of();
+        }
+        String localBody = HlsUriRewrite.rewritePlaylist(filteredRemote, baseUrl, sessionId);
+        return new MasterRewrite(localBody, remoteMediaUris);
+    }
+
+    /** Map accidental local playlist URLs back to mlhls:// for cache / pending-request keys. */
+    private static String normalizeFcupUrl(String url) {
+        if (url == null) {
+            return null;
+        }
+        String bare = url.split("\\?")[0];
+        int playlistIdx = bare.indexOf("/playlist/");
+        if (bare.startsWith("http") && playlistIdx >= 0) {
+            return "mlhls://localhost" + bare.substring(playlistIdx + "/playlist".length());
+        }
+        return bare;
     }
 
     private DefaultFullHttpResponse createRtspResponse(FullHttpRequest request) {

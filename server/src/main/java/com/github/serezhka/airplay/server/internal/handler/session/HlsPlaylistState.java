@@ -1,5 +1,9 @@
 package com.github.serezhka.airplay.server.internal.handler.session;
 
+import io.lindstrom.m3u8.model.MediaPlaylist;
+import io.lindstrom.m3u8.model.MediaSegment;
+import io.lindstrom.m3u8.parser.MediaPlaylistParser;
+import io.lindstrom.m3u8.parser.ParsingMode;
 import io.lindstrom.m3u8.parser.PlaylistParserException;
 import lombok.Getter;
 
@@ -23,6 +27,10 @@ public class HlsPlaylistState {
     private String lastMasterBody;
     private volatile boolean waitingForMasterChange;
     private Double pendingSeekSeconds;
+    /** Best-effort VOD duration from media playlist {@code #EXTINF} sums. */
+    private volatile double mediaDurationSeconds;
+    /** AirPlay playback rate: {@code 0} paused, {@code 1} playing. */
+    private volatile double playbackRate = 1;
 
     public HlsPlaylistState(String remoteMasterUri, String playlistUriLocal) {
         this.remoteMasterUri = remoteMasterUri;
@@ -45,10 +53,52 @@ public class HlsPlaylistState {
 
     public void putPlaylist(String remoteUri, String body) {
         playlists.put(normalizeUri(remoteUri), body);
+        if (remoteUri.contains("mediadata.m3u8")) {
+            double duration = sumMediaDurationSeconds(body);
+            if (duration > mediaDurationSeconds) {
+                mediaDurationSeconds = duration;
+            }
+        }
+    }
+
+    public void setPlaybackRate(double playbackRate) {
+        this.playbackRate = playbackRate <= 0 ? 0 : 1;
     }
 
     public void invalidatePlaylists() {
         playlists.clear();
+        mediaDurationSeconds = 0;
+    }
+
+    static double sumMediaDurationSeconds(String mediaPlaylistBody) {
+        if (mediaPlaylistBody == null || mediaPlaylistBody.isBlank()) {
+            return 0;
+        }
+        try {
+            MediaPlaylist playlist = new MediaPlaylistParser(ParsingMode.LENIENT).readPlaylist(mediaPlaylistBody);
+            double sum = 0;
+            for (MediaSegment segment : playlist.mediaSegments()) {
+                sum += segment.duration();
+            }
+            if (sum > 0) {
+                return sum;
+            }
+        } catch (Exception ignored) {
+            // use #EXTINF line scan below
+        }
+        double sum = 0;
+        for (String line : mediaPlaylistBody.split("\n")) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("#EXTINF:")) {
+                String value = trimmed.substring("#EXTINF:".length()).split(",", 2)[0].trim();
+                try {
+                    sum += Double.parseDouble(value);
+                } catch (NumberFormatException ignored) {
+                    // skip
+                }
+            }
+        }
+        return sum;
     }
 
     public void updateMasterPlaylist(String rewrittenMaster) {
@@ -76,27 +126,29 @@ public class HlsPlaylistState {
         return playlists.get(normalizeUri(remoteUri));
     }
 
-                public void storeMasterPlaylist(String rewrittenMaster, String rawMaster) throws PlaylistParserException {
-        // Prefer rewritten/filtered master so we don't FCUP-prefetch VP9/AV1 variants we dropped.
-        List<String> mediaUris;
-        try {
-            mediaUris = HlsUriRewrite.extractMediaUris(rewrittenMaster);
-        } catch (PlaylistParserException e) {
-            mediaUris = HlsUriRewrite.extractMediaUris(rawMaster);
-        }
-        if (mediaUris.isEmpty()) {
+    public void storeMasterPlaylist(String rewrittenMaster, List<String> remoteMediaUris) throws PlaylistParserException {
+        // rewrittenMaster uses local http URLs for the media consumer; remoteMediaUris stay
+        // mlhls://… so FCUP prefetch talks to the AirPlay client, not loopback.
+        if (remoteMediaUris == null || remoteMediaUris.isEmpty()) {
             throw new PlaylistParserException("No media playlists found in master playlist");
         }
         masterReceived = true;
         lastMasterBody = rewrittenMaster;
         putPlaylist(remoteMasterUri, rewrittenMaster);
         pendingMediaUris.clear();
-        pendingMediaUris.addAll(mediaUris);
+        for (String uri : remoteMediaUris) {
+            pendingMediaUris.add(normalizeUri(uri));
+        }
         nextMediaUriIndex = 0;
     }
 
     public boolean hasMoreMediaUris() {
         return nextMediaUriIndex < pendingMediaUris.size();
+    }
+
+    /** Stop FCUP media prefetch (e.g. on EOS) so late responses don't starve master refresh. */
+    public void abortMediaPrefetch() {
+        nextMediaUriIndex = pendingMediaUris.size();
     }
 
     public String nextMediaUri() {

@@ -2,8 +2,6 @@ package com.github.serezhka.airplay.server;
 
 import com.github.serezhka.airplay.lib.AudioStreamInfo;
 import com.github.serezhka.airplay.lib.VideoStreamInfo;
-import lombok.Getter;
-import lombok.RequiredArgsConstructor;
 
 public interface AirPlayConsumer {
 
@@ -19,7 +17,6 @@ public interface AirPlayConsumer {
 
     void onAudioSrcDisconnect();
 
-    // HLS stuff, youtube
     default void onMediaPlaylist(String playlistUri) {
     }
 
@@ -35,15 +32,10 @@ public interface AirPlayConsumer {
     default void onMediaPlaylistResume() {
     }
 
-    /**
-     * Seek media (HLS / YouTube) to {@code positionSeconds}.
-     */
     default void onMediaPlaylistSeek(double positionSeconds) {
     }
 
-    /**
-     * Linear volume in {@code [0, 1]} (HTTP {@code /play} and UI). RTSP dB values are converted by the control layer.
-     */
+    /** Linear volume in {@code [0, 1]}. RTSP dB is converted by the control layer. */
     default void onVolume(double volumeLinear) {
     }
 
@@ -55,9 +47,13 @@ public interface AirPlayConsumer {
     }
 
     default PlaybackInfo playbackInfo() {
-        return new PlaybackInfo(0, 0);
+        return new PlaybackInfo(0, 0, 1);
     }
 
-    record PlaybackInfo(double duration, double position) {
+    /** {@code rate}: {@code 0} paused, {@code 1} playing ({@code /playback-info}, {@code /rate}). */
+    record PlaybackInfo(double duration, double position, double rate) {
+        public PlaybackInfo(double duration, double position) {
+            this(duration, position, 1);
+        }
     }
 }

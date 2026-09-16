@@ -115,27 +115,42 @@ public class PropertyListUtil {
         if (duration > 0) {
             position = Math.min(position, duration);
         }
+        double rate = playbackInfo.rate() <= 0 ? 0 : 1;
         response.put("duration", duration);
         NSDictionary loadedTimeRanges = new NSDictionary();
         loadedTimeRanges.put("duration", duration);
         loadedTimeRanges.put("start", 0.0);
         response.put("loadedTimeRanges", new NSArray(loadedTimeRanges));
         boolean hasDuration = duration > 0;
-        boolean hasPosition = position > 0;
-        boolean atEnd = hasDuration && position >= duration;
-        boolean bufferEmpty = !hasDuration && !hasPosition;
-        response.put("playbackBufferEmpty", bufferEmpty);
-        response.put("playbackBufferFull", hasDuration && !atEnd);
-        response.put("playbackLikelyToKeepUp", hasDuration && !atEnd);
+        boolean atEnd = hasDuration && position >= duration - 0.25;
+        response.put("playbackBufferEmpty", !hasDuration);
+        response.put("playbackBufferFull", hasDuration);
+        response.put("playbackLikelyToKeepUp", hasDuration);
         response.put("position", position);
-        response.put("rate", atEnd ? 0 : 1);
+        response.put("rate", atEnd ? 0 : rate);
         response.put("readyToPlay", hasDuration);
         NSDictionary seekableTimeRanges = new NSDictionary();
         seekableTimeRanges.put("duration", duration);
         seekableTimeRanges.put("start", 0.0);
         response.put("seekableTimeRanges", new NSArray(seekableTimeRanges));
-        log.debug("Playback info: duration={}, position={}", duration, position);
+        log.debug("Playback info: duration={}, position={}, rate={}", duration, position, rate);
         return response.toXMLPropertyList().getBytes(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Playback state event sent to the client over the reverse HTTP channel.
+     * States: {@code loading}, {@code playing}, {@code paused}, {@code stopped}.
+     */
+    public static byte[] preparePlaybackStateEvent(String state) {
+        NSDictionary event = new NSDictionary();
+        event.put("category", "video");
+        event.put("sessionID", 1);
+        event.put("state", state);
+        return event.toXMLPropertyList().getBytes(StandardCharsets.UTF_8);
+    }
+
+    public static byte[] prepareEmptyPropertyResponse() {
+        return new NSDictionary().toXMLPropertyList().getBytes(StandardCharsets.UTF_8);
     }
 
     public static byte[] prepareEventRequest(String sessionId, String listUri, int requestId) {

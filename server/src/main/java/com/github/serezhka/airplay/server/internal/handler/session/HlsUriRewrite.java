@@ -44,9 +44,8 @@ public final class HlsUriRewrite {
     }
 
     /**
-     * Keep H.264 ({@code avc1}) variants only. YouTube masters mix AVC + VP9/AV1; GStreamer
-     * playbin/hlsdemux then fails with "Failed to create common caps of … h264 … and … vp9".
-     * Also drops subtitle renditions (external googlevideo timedtext) which we do not proxy.
+     * Keep H.264 ({@code avc1}) variants only. YouTube masters mix AVC + VP9/AV1; a single
+     * HLS consumer cannot switch video codecs mid-playlist. Also drops subtitle renditions.
      */
     public static String preferAvcVariants(String masterPlaylist) {
         String[] lines = masterPlaylist.split("\\R", -1);

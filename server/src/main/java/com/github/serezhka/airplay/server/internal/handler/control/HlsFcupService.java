@@ -4,13 +4,16 @@ import com.github.serezhka.airplay.server.AirPlayConsumer;
 import com.github.serezhka.airplay.server.internal.handler.session.Session;
 import com.github.serezhka.airplay.server.internal.handler.session.SessionManager;
 import com.github.serezhka.airplay.server.internal.handler.util.PropertyListUtil;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.handler.codec.http.DefaultFullHttpRequest;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpVersion;
-import io.netty.handler.codec.http.DefaultFullHttpRequest;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.ArrayDeque;
 import java.util.Map;
+import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -30,6 +33,8 @@ public class HlsFcupService {
         return thread;
     });
     private final Map<String, ScheduledFuture<?>> masterPollTasks = new ConcurrentHashMap<>();
+    /** One in-flight reverse {@code POST /event} per session (no HTTP pipelining). */
+    private final Map<String, ReverseQueue> reverseQueues = new ConcurrentHashMap<>();
 
     public HlsFcupService(SessionManager sessionManager, AirPlayConsumer airPlayConsumer) {
         this.sessionManager = sessionManager;
@@ -42,10 +47,13 @@ public class HlsFcupService {
             if (hls == null || !hls.isPlaybackStarted()) {
                 continue;
             }
-            log.info("HLS segment ended, polling for master change session {}", session.getId());
+            log.info("HLS ended, notifying client + polling master session {}", session.getId());
+            hls.abortMediaPrefetch();
             hls.setWaitingForMasterChange(true);
             hls.invalidatePlaylists();
+            sendPlaybackStateEvent(session, "stopped");
             requestMasterRefresh(session);
+            scheduleMasterPoll(session);
         }
     }
 
@@ -60,6 +68,7 @@ public class HlsFcupService {
             cancelMasterPoll(session.getId());
             hls.setWaitingForMasterChange(false);
             airPlayConsumer.onMediaPlaylist(hls.getPlaylistUriLocal());
+            sendPlaybackStateEvent(session, "playing");
             Double seek = hls.takePendingSeekSeconds();
             if (seek != null && seek > 0) {
                 airPlayConsumer.onMediaPlaylistSeek(seek);
@@ -82,6 +91,33 @@ public class HlsFcupService {
         }
     }
 
+    public void clearReverseQueue(Session session) {
+        ReverseQueue queue = reverseQueues.remove(session.getId());
+        if (queue != null) {
+            synchronized (queue) {
+                queue.pending.clear();
+                queue.inFlight = false;
+            }
+        }
+    }
+
+    /** Called when the reverse event channel receives HTTP 200 for a POST /event. */
+    public void onReverseEventResponse(ChannelHandlerContext ctx) {
+        for (Session session : sessionManager.allSessions()) {
+            if (session.getReverseContexts().get("event") == ctx) {
+                ReverseQueue queue = reverseQueues.get(session.getId());
+                if (queue == null) {
+                    return;
+                }
+                synchronized (queue) {
+                    queue.inFlight = false;
+                    flushReverseQueue(session, queue);
+                }
+                return;
+            }
+        }
+    }
+
     private void requestMasterRefresh(Session session) {
         var hls = session.getHlsPlaylistState();
         if (hls == null) {
@@ -96,6 +132,7 @@ public class HlsFcupService {
             var hls = session.getHlsPlaylistState();
             if (hls != null && hls.isWaitingForMasterChange()) {
                 requestMasterRefresh(session);
+                scheduleMasterPoll(session);
             }
         }, MASTER_POLL_INTERVAL_MS, TimeUnit.MILLISECONDS);
         masterPollTasks.put(session.getId(), future);
@@ -108,26 +145,54 @@ public class HlsFcupService {
         }
     }
 
+    public void sendPlaybackStateEvent(Session session, String state) {
+        byte[] body = PropertyListUtil.preparePlaybackStateEvent(state);
+        log.info("Playback state event: {} session={}", state, session.getId());
+        enqueueReverseEvent(session, body);
+    }
+
     public void sendFcupRequest(Session session, String listUri) {
-        var eventContext = session.getReverseContexts().get("event");
-        if (eventContext == null) {
-            log.error("No reverse event channel for FCUP request {}", listUri);
-            return;
-        }
         int requestId = 1;
         var hls = session.getHlsPlaylistState();
         if (hls != null) {
             requestId = hls.nextFcupRequestId();
         }
         log.info("FCUP request: url={}, requestId={}, session={}", listUri, requestId, session.getId());
-        var requestContent = PropertyListUtil.prepareEventRequest(session.getId(), listUri, requestId);
+        byte[] requestContent = PropertyListUtil.prepareEventRequest(session.getId(), listUri, requestId);
+        enqueueReverseEvent(session, requestContent);
+    }
 
+    private void enqueueReverseEvent(Session session, byte[] body) {
+        ReverseQueue queue = reverseQueues.computeIfAbsent(session.getId(), id -> new ReverseQueue());
+        synchronized (queue) {
+            queue.pending.add(body);
+            flushReverseQueue(session, queue);
+        }
+    }
+
+    private void flushReverseQueue(Session session, ReverseQueue queue) {
+        if (queue.inFlight || queue.pending.isEmpty()) {
+            return;
+        }
+        var eventContext = session.getReverseContexts().get("event");
+        if (eventContext == null || !eventContext.channel().isActive()) {
+            log.error("No active reverse event channel, dropping {} queued events session={}",
+                    queue.pending.size(), session.getId());
+            queue.pending.clear();
+            return;
+        }
+        byte[] body = queue.pending.poll();
+        queue.inFlight = true;
         DefaultFullHttpRequest event = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.POST, "/event");
         event.headers().add(HttpHeaderNames.CONTENT_TYPE, "text/x-apple-plist+xml");
-        event.headers().add(HttpHeaderNames.CONTENT_LENGTH, requestContent.length);
+        event.headers().add(HttpHeaderNames.CONTENT_LENGTH, body.length);
         event.headers().add("X-Apple-Session-ID", session.getId());
-        event.content().writeBytes(requestContent);
-
+        event.content().writeBytes(body);
         eventContext.writeAndFlush(event);
+    }
+
+    private static final class ReverseQueue {
+        final Queue<byte[]> pending = new ArrayDeque<>();
+        boolean inFlight;
     }
 }

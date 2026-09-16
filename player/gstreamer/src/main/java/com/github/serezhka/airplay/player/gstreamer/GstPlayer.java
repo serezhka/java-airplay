@@ -10,13 +10,20 @@ import lombok.extern.slf4j.Slf4j;
 import org.freedesktop.gstreamer.*;
 import org.freedesktop.gstreamer.elements.AppSink;
 import org.freedesktop.gstreamer.elements.AppSrc;
+import org.freedesktop.gstreamer.event.SeekFlags;
+import org.freedesktop.gstreamer.event.SeekType;
 import org.freedesktop.gstreamer.glib.GLib;
 import org.freedesktop.gstreamer.interfaces.VideoOverlay;
 import org.freedesktop.gstreamer.swing.GstVideoComponent;
 
 import javax.swing.*;
 import java.awt.*;
+import java.util.EnumSet;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Slf4j
 public class GstPlayer implements AirPlayConsumer {
@@ -48,7 +55,19 @@ public class GstPlayer implements AirPlayConsumer {
     private String hlsUri;
     private JFrame hlsWindow;
     private Canvas hlsCanvas;
+    private volatile Double pendingHlsSeekSeconds;
+    private final AtomicInteger hlsSeekAttempts = new AtomicInteger();
+    private ScheduledFuture<?> hlsSeekRetry;
+    private final ScheduledExecutorService hlsSeekScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "hls-seek-retry");
+        t.setDaemon(true);
+        return t;
+    });
     private volatile double volumeLinear = 1.0;
+    private volatile boolean hlsPaused;
+    private volatile double hlsPositionBaseSeconds;
+    private volatile long hlsPositionAnchorNanos;
+    private volatile double hlsPlaylistDurationSeconds;
 
     private AudioStreamInfo.CompressionType audioCompressionType;
 
@@ -229,6 +248,9 @@ public class GstPlayer implements AirPlayConsumer {
     private void startHlsPipeline(String playlistUri) {
         stopHlsPipeline();
         hlsUri = playlistUri;
+        hlsPaused = false;
+        hlsPositionBaseSeconds = 0;
+        hlsPositionAnchorNanos = System.nanoTime();
         Element videoSink = createHlsVideoSink();
         hlsPipeline = (Pipeline) Gst.parseLaunch("playbin3 name=hls");
         hlsPipeline.set("uri", playlistUri);
@@ -253,7 +275,16 @@ public class GstPlayer implements AirPlayConsumer {
             log.info("HLS ended, requesting playlist refresh for {}", hlsUri);
             HlsLifecycle.notifyEnded();
         });
+        // Seek often fails until playbin3 has prerolled; retry on these signals.
+        hlsPipeline.getBus().connect((Bus.ASYNC_DONE) source -> tryPendingHlsSeek("async-done"));
+        hlsPipeline.getBus().connect((Bus.DURATION_CHANGED) source -> tryPendingHlsSeek("duration"));
+        hlsPipeline.getBus().connect((Bus.STATE_CHANGED) (source, old, current, pending) -> {
+            if (source == hlsPipeline && current == State.PLAYING) {
+                tryPendingHlsSeek("playing");
+            }
+        });
         hlsPipeline.play();
+        tryPendingHlsSeek("start");
     }
 
     private Element createHlsVideoSink() {
@@ -279,6 +310,13 @@ public class GstPlayer implements AirPlayConsumer {
     }
 
     private void stopHlsPipeline() {
+        cancelHlsSeekRetry();
+        pendingHlsSeekSeconds = null;
+        hlsSeekAttempts.set(0);
+        hlsPaused = false;
+        hlsPositionBaseSeconds = 0;
+        hlsPositionAnchorNanos = 0;
+        hlsPlaylistDurationSeconds = 0;
         if (hlsPipeline != null) {
             hlsPipeline.stop();
             hlsPipeline = null;
@@ -297,27 +335,113 @@ public class GstPlayer implements AirPlayConsumer {
     }
 
     @Override
-    public void onMediaPlaylistPause() {
-        if (hlsPipeline != null && hlsPipeline.isPlaying()) {
-            hlsPipeline.pause();
+    public void onMediaPlaylistContent(String playlistUri, String content) {
+        if (playlistUri == null || !playlistUri.contains("mediadata.m3u8") || content == null) {
+            return;
         }
+        double sum = 0;
+        for (String line : content.split("\n")) {
+            if (line.startsWith("#EXTINF:")) {
+                String value = line.substring("#EXTINF:".length()).split(",", 2)[0].trim();
+                try {
+                    sum += Double.parseDouble(value);
+                } catch (NumberFormatException ignored) {
+                    // skip
+                }
+            }
+        }
+        if (sum > hlsPlaylistDurationSeconds) {
+            hlsPlaylistDurationSeconds = sum;
+        }
+    }
+
+    @Override
+    public void onMediaPlaylistPause() {
+        if (hlsPipeline == null) {
+            return;
+        }
+        double gstPos = safeQuerySeconds(hlsPipeline, false);
+        hlsPositionBaseSeconds = gstPos > 0 ? gstPos : currentHlsPositionSeconds();
+        hlsPaused = true;
+        hlsPipeline.pause();
+        log.info("HLS paused at {}s", hlsPositionBaseSeconds);
     }
 
     @Override
     public void onMediaPlaylistResume() {
-        if (hlsPipeline != null && !hlsPipeline.isPlaying()) {
-            hlsPipeline.play();
+        if (hlsPipeline == null) {
+            return;
         }
+        hlsPaused = false;
+        hlsPositionAnchorNanos = System.nanoTime();
+        double pos = hlsPositionBaseSeconds;
+        hlsPipeline.play();
+        // Flush-seek to current position: PAUSED→PLAYING alone often leaves playbin3 frozen.
+        pendingHlsSeekSeconds = pos;
+        hlsSeekAttempts.set(0);
+        tryPendingHlsSeek("resume");
+        log.info("HLS resumed from {}s", pos);
     }
 
     @Override
     public void onMediaPlaylistSeek(double positionSeconds) {
-        if (hlsPipeline == null || positionSeconds < 0) {
+        if (positionSeconds < 0) {
             return;
         }
-        long ns = (long) (positionSeconds * 1_000_000_000L);
-        boolean ok = hlsPipeline.seek(ns, TimeUnit.NANOSECONDS);
-        log.info("HLS seek to {}s -> {}", positionSeconds, ok);
+        hlsPositionBaseSeconds = positionSeconds;
+        hlsPositionAnchorNanos = System.nanoTime();
+        if (hlsPaused) {
+            hlsPaused = false;
+            if (hlsPipeline != null) {
+                hlsPipeline.play();
+            }
+        }
+        pendingHlsSeekSeconds = positionSeconds;
+        hlsSeekAttempts.set(0);
+        tryPendingHlsSeek("request");
+    }
+
+    private void tryPendingHlsSeek(String reason) {
+        Double seek = pendingHlsSeekSeconds;
+        Pipeline pipeline = hlsPipeline;
+        if (seek == null || pipeline == null) {
+            return;
+        }
+        long ns = (long) (seek * 1_000_000_000L);
+        boolean ok = pipeline.seek(
+                1.0,
+                Format.TIME,
+                EnumSet.of(SeekFlags.FLUSH, SeekFlags.KEY_UNIT),
+                SeekType.SET,
+                ns,
+                SeekType.NONE,
+                -1);
+        log.info("HLS seek to {}s -> {} ({})", seek, ok, reason);
+        if (ok) {
+            pendingHlsSeekSeconds = null;
+            hlsSeekAttempts.set(0);
+            cancelHlsSeekRetry();
+            hlsPositionBaseSeconds = seek;
+            hlsPositionAnchorNanos = System.nanoTime();
+            return;
+        }
+        int attempt = hlsSeekAttempts.incrementAndGet();
+        if (attempt > 40) {
+            log.warn("Giving up HLS seek to {}s after {} attempts", seek, attempt);
+            pendingHlsSeekSeconds = null;
+            cancelHlsSeekRetry();
+            return;
+        }
+        cancelHlsSeekRetry();
+        hlsSeekRetry = hlsSeekScheduler.schedule(() -> tryPendingHlsSeek("retry-" + attempt), 250, TimeUnit.MILLISECONDS);
+    }
+
+    private void cancelHlsSeekRetry() {
+        ScheduledFuture<?> future = hlsSeekRetry;
+        hlsSeekRetry = null;
+        if (future != null) {
+            future.cancel(false);
+        }
     }
 
     @Override
@@ -346,12 +470,41 @@ public class GstPlayer implements AirPlayConsumer {
 
     @Override
     public PlaybackInfo playbackInfo() {
-        if (hlsPipeline != null) {
-            return new PlaybackInfo(
-                    hlsPipeline.queryDuration(TimeUnit.SECONDS),
-                    hlsPipeline.queryPosition(TimeUnit.SECONDS));
+        if (hlsPipeline == null && hlsUri == null) {
+            return AirPlayConsumer.super.playbackInfo();
         }
-        return AirPlayConsumer.super.playbackInfo();
+        double gstDuration = safeQuerySeconds(hlsPipeline, true);
+        double duration = gstDuration > 0 ? gstDuration : hlsPlaylistDurationSeconds;
+        double position = currentHlsPositionSeconds();
+        if (duration > 0) {
+            position = Math.min(position, duration);
+        }
+        return new PlaybackInfo(duration, position, hlsPaused ? 0 : 1);
+    }
+
+    private double currentHlsPositionSeconds() {
+        if (hlsPaused || hlsPositionAnchorNanos == 0) {
+            return hlsPositionBaseSeconds;
+        }
+        double elapsed = (System.nanoTime() - hlsPositionAnchorNanos) / 1_000_000_000.0;
+        return Math.max(0, hlsPositionBaseSeconds + elapsed);
+    }
+
+    private static double safeQuerySeconds(Pipeline pipeline, boolean duration) {
+        if (pipeline == null) {
+            return 0;
+        }
+        try {
+            long nanos = duration
+                    ? pipeline.queryDuration(TimeUnit.NANOSECONDS)
+                    : pipeline.queryPosition(TimeUnit.NANOSECONDS);
+            if (nanos <= 0 || nanos == Long.MAX_VALUE) {
+                return 0;
+            }
+            return nanos / 1_000_000_000.0;
+        } catch (Exception e) {
+            return 0;
+        }
     }
 
     boolean isVideoPipelinePlaying() {

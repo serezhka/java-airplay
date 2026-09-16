@@ -23,6 +23,8 @@
 
 - AirPlay audio + screen mirroring
 - FairPlay decryption for mirrored streams
+- Volume control
+- YouTube HLS playback (AirPlay video from the YouTube app)
 - Playbacks: GStreamer, FFmpeg (`ffplay`), VLC
 - Optional session dump (protocol + decrypted media) for debugging
 
