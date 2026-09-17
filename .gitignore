@@ -6,7 +6,7 @@ local.properties
 dump.h264
 dumps/
 /log
-/logs
+**/logs
 /log.*
 gst.log
 player/app/log

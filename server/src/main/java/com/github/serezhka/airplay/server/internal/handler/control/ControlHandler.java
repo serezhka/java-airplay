@@ -414,6 +414,10 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
      */
     private void startMediaPlaylist(ChannelHandlerContext ctx, Session session, String playlistUri,
                                     String clientProcName, Double startPositionSeconds) {
+        // Clients often keep the mirror stream up when starting YouTube HLS; drop it so we
+        // do not keep rendering a stale mirrored UI beside the media player.
+        stopMirrorVideoIfRunning(session);
+
         var playlistUriLocal = playlistUriToLocal(playlistUri, playlistBaseUrl(ctx), session.getId());
         var remotePlaylistUri = playlistUri.split("\\?")[0];
 
@@ -432,6 +436,16 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             if (startPositionSeconds != null && startPositionSeconds > 0) {
                 airPlayConsumer.onMediaPlaylistSeek(startPositionSeconds);
             }
+        }
+    }
+
+    private void stopMirrorVideoIfRunning(Session session) {
+        try {
+            log.info("Stopping screen-mirror video before HLS session {}", session.getId());
+            airPlayConsumer.onVideoSrcDisconnect();
+            session.getVideoServer().stop();
+        } catch (Exception e) {
+            log.debug("Mirror video stop before HLS ignored: {}", e.toString());
         }
     }
 

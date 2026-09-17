@@ -1,6 +1,7 @@
 package com.github.serezhka.airplay.player.ffmpeg;
 
 import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
@@ -14,7 +15,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Self-test for FFmpeg HLS pause/resume/seek + PCM sink without a phone.
  * Needs {@code ffmpeg} and {@code ffplay} on PATH.
+ * <p>
+ * Parked: FFmpeg HLS is disconnected from {@link FFmpegPlayer} until revived.
  */
+@Disabled("FFmpeg HLS pipeline is dead code")
 class FfmpegHlsPipelineSmokeTest {
 
     @TempDir
@@ -55,7 +59,41 @@ class FfmpegHlsPipelineSmokeTest {
             hls.seek(target);
             awaitNear(hls, target, 2.0, 12_000);
             awaitAdvance(hls, target + 0.15, 12_000);
+            awaitAudioAlive(hls, 8_000);
             assertTrue(hls.audioSinkAlive(), "ffplay PCM sink died after seek");
+        } finally {
+            hls.stop();
+            System.clearProperty("airplay.ffmpeg.hls.headless");
+        }
+    }
+
+    @Test
+    @Timeout(90)
+    void extensionlessSegmentUrlsPlayWithPickyOff() throws Exception {
+        Assumptions.assumeTrue(ffmpegAvailable(), "ffmpeg not available");
+        Assumptions.assumeTrue(ffplayAvailable(), "ffplay not available");
+
+        Path media = temp.resolve("seg.bin");
+        generateSmokeTs(media);
+        Assumptions.assumeTrue(Files.size(media) > 1000, "failed to generate seg.bin");
+
+        Path playlist = temp.resolve("pl.m3u8");
+        Files.writeString(playlist, """
+                #EXTM3U
+                #EXT-X-VERSION:3
+                #EXT-X-TARGETDURATION:7
+                #EXTINF:6.0,
+                seg.bin
+                #EXT-X-ENDLIST
+                """);
+
+        System.setProperty("airplay.ffmpeg.hls.headless", "true");
+        FfmpegHlsPipeline hls = new FfmpegHlsPipeline();
+        try {
+            hls.start(playlist.toUri().toString(), 1.0);
+            awaitPosition(hls, 0.3, 15_000);
+            assertTrue(hls.audioSinkAlive(),
+                    "ffplay must play extensionless HLS segments (-extension_picky 0)");
         } finally {
             hls.stop();
             System.clearProperty("airplay.ffmpeg.hls.headless");
@@ -92,6 +130,16 @@ class FfmpegHlsPipelineSmokeTest {
         boolean finished = p.waitFor(45, TimeUnit.SECONDS);
         Assumptions.assumeTrue(finished && p.exitValue() == 0,
                 "ffmpeg failed generating smoke.ts: " + output);
+    }
+
+    private static void awaitAudioAlive(FfmpegHlsPipeline hls, long timeoutMs) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < deadline) {
+            if (hls.audioSinkAlive()) {
+                return;
+            }
+            Thread.sleep(100);
+        }
     }
 
     private static void awaitPosition(FfmpegHlsPipeline hls, double min, long timeoutMs) throws InterruptedException {

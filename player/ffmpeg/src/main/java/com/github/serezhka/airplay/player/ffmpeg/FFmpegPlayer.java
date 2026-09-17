@@ -12,7 +12,6 @@ import java.io.IOException;
 public class FFmpegPlayer implements AirPlayConsumer {
 
     private final int fps;
-    private final FfmpegHlsPipeline hls = new FfmpegHlsPipeline();
     private Process h264Process;
     private LibavAlacDecoder alacDecoder;
     private LibavAacDecoder aacDecoder;
@@ -98,76 +97,47 @@ public class FFmpegPlayer implements AirPlayConsumer {
         audioCompressionType = null;
     }
 
+    // --- HLS parked: FfmpegHlsPipeline remains in-tree as dead code until revived. ---
+
     @Override
     public void onMediaPlaylist(String playlistUri) {
-        hls.start(playlistUri, volumeLinear);
+        log.debug("Ignoring HLS playlist (FFmpeg HLS disabled): {}", playlistUri);
     }
 
     @Override
     public void onMediaPlaylistRemove() {
-        hls.stop();
+        // no-op
     }
 
     @Override
     public void onMediaPlaylistContent(String playlistUri, String content) {
-        if (playlistUri == null || !playlistUri.contains("mediadata.m3u8") || content == null) {
-            return;
-        }
-        if (!content.contains("#EXT-X-ENDLIST")) {
-            return;
-        }
-        double sum = 0;
-        for (String line : content.split("\n")) {
-            if (line.startsWith("#EXTINF:")) {
-                String value = line.substring("#EXTINF:".length()).split(",", 2)[0].trim();
-                try {
-                    sum += Double.parseDouble(value);
-                } catch (NumberFormatException ignored) {
-                    // skip
-                }
-            }
-        }
-        hls.noteMediaDuration(sum);
+        // no-op
     }
 
     @Override
     public void onMediaPlaylistPause() {
-        hls.pause();
+        // no-op
     }
 
     @Override
     public void onMediaPlaylistResume() {
-        hls.resume();
+        // no-op
     }
 
     @Override
     public void onMediaPlaylistSeek(double positionSeconds) {
-        hls.seek(positionSeconds);
+        // no-op
     }
 
     @Override
     public void onVolume(double volumeLinear) {
         this.volumeLinear = Math.max(0.0, Math.min(1.0, volumeLinear));
-        hls.setVolume(this.volumeLinear);
         log.info("Volume set to {}", this.volumeLinear);
     }
 
     @Override
     public double volume() {
         return volumeLinear;
-    }
-
-    @Override
-    public PlaybackInfo playbackInfo() {
-        if (!hls.isActive()) {
-            return AirPlayConsumer.super.playbackInfo();
-        }
-        double duration = hls.durationSeconds();
-        double position = hls.currentPositionSeconds();
-        if (duration > 0) {
-            position = Math.min(position, duration);
-        }
-        return new PlaybackInfo(duration, position, hls.isPaused() ? 0 : 1);
     }
 
     boolean isVideoProcessAlive() {
@@ -177,10 +147,6 @@ public class FFmpegPlayer implements AirPlayConsumer {
     /** PID of the ffplay video process, or {@code -1} if not running. */
     public long videoProcessPid() {
         return h264Process != null && h264Process.isAlive() ? h264Process.pid() : -1L;
-    }
-
-    boolean isHlsActive() {
-        return hls.isActive();
     }
 
     private void startAlacProcess(AudioStreamInfo audioStreamInfo) {
