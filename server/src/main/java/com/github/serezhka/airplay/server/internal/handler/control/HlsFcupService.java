@@ -25,6 +25,12 @@ import java.util.concurrent.TimeUnit;
 public class HlsFcupService {
 
     private static final long MASTER_POLL_INTERVAL_MS = 2000;
+    /**
+     * After the first post-EOS mediadata sweep, re-FCUP all mediadata every N master polls.
+     * YouTube ad→content often keeps the same master URI list and only swaps VOD bodies.
+     * N=3 (~6s) balances freshness vs reverse /event channel load (playlistRemove / next /play).
+     */
+    private static final int MEDIA_RESWEEP_EVERY_MASTER_POLLS = 3;
 
     private final SessionManager sessionManager;
     private final AirPlayConsumer airPlayConsumer;
@@ -53,11 +59,11 @@ public class HlsFcupService {
             hls.setWaitingForMasterChange(false);
             hls.setPlaybackRate(0);
 
-            // Never signal "stopped" on EOS: YouTube treats it as end-of-item, closes the
-            // reverse /event channel, and often never delivers the next master (live
-            // preroll ad → content; historically also VOD ad hangs). Keep the session and
-            // poll until master/mediadata changes. playlistRemove + POST /play can still
-            // arrive while we wait. "paused" looks like a user pause — use "loading".
+            // Never "paused" or "stopped" on EOS:
+            // - paused looks like a user pause → YouTube never playlistRemove / next /play
+            //   (dump 20260918-040320: paused + master-only poll → hung forever)
+            // - stopped closes reverse /event on live preroll → content
+            // Working path (2026-09-16 logs): loading + master/media FCUP → playlistRemove + /play
             int action = hls.getActionAtItemEnd();
             String reason = hls.isLivePlaylist()
                     ? "live playlist"
@@ -85,6 +91,7 @@ public class HlsFcupService {
                     rewrittenChanged, rawChanged, session.getId());
             cancelMasterPoll(session.getId());
             hls.setWaitingForMasterChange(false);
+            hls.setPlaybackRate(1);
             if (remoteMediaUris != null && !remoteMediaUris.isEmpty()) {
                 try {
                     hls.storeMasterPlaylist(rewrittenBody, remoteMediaUris);
@@ -107,9 +114,12 @@ public class HlsFcupService {
                 return;
             }
             hls.updateMasterPlaylist(rewrittenBody);
-            // One full mediadata sweep after EOS; further polls only hit master so we do not
-            // starve the reverse /event channel (playlistRemove / next /play).
-            if (!hls.isPostEosMediaSweepDone()) {
+            // Prefer a mediadata sweep after EOS: master URI list often stays identical while
+            // VOD bodies swap (preroll ad → content). First sweep immediately; then every
+            // MEDIA_RESWEEP_EVERY_MASTER_POLLS master polls so we do not starve /event
+            // (playlistRemove / next /play still need the reverse channel).
+            if (!hls.isPostEosMediaSweepDone()
+                    || hls.noteMasterPollAndShouldResweepMedia(MEDIA_RESWEEP_EVERY_MASTER_POLLS)) {
                 log.info("HLS master unchanged after EOS, refreshing media playlists session={}", session.getId());
                 hls.beginPostEosMediaRefresh(remoteMediaUris);
                 String first = hls.nextMediaUri();
@@ -140,6 +150,7 @@ public class HlsFcupService {
             log.info("HLS media playlists changed after EOS, restarting playback session {}", session.getId());
             cancelMasterPoll(session.getId());
             hls.setWaitingForMasterChange(false);
+            hls.setPlaybackRate(1);
             airPlayConsumer.onMediaPlaylist(hls.getPlaylistUriLocal());
             sendPlaybackStateEvent(session, "playing");
         } else {

@@ -122,6 +122,61 @@ class HlsPlaylistStateTest {
         assertTrue(hls.isPostEosMediaSweepDone());
         hls.setWaitingForMasterChange(false);
         assertFalse(hls.isPostEosMediaSweepDone());
+        assertEquals(0, hls.getPostEosMasterPollCount());
+    }
+
+    @Test
+    void noteMasterPollTriggersMediaResweepEveryNthPoll() {
+        var hls = new HlsPlaylistState("mlhls://localhost/master.m3u8", "http://localhost/playlist/master.m3u8?session=x");
+        hls.setWaitingForMasterChange(true);
+        hls.markPostEosMediaSweepDone();
+
+        assertFalse(hls.noteMasterPollAndShouldResweepMedia(3));
+        assertTrue(hls.isPostEosMediaSweepDone());
+        assertFalse(hls.noteMasterPollAndShouldResweepMedia(3));
+        assertTrue(hls.isPostEosMediaSweepDone());
+        assertTrue(hls.noteMasterPollAndShouldResweepMedia(3), "3rd poll should arm another mediadata sweep");
+        assertFalse(hls.isPostEosMediaSweepDone());
+        assertEquals(3, hls.getPostEosMasterPollCount());
+
+        hls.markPostEosMediaSweepDone();
+        assertFalse(hls.noteMasterPollAndShouldResweepMedia(3));
+        assertFalse(hls.noteMasterPollAndShouldResweepMedia(3));
+        assertTrue(hls.noteMasterPollAndShouldResweepMedia(3));
+    }
+
+    @Test
+    void noteMasterPollResweepDisabledWhenEveryNNonPositive() {
+        var hls = new HlsPlaylistState("mlhls://localhost/master.m3u8", "http://localhost/playlist/master.m3u8?session=x");
+        hls.markPostEosMediaSweepDone();
+        assertFalse(hls.noteMasterPollAndShouldResweepMedia(0));
+        assertFalse(hls.noteMasterPollAndShouldResweepMedia(-1));
+        assertTrue(hls.isPostEosMediaSweepDone());
+    }
+
+    @Test
+    void postEosResweepThenChangedMediadataRestartsCycle() {
+        // Dump 20260918-034535: ad VOD ENDLIST ~6s, master URI list stable, mediadata must change.
+        var hls = new HlsPlaylistState("mlhls://localhost/master.m3u8", "http://localhost/playlist/master.m3u8?session=x");
+        String uri = "mlhls://localhost/itag/232/mediadata.m3u8";
+        String ad = "#EXTM3U\n#EXTINF:6.0,\nad.ts\n#EXT-X-ENDLIST\n";
+        String content = "#EXTM3U\n#EXTINF:10.0,\ncontent.ts\n#EXTINF:10.0,\nc2.ts\n#EXT-X-ENDLIST\n";
+        hls.putPlaylist(uri, ad);
+        hls.setWaitingForMasterChange(true);
+        hls.resetPostEosMediaSweep();
+
+        hls.beginPostEosMediaRefresh(List.of(uri));
+        hls.putPlaylist(uri, ad);
+        assertFalse(hls.finishPostEosMediaRefresh());
+        hls.markPostEosMediaSweepDone();
+
+        assertFalse(hls.noteMasterPollAndShouldResweepMedia(3));
+        assertFalse(hls.noteMasterPollAndShouldResweepMedia(3));
+        assertTrue(hls.noteMasterPollAndShouldResweepMedia(3));
+
+        hls.beginPostEosMediaRefresh(List.of(uri));
+        hls.putPlaylist(uri, content);
+        assertTrue(hls.finishPostEosMediaRefresh());
     }
 
     @Test

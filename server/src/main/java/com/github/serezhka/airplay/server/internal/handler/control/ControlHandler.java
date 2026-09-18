@@ -485,6 +485,15 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         var hls = session.getHlsPlaylistState();
         log.info("POST /rate value={}", value);
 
+        // After VOD ad EOS we wait for the next /play; YouTube still probes rate 0/1.
+        // Answering with paused→playing makes it think the ad is still active.
+        if (hls != null && hls.isWaitingForMasterChange()) {
+            log.info("Ignoring rate={} while waiting for next HLS item session={}", value, session.getId());
+            var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+            sendResponse(ctx, request, response);
+            return;
+        }
+
         if (value == 0) {
             cancelPendingPause(session.getId());
             if (hls != null && hls.shouldIgnorePause()) {
@@ -513,6 +522,10 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
 
     private void applyPause(Session session) {
         var hls = session.getHlsPlaylistState();
+        if (hls != null && hls.isWaitingForMasterChange()) {
+            log.info("Skipping debounced pause while waiting for next HLS item session={}", session.getId());
+            return;
+        }
         if (hls != null && hls.shouldIgnorePause()) {
             log.info("Skipping debounced pause during scrub grace session={}", session.getId());
             return;

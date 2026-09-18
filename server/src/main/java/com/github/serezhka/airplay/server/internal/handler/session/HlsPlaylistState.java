@@ -35,8 +35,10 @@ public class HlsPlaylistState {
     private volatile boolean waitingForMasterChange;
     private volatile boolean postEosMediaRefreshing;
     private volatile boolean postEosMediaChanged;
-    /** After EOS, at most one full mediadata FCUP sweep; further polls are master-only. */
+    /** After EOS, at most one full mediadata FCUP sweep until the next resweep interval. */
     private volatile boolean postEosMediaSweepDone;
+    /** Master polls while waiting for post-EOS change; drives periodic mediadata resweep. */
+    private int postEosMasterPollCount;
     /** True once any mediadata lacked {@code #EXT-X-ENDLIST} (sliding live / event window). */
     private volatile boolean livePlaylist;
     private Double pendingSeekSeconds;
@@ -229,6 +231,7 @@ public class HlsPlaylistState {
 
     public void resetPostEosMediaSweep() {
         postEosMediaSweepDone = false;
+        postEosMasterPollCount = 0;
     }
 
     public void markPostEosMediaSweepDone() {
@@ -237,6 +240,29 @@ public class HlsPlaylistState {
 
     public boolean isPostEosMediaSweepDone() {
         return postEosMediaSweepDone;
+    }
+
+    /**
+     * Count a master-only poll while waiting after EOS. Every {@code everyN} polls (inclusive),
+     * allow another mediadata FCUP sweep — YouTube often keeps the same master and only updates
+     * VOD mediadata on ad→content.
+     *
+     * @param everyN must be &gt;= 1; values &lt;= 0 disable periodic resweep
+     */
+    public boolean noteMasterPollAndShouldResweepMedia(int everyN) {
+        if (everyN <= 0) {
+            return false;
+        }
+        postEosMasterPollCount++;
+        if (postEosMasterPollCount % everyN != 0) {
+            return false;
+        }
+        postEosMediaSweepDone = false;
+        return true;
+    }
+
+    public int getPostEosMasterPollCount() {
+        return postEosMasterPollCount;
     }
 
     public boolean isWaitingForMasterChange() {
@@ -248,6 +274,7 @@ public class HlsPlaylistState {
         if (!waitingForMasterChange) {
             cancelPostEosMediaRefresh();
             postEosMediaSweepDone = false;
+            postEosMasterPollCount = 0;
         }
     }
 
