@@ -339,7 +339,7 @@ final class FfmpegHlsPipeline {
             cmd.add("-allowed_segment_extensions");
             cmd.add("ALL");
         }
-        // Do not use -fflags nobuffer here: on short VOD ENDLIST items ffplay exits in ~200ms.
+        // -fflags nobuffer makes ffplay exit in ~200ms on short VOD ENDLIST items.
         cmd.add("-flags");
         cmd.add("low_delay");
         cmd.add("-framedrop");

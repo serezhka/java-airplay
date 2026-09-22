@@ -3,6 +3,7 @@ package com.github.serezhka.airplay.player.vlc;
 import com.formdev.flatlaf.FlatDarkLaf;
 import com.github.serezhka.airplay.lib.AudioStreamInfo;
 import com.github.serezhka.airplay.lib.AppLogs;
+import com.github.serezhka.airplay.lib.HlsEndListDuration;
 import com.github.serezhka.airplay.lib.VideoStreamInfo;
 import com.github.serezhka.airplay.server.AirPlayConsumer;
 import lombok.extern.slf4j.Slf4j;
@@ -26,9 +27,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * VLC-backed AirPlay consumer (vlcj embedded UI by default).
- * Headless/CI uses {@code cvlc}/{@code vlc} stdin because vlcj native init can hang on Linux runners.
- * HLS uses a separate {@link VlcHlsPipeline} ({@code cvlc}/{@code vlc} URI process).
+ * VLC-backed AirPlay consumer.
+ * <p>
+ * Mirror uses vlcj embedded UI (lazy-init — native factory can hang on Linux), or
+ * {@code cvlc}/{@code vlc} stdin when headless. HLS uses a separate {@link VlcHlsPipeline}.
  */
 @Slf4j
 public class VlcPlayer implements AirPlayConsumer {
@@ -47,7 +49,6 @@ public class VlcPlayer implements AirPlayConsumer {
     private volatile double volumeLinear = 1.0;
     private volatile Double pendingStartSeekSeconds;
 
-    // GUI / vlcj path
     private MediaPlayerFactory mediaPlayerFactory;
     private NativeLog nativeLog;
     private EmbeddedMediaPlayerComponent mediaPlayerComponent;
@@ -56,7 +57,6 @@ public class VlcPlayer implements AirPlayConsumer {
     private InputStream input;
     private NonSeekableInputStreamMedia media;
 
-    // CLI path
     private Process cliProcess;
     private OutputStream cliStdin;
 
@@ -68,8 +68,6 @@ public class VlcPlayer implements AirPlayConsumer {
         } catch (IOException e) {
             throw new IllegalStateException("Failed to open VLC debug log", e);
         }
-        // Do not init vlcj here — native factory can hang on Linux; HLS uses cvlc/vlc URI process.
-        // Embedded UI is created lazily on the first mirror onVideoFormat.
     }
 
     private void initEmbedded() {
@@ -81,6 +79,22 @@ public class VlcPlayer implements AirPlayConsumer {
             log.debug("[VLCJ] [{}] [{}] {} {}", level, module, name, message);
         });
 
+        openMirrorPipe();
+        mediaPlayerComponent = new EmbeddedMediaPlayerComponent(mediaPlayerFactory, null, null, null, null);
+        window = new JFrame("AirPlay player");
+        window.setSize(800, 600);
+        window.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
+        window.addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowClosing(WindowEvent e) {
+                releaseAll();
+            }
+        });
+        window.setContentPane(mediaPlayerComponent);
+        window.setVisible(true);
+    }
+
+    private void openMirrorPipe() {
         output = new PipedOutputStream();
         input = output.getInputStream();
         media = new NonSeekableInputStreamMedia() {
@@ -99,19 +113,6 @@ public class VlcPlayer implements AirPlayConsumer {
                 inputStream.close();
             }
         };
-
-        mediaPlayerComponent = new EmbeddedMediaPlayerComponent(mediaPlayerFactory, null, null, null, null);
-        window = new JFrame("AirPlay player");
-        window.setSize(800, 600);
-        window.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
-        window.addWindowListener(new WindowAdapter() {
-            @Override
-            public void windowClosing(WindowEvent e) {
-                releaseAll();
-            }
-        });
-        window.setContentPane(mediaPlayerComponent);
-        window.setVisible(true);
     }
 
     static boolean headless() {
@@ -206,7 +207,6 @@ public class VlcPlayer implements AirPlayConsumer {
 
     @Override
     public void onVideoSrcDisconnect() {
-        // Mirror only — keep the player alive for subsequent HLS /play.
         stopMirror();
     }
 
@@ -248,27 +248,9 @@ public class VlcPlayer implements AirPlayConsumer {
         } catch (Exception ignored) {
             // shutting down
         }
-        // Re-open pipe for a possible later mirror session.
         if (!closed.get() && mediaPlayerFactory != null) {
             try {
-                output = new PipedOutputStream();
-                input = output.getInputStream();
-                media = new NonSeekableInputStreamMedia() {
-                    @Override
-                    protected long onGetSize() {
-                        return 0;
-                    }
-
-                    @Override
-                    protected InputStream onOpenStream() {
-                        return input;
-                    }
-
-                    @Override
-                    protected void onCloseStream(InputStream inputStream) throws IOException {
-                        inputStream.close();
-                    }
-                };
+                openMirrorPipe();
             } catch (Exception e) {
                 log.debug("Failed to reset VLC mirror pipe: {}", e.toString());
             }
@@ -346,21 +328,10 @@ public class VlcPlayer implements AirPlayConsumer {
         if (playlistUri == null || !playlistUri.contains("mediadata.m3u8") || content == null) {
             return;
         }
-        if (!content.contains("#EXT-X-ENDLIST")) {
-            return;
+        double sum = HlsEndListDuration.sumSeconds(content);
+        if (sum > 0) {
+            hls.noteMediaDuration(sum);
         }
-        double sum = 0;
-        for (String line : content.split("\n")) {
-            if (line.startsWith("#EXTINF:")) {
-                String value = line.substring("#EXTINF:".length()).split(",", 2)[0].trim();
-                try {
-                    sum += Double.parseDouble(value);
-                } catch (NumberFormatException ignored) {
-                    // skip
-                }
-            }
-        }
-        hls.noteMediaDuration(sum);
     }
 
     @Override
@@ -404,6 +375,7 @@ public class VlcPlayer implements AirPlayConsumer {
         if (duration > 0) {
             position = Math.min(position, duration);
         }
+        // VOD EOS is paused locally; report rate=1 (rate=0 looks like user pause).
         double rate = (hls.isPaused() && !hls.isEnded()) ? 0 : 1;
         return new PlaybackInfo(duration, position, rate);
     }

@@ -307,7 +307,6 @@ final class VlcHlsPipeline {
         }
         cmd.add("--play-and-exit");
         cmd.add("--no-interact");
-        // Linear volume ≈ VLC gain (1.0 = default).
         cmd.add("--gain");
         cmd.add(String.format(Locale.US, "%.3f", Math.max(0.0, Math.min(8.0, volume))));
         if (startAt > 0.05) {
@@ -319,7 +318,6 @@ final class VlcHlsPipeline {
 
         ProcessBuilder pb = new ProcessBuilder(cmd);
         AppLogs.configureProcessLogging(pb, "vlc");
-        // Ensure X11/Pulse reach cvlc when the JVM was started with DISPLAY=:10.
         Map<String, String> env = pb.environment();
         for (String key : List.of("DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR", "PULSE_SERVER", "DBUS_SESSION_BUS_ADDRESS")) {
             String value = System.getenv(key);

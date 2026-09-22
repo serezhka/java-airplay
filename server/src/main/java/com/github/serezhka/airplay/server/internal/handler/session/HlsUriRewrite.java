@@ -22,7 +22,6 @@ public final class HlsUriRewrite {
     }
 
     public static String toLocalUri(String remoteUri, String baseUrl, String sessionId) {
-        // Absolute HTTP(S) Content-Location (direct VOD / offline replay) — pass through.
         if (remoteUri.startsWith("http://") || remoteUri.startsWith("https://")) {
             return remoteUri;
         }

@@ -2,6 +2,7 @@ package com.github.serezhka.airplay.player.ffmpeg;
 
 import com.github.serezhka.airplay.lib.AudioStreamInfo;
 import com.github.serezhka.airplay.lib.AppLogs;
+import com.github.serezhka.airplay.lib.HlsEndListDuration;
 import com.github.serezhka.airplay.lib.VideoStreamInfo;
 import com.github.serezhka.airplay.server.AirPlayConsumer;
 import lombok.extern.slf4j.Slf4j;
@@ -117,22 +118,10 @@ public class FFmpegPlayer implements AirPlayConsumer {
         if (playlistUri == null || !playlistUri.contains("mediadata.m3u8") || content == null) {
             return;
         }
-        // Ignore sliding-window live playlists — their EXTINF sums inflate ad duration.
-        if (!content.contains("#EXT-X-ENDLIST")) {
-            return;
+        double sum = HlsEndListDuration.sumSeconds(content);
+        if (sum > 0) {
+            hls.noteMediaDuration(sum);
         }
-        double sum = 0;
-        for (String line : content.split("\n")) {
-            if (line.startsWith("#EXTINF:")) {
-                String value = line.substring("#EXTINF:".length()).split(",", 2)[0].trim();
-                try {
-                    sum += Double.parseDouble(value);
-                } catch (NumberFormatException ignored) {
-                    // skip
-                }
-            }
-        }
-        hls.noteMediaDuration(sum);
     }
 
     @Override
@@ -176,8 +165,7 @@ public class FFmpegPlayer implements AirPlayConsumer {
         if (duration > 0) {
             position = Math.min(position, duration);
         }
-        // At VOD EOS the pipeline is stopped locally, but report rate=1 so the phone sees
-        // "playing at end" (rate=0 looks like user pause and blocks playlistRemove).
+        // VOD EOS is paused locally; report rate=1 (rate=0 looks like user pause).
         double rate = (hls.isPaused() && !hls.isEnded()) ? 0 : 1;
         return new PlaybackInfo(duration, position, rate);
     }
