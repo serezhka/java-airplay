@@ -165,10 +165,13 @@ final class FfplayPcmSink implements AutoCloseable {
         String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
         if (os.contains("linux")) {
             env.putIfAbsent("SDL_AUDIODRIVER", "pulse");
+            env.putIfAbsent("SDL_VIDEODRIVER", "x11");
         }
         copyEnv(env, "PULSE_SERVER");
         copyEnv(env, "PULSE_SINK");
         copyEnv(env, "DISPLAY");
+        copyEnv(env, "XAUTHORITY");
+        copyEnv(env, "XDG_RUNTIME_DIR");
     }
 
     private static void copyEnv(Map<String, String> env, String key) {

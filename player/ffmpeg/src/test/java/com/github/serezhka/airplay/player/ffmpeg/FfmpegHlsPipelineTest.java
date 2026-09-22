@@ -2,7 +2,6 @@ package com.github.serezhka.airplay.player.ffmpeg;
 
 import com.github.serezhka.airplay.lib.HlsLifecycle;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.atomic.AtomicInteger;
@@ -11,7 +10,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-@Disabled("FFmpeg HLS pipeline is dead code")
 class FfmpegHlsPipelineTest {
 
     private final FfmpegHlsPipeline hls = new FfmpegHlsPipeline();

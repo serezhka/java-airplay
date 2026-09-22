@@ -1,7 +1,6 @@
 package com.github.serezhka.airplay.player.ffmpeg;
 
 import org.junit.jupiter.api.Assumptions;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
@@ -15,10 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Self-test for FFmpeg HLS pause/resume/seek + PCM sink without a phone.
  * Needs {@code ffmpeg} and {@code ffplay} on PATH.
- * <p>
- * Parked: FFmpeg HLS is disconnected from {@link FFmpegPlayer} until revived.
  */
-@Disabled("FFmpeg HLS pipeline is dead code")
 class FfmpegHlsPipelineSmokeTest {
 
     @TempDir

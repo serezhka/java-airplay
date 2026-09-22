@@ -1,4 +1,4 @@
-package com.github.serezhka.airplay.player.ffmpeg;
+package com.github.serezhka.airplay.player.vlc;
 
 import com.github.serezhka.airplay.lib.AppLogs;
 import com.github.serezhka.airplay.lib.HlsLifecycle;
@@ -7,19 +7,20 @@ import lombok.extern.slf4j.Slf4j;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * HLS playback via system {@code ffplay} (native SDL video + Pulse audio).
- * Semantics mirror {@code GstHlsPipeline} for AirPlay (position, pause, seek, volume, EOS).
+ * HLS URI playback via system {@code cvlc}/{@code vlc}.
+ * Semantics mirror {@code GstHlsPipeline} (position, pause, seek, volume, EOS).
  */
 @Slf4j
-final class FfmpegHlsPipeline {
+final class VlcHlsPipeline {
 
     private static final long EOS_DEBOUNCE_NS = 1_500_000_000L;
-    /** Exits faster than this after start are treated as open failures, not real EOS. */
     private static final long MIN_PLAY_BEFORE_EOS_NS = 2_000_000_000L;
     private static final int MAX_EARLY_EXIT_RETRIES = 4;
     private static final double ABSURD_SEEK_SECONDS = 86_400.0 * 7;
@@ -39,15 +40,12 @@ final class FfmpegHlsPipeline {
     private volatile long positionAnchorNanos;
     private volatile long lastEndedNotifyNanos;
     private volatile Thread playbackThread;
-    private volatile Process ffplayProcess;
+    private volatile Process vlcProcess;
 
     void start(String playlistUri, double volume) {
         start(playlistUri, volume, 0);
     }
 
-    /**
-     * @param initialSeekSeconds position to open at (avoids start-then-seek race that kills the first ffplay)
-     */
     void start(String playlistUri, double volume, double initialSeekSeconds) {
         stop();
         volumeLinear = clampVolume(volume);
@@ -64,14 +62,13 @@ final class FfmpegHlsPipeline {
         pendingSeekSeconds.set(seek > 0.05 ? seek : null);
 
         long myEpoch = epoch.get();
-        // Bust HTTP cache so ffplay re-fetches playlists after ad→ad / ad→content.
         uri = withCacheBuster(playlistUri, myEpoch);
 
-        Thread thread = new Thread(() -> runPlayback(myEpoch), "ffmpeg-hls");
+        Thread thread = new Thread(() -> runPlayback(myEpoch), "vlc-hls");
         thread.setDaemon(true);
         playbackThread = thread;
         thread.start();
-        log.info("HLS pipeline started (ffplay) uri={} ss={}", uri,
+        log.info("HLS pipeline started (vlc) uri={} ss={}", uri,
                 seek > 0.05 ? String.format(Locale.US, "%.3f", seek) : "0");
     }
 
@@ -82,7 +79,7 @@ final class FfmpegHlsPipeline {
         paused.set(false);
         ended.set(false);
         pendingSeekSeconds.set(null);
-        destroyFfplay();
+        destroyVlc();
         Thread thread = playbackThread;
         playbackThread = null;
         uri = null;
@@ -96,9 +93,6 @@ final class FfmpegHlsPipeline {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
-            if (thread.isAlive()) {
-                log.warn("HLS thread still alive after join; epoch={} will ignore its updates", epoch.get());
-            }
         }
     }
 
@@ -108,8 +102,7 @@ final class FfmpegHlsPipeline {
         }
         positionBaseSeconds = currentPositionSeconds();
         paused.set(true);
-        // Stop ffplay so Pulse does not keep playing; resume reopens with -ss.
-        destroyFfplay();
+        destroyVlc();
         log.info("HLS paused at {}s", positionBaseSeconds);
     }
 
@@ -123,7 +116,6 @@ final class FfmpegHlsPipeline {
         }
         paused.set(false);
         positionAnchorNanos = System.nanoTime();
-        // Reopen at the frozen position.
         pendingSeekSeconds.set(positionBaseSeconds);
         log.info("HLS resumed from {}s", positionBaseSeconds);
     }
@@ -143,14 +135,13 @@ final class FfmpegHlsPipeline {
         pendingSeekSeconds.set(positionSeconds);
         Process running;
         synchronized (processLock) {
-            running = ffplayProcess;
+            running = vlcProcess;
         }
         if (running == null || !running.isAlive()) {
-            // First open (or between destroy and reopen) — runPlayback picks up pendingSeek.
             log.info("HLS seek queued to {}s", positionSeconds);
             return;
         }
-        destroyFfplay(); // wake waitFor so the loop reopens with -ss
+        destroyVlc();
         log.info("HLS seek requested to {}s", positionSeconds);
     }
 
@@ -166,10 +157,9 @@ final class FfmpegHlsPipeline {
             return;
         }
         volumeLinear = next;
-        // ffplay volume is start-only; reopen at current position.
         if (isActive() && !paused.get() && !ended.get()) {
             pendingSeekSeconds.set(currentPositionSeconds());
-            destroyFfplay();
+            destroyVlc();
         }
     }
 
@@ -193,9 +183,8 @@ final class FfmpegHlsPipeline {
         if (paused.get() || positionAnchorNanos == 0) {
             return positionBaseSeconds;
         }
-        Process p = ffplayProcess;
+        Process p = vlcProcess;
         if (p == null || !p.isAlive()) {
-            // Freeze while ffplay is down (seek/reopen/retry) — do not free-run the scrubber.
             return positionBaseSeconds;
         }
         double elapsed = (System.nanoTime() - positionAnchorNanos) / 1_000_000_000.0;
@@ -205,21 +194,7 @@ final class FfmpegHlsPipeline {
     }
 
     double durationSeconds() {
-        if (playlistDurationSeconds > 0) {
-            return playlistDurationSeconds;
-        }
-        return 0;
-    }
-
-    /** Smoke tests: ffplay child still alive (A/V in one process). */
-    boolean audioSinkAlive() {
-        Process p = ffplayProcess;
-        return p != null && p.isAlive();
-    }
-
-    /** Kept for unit tests that simulate demux PTS resets — reported position is wall-clock only. */
-    void noteDemuxTimestampMicros(long timestampMicros) {
-        // no-op
+        return playlistDurationSeconds > 0 ? playlistDurationSeconds : 0;
     }
 
     private void runPlayback(long myEpoch) {
@@ -246,10 +221,10 @@ final class FfmpegHlsPipeline {
             Process process;
             long startedAtNanos;
             try {
-                process = startFfplay(playlistUri, startAt, volumeLinear);
+                process = startVlc(playlistUri, startAt, volumeLinear);
                 startedAtNanos = System.nanoTime();
             } catch (Exception e) {
-                log.warn("HLS ffplay start failed, retrying: {}", e.toString());
+                log.warn("HLS vlc start failed, retrying: {}", e.toString());
                 sleepQuiet(300);
                 continue;
             }
@@ -258,9 +233,9 @@ final class FfmpegHlsPipeline {
                     process.destroyForcibly();
                     continue;
                 }
-                ffplayProcess = process;
+                vlcProcess = process;
             }
-            log.info("HLS ffplay started pid={} ss={} volume={}", process.pid(),
+            log.info("HLS vlc started pid={} ss={} volume={}", process.pid(),
                     startAt > 0.05 ? String.format(Locale.US, "%.3f", startAt) : "0",
                     Math.round(volumeLinear * 100));
 
@@ -272,22 +247,19 @@ final class FfmpegHlsPipeline {
                         earlyExitRetries = 0;
                     }
                     double dur = durationSeconds();
-                    // Only trust wall-clock ENDLIST after ffplay has actually been playing a bit;
-                    // otherwise a stale duration + failed open looks like EOS at t=0.
                     if (livedNs >= MIN_PLAY_BEFORE_EOS_NS
                             && dur > 0 && currentPositionSeconds() >= dur - 0.05) {
                         markEndedAndRefresh("ENDLIST", myEpoch);
-                        destroyFfplay();
+                        destroyVlc();
                         return;
                     }
                     sleepQuiet(50);
                 }
                 if (pendingSeekSeconds.get() != null || paused.get()
                         || stopRequested.get() || userStopped.get() || epoch.get() != myEpoch) {
-                    destroyFfplay();
+                    destroyVlc();
                     continue;
                 }
-                // Process exited on its own.
                 int code = process.waitFor();
                 long livedNs = System.nanoTime() - startedAtNanos;
                 if (epoch.get() != myEpoch || userStopped.get() || stopRequested.get() || paused.get()) {
@@ -295,101 +267,103 @@ final class FfmpegHlsPipeline {
                 }
                 if (livedNs < MIN_PLAY_BEFORE_EOS_NS && earlyExitRetries < MAX_EARLY_EXIT_RETRIES) {
                     earlyExitRetries++;
-                    // Keep the intended -ss so we do not reopen at 0 after a failed seek open.
                     if (startAt > 0.05) {
                         pendingSeekSeconds.compareAndSet(null, startAt);
                     }
-                    log.warn("HLS ffplay exited early code={} after {}ms (ss={}); retry {}/{}",
+                    log.warn("HLS vlc exited early code={} after {}ms (ss={}); retry {}/{}",
                             code, livedNs / 1_000_000L,
                             startAt > 0.05 ? String.format(Locale.US, "%.3f", startAt) : "0",
                             earlyExitRetries, MAX_EARLY_EXIT_RETRIES);
                     sleepQuiet(250);
                     continue;
                 }
-                log.info("HLS ffplay exited code={} after {}ms", code, livedNs / 1_000_000L);
+                log.info("HLS vlc exited code={} after {}ms", code, livedNs / 1_000_000L);
                 markEndedAndRefresh("EOS", myEpoch);
                 return;
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                destroyFfplay();
+                destroyVlc();
                 break;
             }
         }
     }
 
-    private Process startFfplay(String playlistUri, double startAt, double volume) throws Exception {
-        boolean headless = Boolean.parseBoolean(System.getProperty("airplay.ffmpeg.hls.headless", "false"));
+    private Process startVlc(String playlistUri, double startAt, double volume) throws Exception {
+        boolean headless = Boolean.parseBoolean(System.getProperty("airplay.vlc.hls.headless", "false"))
+                || Boolean.parseBoolean(System.getProperty("airplay.vlc.headless", "false"));
+        String binary = resolveBinary();
         List<String> cmd = new ArrayList<>();
-        cmd.add("ffplay");
+        cmd.add(binary);
         if (headless) {
-            cmd.add("-nodisp");
+            cmd.add("--intf");
+            cmd.add("dummy");
+            cmd.add("--vout");
+            cmd.add("dummy");
+            cmd.add("--aout");
+            cmd.add("dummy");
         } else {
-            cmd.add("-fs");
+            cmd.add("--fullscreen");
+            cmd.add("--no-video-title-show");
         }
-        cmd.add("-autoexit");
-        cmd.add("-loglevel");
-        cmd.add("error");
-        // FFmpeg 6+/8 default extension_picky rejects YouTube googlevideo URLs (no .ts/.m4s).
-        // Only for HLS — these options can break plain mpegts/.ts opens used in smoke tests.
-        if (isHlsPlaylistUri(playlistUri)) {
-            cmd.add("-extension_picky");
-            cmd.add("0");
-            cmd.add("-allowed_extensions");
-            cmd.add("ALL");
-            cmd.add("-allowed_segment_extensions");
-            cmd.add("ALL");
-        }
-        // Do not use -fflags nobuffer here: on short VOD ENDLIST items ffplay exits in ~200ms.
-        cmd.add("-flags");
-        cmd.add("low_delay");
-        cmd.add("-framedrop");
-        cmd.add("-sync");
-        cmd.add("audio");
-        cmd.add("-volume");
-        cmd.add(String.valueOf(Math.max(0, Math.min(100, (int) Math.round(volume * 100)))));
+        cmd.add("--play-and-exit");
+        cmd.add("--no-interact");
+        // Linear volume ≈ VLC gain (1.0 = default).
+        cmd.add("--gain");
+        cmd.add(String.format(Locale.US, "%.3f", Math.max(0.0, Math.min(8.0, volume))));
         if (startAt > 0.05) {
-            cmd.add("-ss");
+            cmd.add("--start-time");
             cmd.add(String.format(Locale.US, "%.3f", startAt));
         }
         cmd.add(playlistUri);
+        cmd.add("vlc://quit");
 
         ProcessBuilder pb = new ProcessBuilder(cmd);
-        FfplayPcmSink.forcePulseAudioEnv(pb);
-        AppLogs.configureProcessLogging(pb, "ffmpeg");
+        AppLogs.configureProcessLogging(pb, "vlc");
+        // Ensure X11/Pulse reach cvlc when the JVM was started with DISPLAY=:10.
+        Map<String, String> env = pb.environment();
+        for (String key : List.of("DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR", "PULSE_SERVER", "DBUS_SESSION_BUS_ADDRESS")) {
+            String value = System.getenv(key);
+            if (value != null && !value.isBlank()) {
+                env.put(key, value);
+            }
+        }
         Process process = pb.start();
-        // Give SDL a moment; if it dies immediately the URL/env is wrong.
-        sleepQuiet(150);
+        sleepQuiet(200);
         if (!process.isAlive()) {
             process.destroyForcibly();
-            throw new IllegalStateException("ffplay exited immediately for " + playlistUri);
+            throw new IllegalStateException(binary + " exited immediately for " + playlistUri);
         }
         return process;
     }
 
-    private static boolean isHlsPlaylistUri(String playlistUri) {
-        if (playlistUri == null) {
-            return false;
+    private static String resolveBinary() {
+        for (String candidate : List.of("cvlc", "vlc")) {
+            try {
+                Process p = new ProcessBuilder(candidate, "--version").redirectErrorStream(true).start();
+                boolean finished = p.waitFor(3, TimeUnit.SECONDS);
+                if (finished || p.isAlive()) {
+                    p.destroyForcibly();
+                    return candidate;
+                }
+            } catch (Exception ignored) {
+                // try next
+            }
         }
-        String lower = playlistUri.toLowerCase(Locale.ROOT);
-        int q = lower.indexOf('?');
-        if (q >= 0) {
-            lower = lower.substring(0, q);
-        }
-        return lower.endsWith(".m3u8") || lower.endsWith(".m3u");
+        throw new IllegalStateException("Neither cvlc nor vlc found on PATH");
     }
 
-    private void destroyFfplay() {
+    private void destroyVlc() {
         Process process;
         synchronized (processLock) {
-            process = ffplayProcess;
-            ffplayProcess = null;
+            process = vlcProcess;
+            vlcProcess = null;
         }
         if (process == null) {
             return;
         }
         process.destroy();
         try {
-            if (!process.waitFor(500, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+            if (!process.waitFor(500, TimeUnit.MILLISECONDS)) {
                 process.destroyForcibly();
             }
         } catch (InterruptedException e) {

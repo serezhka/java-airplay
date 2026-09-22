@@ -28,6 +28,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * VLC-backed AirPlay consumer (vlcj embedded UI by default).
  * Headless/CI uses {@code cvlc}/{@code vlc} stdin because vlcj native init can hang on Linux runners.
+ * HLS uses a separate {@link VlcHlsPipeline} ({@code cvlc}/{@code vlc} URI process).
  */
 @Slf4j
 public class VlcPlayer implements AirPlayConsumer {
@@ -39,9 +40,12 @@ public class VlcPlayer implements AirPlayConsumer {
     }
 
     private final boolean headless;
+    private final VlcHlsPipeline hls = new VlcHlsPipeline();
     private final PrintStream vlcLog;
     private final AtomicBoolean closed = new AtomicBoolean();
     private final AtomicBoolean started = new AtomicBoolean();
+    private volatile double volumeLinear = 1.0;
+    private volatile Double pendingStartSeekSeconds;
 
     // GUI / vlcj path
     private MediaPlayerFactory mediaPlayerFactory;
@@ -64,10 +68,8 @@ public class VlcPlayer implements AirPlayConsumer {
         } catch (IOException e) {
             throw new IllegalStateException("Failed to open VLC debug log", e);
         }
-
-        if (!headless) {
-            initEmbedded();
-        }
+        // Do not init vlcj here — native factory can hang on Linux; HLS uses cvlc/vlc URI process.
+        // Embedded UI is created lazily on the first mirror onVideoFormat.
     }
 
     private void initEmbedded() {
@@ -105,7 +107,7 @@ public class VlcPlayer implements AirPlayConsumer {
         window.addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
-                onVideoSrcDisconnect();
+                releaseAll();
             }
         });
         window.setContentPane(mediaPlayerComponent);
@@ -146,6 +148,9 @@ public class VlcPlayer implements AirPlayConsumer {
         if (headless) {
             startCli();
         } else {
+            if (mediaPlayerComponent == null) {
+                initEmbedded();
+            }
             mediaPlayerComponent.mediaPlayer().media().play(media);
             mediaPlayerComponent.mediaPlayer().controls().play();
         }
@@ -201,9 +206,12 @@ public class VlcPlayer implements AirPlayConsumer {
 
     @Override
     public void onVideoSrcDisconnect() {
-        if (!closed.compareAndSet(false, true)) {
-            return;
-        }
+        // Mirror only — keep the player alive for subsequent HLS /play.
+        stopMirror();
+    }
+
+    private void stopMirror() {
+        started.set(false);
         if (headless) {
             try {
                 if (cliStdin != null) {
@@ -220,34 +228,88 @@ public class VlcPlayer implements AirPlayConsumer {
                     Thread.currentThread().interrupt();
                 }
                 cliProcess.destroyForcibly();
+                cliProcess = null;
+                cliStdin = null;
             }
-            vlcLog.close();
             return;
         }
 
         try {
-            mediaPlayerComponent.mediaPlayer().controls().stop();
-            mediaPlayerComponent.release();
+            if (mediaPlayerComponent != null) {
+                mediaPlayerComponent.mediaPlayer().controls().stop();
+            }
         } catch (Exception ignored) {
             // shutting down
         }
         try {
-            nativeLog.release();
+            if (output != null) {
+                output.close();
+            }
+        } catch (Exception ignored) {
+            // shutting down
+        }
+        // Re-open pipe for a possible later mirror session.
+        if (!closed.get() && mediaPlayerFactory != null) {
+            try {
+                output = new PipedOutputStream();
+                input = output.getInputStream();
+                media = new NonSeekableInputStreamMedia() {
+                    @Override
+                    protected long onGetSize() {
+                        return 0;
+                    }
+
+                    @Override
+                    protected InputStream onOpenStream() {
+                        return input;
+                    }
+
+                    @Override
+                    protected void onCloseStream(InputStream inputStream) throws IOException {
+                        inputStream.close();
+                    }
+                };
+            } catch (Exception e) {
+                log.debug("Failed to reset VLC mirror pipe: {}", e.toString());
+            }
+        }
+    }
+
+    private void releaseAll() {
+        if (!closed.compareAndSet(false, true)) {
+            return;
+        }
+        hls.stop();
+        stopMirror();
+        if (headless) {
+            vlcLog.close();
+            return;
+        }
+        try {
+            if (mediaPlayerComponent != null) {
+                mediaPlayerComponent.release();
+            }
         } catch (Exception ignored) {
             // shutting down
         }
         try {
-            mediaPlayerFactory.release();
+            if (nativeLog != null) {
+                nativeLog.release();
+            }
         } catch (Exception ignored) {
             // shutting down
         }
         try {
-            window.dispose();
+            if (mediaPlayerFactory != null) {
+                mediaPlayerFactory.release();
+            }
         } catch (Exception ignored) {
             // shutting down
         }
         try {
-            output.close();
+            if (window != null) {
+                window.dispose();
+            }
         } catch (Exception ignored) {
             // shutting down
         }
@@ -266,8 +328,92 @@ public class VlcPlayer implements AirPlayConsumer {
     public void onAudioSrcDisconnect() {
     }
 
+    @Override
+    public void onMediaPlaylist(String playlistUri) {
+        Double seek = pendingStartSeekSeconds;
+        pendingStartSeekSeconds = null;
+        hls.start(playlistUri, volumeLinear, seek != null ? seek : 0);
+    }
+
+    @Override
+    public void onMediaPlaylistRemove() {
+        pendingStartSeekSeconds = null;
+        hls.stop();
+    }
+
+    @Override
+    public void onMediaPlaylistContent(String playlistUri, String content) {
+        if (playlistUri == null || !playlistUri.contains("mediadata.m3u8") || content == null) {
+            return;
+        }
+        if (!content.contains("#EXT-X-ENDLIST")) {
+            return;
+        }
+        double sum = 0;
+        for (String line : content.split("\n")) {
+            if (line.startsWith("#EXTINF:")) {
+                String value = line.substring("#EXTINF:".length()).split(",", 2)[0].trim();
+                try {
+                    sum += Double.parseDouble(value);
+                } catch (NumberFormatException ignored) {
+                    // skip
+                }
+            }
+        }
+        hls.noteMediaDuration(sum);
+    }
+
+    @Override
+    public void onMediaPlaylistPause() {
+        hls.pause();
+    }
+
+    @Override
+    public void onMediaPlaylistResume() {
+        hls.resume();
+    }
+
+    @Override
+    public void onMediaPlaylistSeek(double positionSeconds) {
+        if (!hls.isActive()) {
+            pendingStartSeekSeconds = positionSeconds;
+            return;
+        }
+        hls.seek(positionSeconds);
+    }
+
+    @Override
+    public void onVolume(double volumeLinear) {
+        this.volumeLinear = Math.max(0.0, Math.min(1.0, volumeLinear));
+        hls.setVolume(this.volumeLinear);
+        log.info("Volume set to {}", this.volumeLinear);
+    }
+
+    @Override
+    public double volume() {
+        return volumeLinear;
+    }
+
+    @Override
+    public PlaybackInfo playbackInfo() {
+        if (!hls.isActive()) {
+            return AirPlayConsumer.super.playbackInfo();
+        }
+        double duration = hls.durationSeconds();
+        double position = hls.currentPositionSeconds();
+        if (duration > 0) {
+            position = Math.min(position, duration);
+        }
+        double rate = (hls.isPaused() && !hls.isEnded()) ? 0 : 1;
+        return new PlaybackInfo(duration, position, rate);
+    }
+
     /** Exposed for harness assertions. */
     public boolean isCliAlive() {
         return cliProcess != null && cliProcess.isAlive();
+    }
+
+    boolean isHlsActive() {
+        return hls.isActive();
     }
 }
