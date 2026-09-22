@@ -294,7 +294,10 @@ public class GstPlayer implements AirPlayConsumer {
         if (duration > 0) {
             position = Math.min(position, duration);
         }
-        return new PlaybackInfo(duration, position, hls.isPaused() ? 0 : 1);
+        // At VOD EOS the pipeline is paused locally, but report rate=1 so the phone sees
+        // "playing at end" (rate=0 looks like user pause and blocks playlistRemove).
+        double rate = (hls.isPaused() && !hls.isEnded()) ? 0 : 1;
+        return new PlaybackInfo(duration, position, rate);
     }
 
     boolean isVideoPipelinePlaying() {

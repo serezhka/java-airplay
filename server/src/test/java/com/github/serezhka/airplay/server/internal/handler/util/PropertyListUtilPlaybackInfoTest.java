@@ -19,8 +19,18 @@ class PropertyListUtilPlaybackInfoTest {
         assertEquals(15.0, ((Number) dict.get("position").toJavaObject()).doubleValue(), 0.001);
         assertEquals(1, ((Number) dict.get("rate").toJavaObject()).intValue());
         assertTrue((Boolean) dict.get("readyToPlay").toJavaObject());
-        assertFalse((Boolean) dict.get("playbackBufferEmpty").toJavaObject());
+        assertTrue((Boolean) dict.get("playbackBufferEmpty").toJavaObject());
+        assertFalse((Boolean) dict.get("playbackBufferFull").toJavaObject());
         assertTrue((Boolean) dict.get("playbackLikelyToKeepUp").toJavaObject());
+    }
+
+    @Test
+    void keepsCallerRateAtEnd() throws Exception {
+        // VOD ad EOS: ControlHandler pins rate=1 at position=duration; must not be zeroed here.
+        byte[] xml = PropertyListUtil.preparePlaybackInfoResponse(new AirPlayConsumer.PlaybackInfo(6, 6, 1));
+        NSDictionary dict = (NSDictionary) PropertyListParser.parse(xml);
+        assertEquals(1, ((Number) dict.get("rate").toJavaObject()).intValue());
+        assertEquals(6.0, ((Number) dict.get("position").toJavaObject()).doubleValue(), 0.001);
     }
 
     @Test

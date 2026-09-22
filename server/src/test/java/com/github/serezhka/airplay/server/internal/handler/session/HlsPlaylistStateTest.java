@@ -55,8 +55,30 @@ class HlsPlaylistStateTest {
         assertFalse(hls.getPlaylist("mlhls://localhost/master.m3u8").contains("vp09"));
         String first = hls.nextMediaUri();
         assertTrue(first.startsWith("mlhls://"), "FCUP URI must stay mlhls, got " + first);
-        assertTrue(first.contains("/itag/136/") || first.contains("/itag/233/"));
-        assertFalse(first.contains("/itag/248/"));
+        assertTrue(first.contains("/itag/136/"), "video itags must prefetch before audio, got " + first);
+        assertFalse(hls.hasCachedVideoMedia());
+        hls.putPlaylist("mlhls://localhost/itag/136/mediadata.m3u8",
+                "#EXTM3U\n#EXTINF:6.0,\nv.ts\n#EXT-X-ENDLIST\n");
+        assertTrue(hls.hasCachedVideoMedia());
+        assertEquals(1, hls.videoMediaUriCount());
+    }
+
+    @Test
+    void scrubLatchIgnoresPauseUntilRateOne() {
+        var hls = new HlsPlaylistState("mlhls://localhost/master.m3u8", "http://localhost/playlist/master.m3u8?session=x");
+        assertFalse(hls.shouldIgnorePause());
+        hls.markScrubIgnorePauseUntilPlay();
+        assertTrue(hls.shouldIgnorePause());
+        hls.clearScrubIgnorePause();
+        assertFalse(hls.shouldIgnorePause());
+    }
+
+    @Test
+    void isLikelyVideoMediaUriFiltersAudioAlts() {
+        assertTrue(HlsPlaylistState.isLikelyVideoMediaUri("mlhls://localhost/itag/229/mediadata.m3u8"));
+        assertFalse(HlsPlaylistState.isLikelyVideoMediaUri("mlhls://localhost/itag/233/mediadata.m3u8"));
+        assertFalse(HlsPlaylistState.isLikelyVideoMediaUri(
+                "mlhls://localhost/itag/233/xtags/abc/mediadata.m3u8"));
     }
 
     @Test
@@ -185,6 +207,23 @@ class HlsPlaylistStateTest {
         assertEquals(1, hls.getActionAtItemEnd());
         hls.setActionAtItemEnd(0);
         assertEquals(0, hls.getActionAtItemEnd());
+    }
+
+    @Test
+    void mediaDurationFrozenWhileWaitingForPlaylistRemove() {
+        var hls = new HlsPlaylistState("mlhls://localhost/master.m3u8", "http://localhost/playlist/master.m3u8?session=x");
+        String shortAd = "#EXTM3U\n#EXTINF:7.04,\nad.ts\n#EXT-X-ENDLIST\n";
+        String longer = "#EXTM3U\n#EXTINF:15.6,\nnext.ts\n#EXT-X-ENDLIST\n";
+        hls.putPlaylist("mlhls://localhost/itag/229/mediadata.m3u8", shortAd);
+        assertEquals(7.04, hls.getMediaDurationSeconds(), 0.001);
+
+        hls.setWaitingForMasterChange(true);
+        hls.putPlaylist("mlhls://localhost/itag/229/mediadata.m3u8", longer);
+        assertEquals(7.04, hls.getMediaDurationSeconds(), 0.001);
+
+        hls.setWaitingForMasterChange(false);
+        hls.putPlaylist("mlhls://localhost/itag/229/mediadata.m3u8", longer);
+        assertEquals(15.6, hls.getMediaDurationSeconds(), 0.001);
     }
 
     @Test
