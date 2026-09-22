@@ -45,12 +45,16 @@ final class GstHlsPipeline {
     private volatile Double pendingSeekSeconds;
     private final AtomicInteger seekAttempts = new AtomicInteger();
     private ScheduledFuture<?> seekRetry;
+    private ScheduledFuture<?> endWatch;
     private volatile boolean paused;
     private volatile boolean ended;
     private volatile double positionBaseSeconds;
     private volatile long positionAnchorNanos;
     private volatile double playlistDurationSeconds;
     private volatile long lastEndedNotifyNanos;
+    private volatile long startedAtNanos;
+    /** Wall-clock position must not run until GST reports a real media clock (avoids black-screen EOS). */
+    private volatile boolean mediaClockTrusted;
 
     void start(String playlistUri, double volumeLinear) {
         stop();
@@ -59,7 +63,9 @@ final class GstHlsPipeline {
         ended = false;
         positionBaseSeconds = 0;
         positionAnchorNanos = System.nanoTime();
+        startedAtNanos = System.nanoTime();
         lastEndedNotifyNanos = 0;
+        mediaClockTrusted = false;
 
         boolean headless = Boolean.parseBoolean(System.getProperty("airplay.gst.hls.headless", "false"));
         GstVideoSinkFactory.Result display = null;
@@ -125,11 +131,15 @@ final class GstHlsPipeline {
 
         pipeline.play();
         tryPendingSeek("start");
+        // playbin3 + hlsdemux2 often never posts bus EOS for short VOD ENDLIST ads;
+        // poll playlist duration vs position (same idea as the FFmpeg player ENDLIST path).
+        endWatch = seekScheduler.scheduleAtFixedRate(this::checkPositionAtEnd, 400, 200, TimeUnit.MILLISECONDS);
         log.info("HLS pipeline started uri={}", playlistUri);
     }
 
     void stop() {
         cancelSeekRetry();
+        cancelEndWatch();
         pendingSeekSeconds = null;
         seekAttempts.set(0);
         paused = false;
@@ -138,6 +148,8 @@ final class GstHlsPipeline {
         positionAnchorNanos = 0;
         playlistDurationSeconds = 0;
         lastEndedNotifyNanos = 0;
+        startedAtNanos = 0;
+        mediaClockTrusted = false;
         uri = null;
         if (pipeline != null) {
             try {
@@ -174,18 +186,20 @@ final class GstHlsPipeline {
         if (pipeline == null) {
             return;
         }
+        boolean wasPaused = paused;
         ended = false;
         paused = false;
         positionAnchorNanos = System.nanoTime();
         double pos = positionBaseSeconds;
         pipeline.play();
         // playbin3 often stays frozen after PAUSED→PLAYING without a flush seek.
-        if (pos > 0.05) {
+        // Only seek when leaving pause — never on redundant rate=1 while already playing.
+        if (wasPaused && pos > 0.05) {
             pendingSeekSeconds = pos;
             seekAttempts.set(0);
             tryPendingSeek("resume");
         }
-        log.info("HLS resumed from {}s", pos);
+        log.info("HLS resumed from {}s (wasPaused={})", pos, wasPaused);
     }
 
     void seek(double positionSeconds) {
@@ -230,18 +244,9 @@ final class GstHlsPipeline {
             double dur = durationSeconds();
             return dur > 0 ? dur : positionBaseSeconds;
         }
-        double playlist = playlistDurationSeconds;
-        double gst = querySeconds(false);
-        // Ignore GST positions past the VOD length — hlsdemux2 sometimes uses a huge media clock.
-        if (gst > 0 && (playlist <= 0 || gst <= playlist + 1.0)) {
-            return gst;
-        }
-        if (paused || positionAnchorNanos == 0) {
-            return positionBaseSeconds;
-        }
-        double elapsed = (System.nanoTime() - positionAnchorNanos) / 1_000_000_000.0;
-        double wall = Math.max(0, positionBaseSeconds + elapsed);
-        return playlist > 0 ? Math.min(wall, playlist) : wall;
+        double pos = rawPositionSeconds();
+        checkPositionAtEnd(pos);
+        return ended ? durationSeconds() : pos;
     }
 
     /** Raw pipeline clock position (0 if unknown) — for smoke tests. */
@@ -266,6 +271,56 @@ final class GstHlsPipeline {
         return paused || ended;
     }
 
+    /** True after VOD/EOS — {@code /playback-info} should still report rate=1 (playing at end). */
+    boolean isEnded() {
+        return ended;
+    }
+
+    private void checkPositionAtEnd() {
+        if (ended || uri == null || paused) {
+            return;
+        }
+        checkPositionAtEnd(rawPositionSeconds());
+    }
+
+    private void checkPositionAtEnd(double pos) {
+        if (ended || uri == null || paused || !mediaClockTrusted) {
+            return;
+        }
+        double playlist = playlistDurationSeconds;
+        // Need a real ENDLIST length and a bit of play time so a bad open/seek isn't EOS at t=0.
+        if (playlist <= 0.5 || startedAtNanos == 0) {
+            return;
+        }
+        if (System.nanoTime() - startedAtNanos < 1_500_000_000L) {
+            return;
+        }
+        if (pos >= playlist - 0.05) {
+            markEndedAndRefresh("position-at-end");
+        }
+    }
+
+    private double rawPositionSeconds() {
+        double playlist = playlistDurationSeconds;
+        double gst = querySeconds(false);
+        // Ignore GST positions past the VOD length — hlsdemux2 sometimes uses a huge media clock.
+        if (gst > 0 && (playlist <= 0 || gst <= playlist + 1.0)) {
+            mediaClockTrusted = true;
+            return gst;
+        }
+        // Until the demux reports a real position, do not invent progress from wall-clock —
+        // that produced black-screen "playback" and fake EOS on the first YouTube ad.
+        if (!mediaClockTrusted) {
+            return 0;
+        }
+        if (paused || positionAnchorNanos == 0) {
+            return positionBaseSeconds;
+        }
+        double elapsed = (System.nanoTime() - positionAnchorNanos) / 1_000_000_000.0;
+        double wall = Math.max(0, positionBaseSeconds + elapsed);
+        return playlist > 0 ? Math.min(wall, playlist) : wall;
+    }
+
     private void markEndedAndRefresh(String reason) {
         long now = System.nanoTime();
         if (now - lastEndedNotifyNanos < 1_500_000_000L) {
@@ -274,12 +329,32 @@ final class GstHlsPipeline {
         }
         lastEndedNotifyNanos = now;
         ended = true;
+        cancelEndWatch();
         double dur = durationSeconds();
         if (dur > 0) {
             positionBaseSeconds = dur;
         }
+        // Local player stop at item end.
+        // Do not call AirPlayConsumer.onMediaPlaylistPause — that emits reverse "paused"
+        // and YouTube treats it as a user pause (blocks playlistRemove).
+        if (pipeline != null) {
+            try {
+                pipeline.pause();
+            } catch (Throwable t) {
+                log.debug("HLS pause-at-end failed: {}", t.toString());
+            }
+        }
+        paused = true;
         log.info("HLS ended ({}), requesting playlist refresh for {}", reason, uri);
         HlsLifecycle.notifyEnded();
+    }
+
+    private void cancelEndWatch() {
+        ScheduledFuture<?> future = endWatch;
+        endWatch = null;
+        if (future != null) {
+            future.cancel(false);
+        }
     }
 
     private void ensurePlaying(String reason) {
@@ -367,3 +442,4 @@ final class GstHlsPipeline {
         return Math.max(0.0, Math.min(1.0, volumeLinear));
     }
 }
+

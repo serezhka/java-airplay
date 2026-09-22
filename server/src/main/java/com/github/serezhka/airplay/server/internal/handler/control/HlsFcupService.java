@@ -46,6 +46,7 @@ public class HlsFcupService {
     public HlsFcupService(SessionManager sessionManager, AirPlayConsumer airPlayConsumer) {
         this.sessionManager = sessionManager;
         this.airPlayConsumer = airPlayConsumer;
+        startSignalFileWatcher();
     }
 
     public void refreshActivePlaylists() {
@@ -59,21 +60,88 @@ public class HlsFcupService {
             hls.setWaitingForMasterChange(false);
             hls.setPlaybackRate(0);
 
-            // Never "paused" or "stopped" on EOS:
-            // - paused looks like a user pause → YouTube never playlistRemove / next /play
-            //   (dump 20260918-040320: paused + master-only poll → hung forever)
-            // - stopped closes reverse /event on live preroll → content
-            // Working path (2026-09-16 logs): loading + master/media FCUP → playlistRemove + /play
-            int action = hls.getActionAtItemEnd();
-            String reason = hls.isLivePlaylist()
-                    ? "live playlist"
-                    : "actionAtItemEnd=" + action;
-            log.info("HLS ended ({}), refreshing master (keep session) {}", reason, session.getId());
+            // Live sliding windows: loading + master/media FCUP until body swap.
+            // VOD ENDLIST: push the known-good reverse /event EOS burst (itemPlayedToEnd →
+            // stopped/reason=ended → itemRemoved → currentItemChanged), keep rate=1 pin.
+            // Lone paused/stopped without that burst hung historically; do not FCUP-storm VOD.
             hls.setWaitingForMasterChange(true);
             hls.resetPostEosMediaSweep();
-            sendPlaybackStateEvent(session, "loading");
-            requestMasterRefresh(session);
-            scheduleMasterPoll(session);
+            if (hls.isLivePlaylist()) {
+                log.info("HLS ended (live playlist), refreshing master (keep session) {}", session.getId());
+                sendPlaybackStateEvent(session, "loading");
+                requestMasterRefresh(session);
+                scheduleMasterPoll(session);
+            } else {
+                log.info("HLS ended (VOD actionAtItemEnd={}), emit EOS reverse-event burst session={}",
+                        hls.getActionAtItemEnd(), session.getId());
+                hls.setPlaybackRate(1);
+                PlaybackInfoOverride.clear();
+                sendVodEosEventBurst(session);
+            }
+        }
+    }
+
+    /** Poll {@code /tmp/airplay-hls-signal} for manual reverse/FCUP/playback-info experiments. */
+    private void startSignalFileWatcher() {
+        scheduler.scheduleAtFixedRate(this::drainSignalFile, 500, 250, TimeUnit.MILLISECONDS);
+    }
+
+    private void drainSignalFile() {
+        java.nio.file.Path path = java.nio.file.Path.of("/tmp/airplay-hls-signal");
+        if (!java.nio.file.Files.isRegularFile(path)) {
+            return;
+        }
+        try {
+            String raw = java.nio.file.Files.readString(path).trim();
+            java.nio.file.Files.deleteIfExists(path);
+            if (raw.isEmpty()) {
+                return;
+            }
+            for (String line : raw.split("\\R")) {
+                applySignal(line.trim());
+            }
+        } catch (Exception e) {
+            log.warn("airplay-hls-signal: {}", e.toString());
+        }
+    }
+
+    private void applySignal(String line) {
+        if (line.isEmpty() || line.startsWith("#")) {
+            return;
+        }
+        log.warn("HLS debug signal: {}", line);
+        for (Session session : sessionManager.allSessions()) {
+            var hls = session.getHlsPlaylistState();
+            if (hls == null || !hls.isPlaybackStarted()) {
+                continue;
+            }
+            switch (line) {
+                case "loading", "playing", "paused", "stopped" -> sendPlaybackStateEvent(session, line);
+                case "fcup-master" -> {
+                    requestMasterRefresh(session);
+                    scheduleMasterPoll(session);
+                }
+                case "rate0" -> hls.setPlaybackRate(0);
+                case "rate1" -> hls.setPlaybackRate(1);
+                case "clear-wait" -> {
+                    hls.setWaitingForMasterChange(false);
+                    PlaybackInfoOverride.clear();
+                }
+                case "clear-override" -> PlaybackInfoOverride.clear();
+                default -> {
+                    if (line.startsWith("info:")) {
+                        String[] p = line.substring(5).split(",");
+                        if (p.length >= 3) {
+                            PlaybackInfoOverride.set(
+                                    Double.parseDouble(p[0].trim()),
+                                    Double.parseDouble(p[1].trim()),
+                                    Double.parseDouble(p[2].trim()));
+                        }
+                    } else {
+                        log.warn("Unknown HLS debug signal: {}", line);
+                    }
+                }
+            }
         }
     }
 
@@ -224,9 +292,44 @@ public class HlsFcupService {
     }
 
     public void sendPlaybackStateEvent(Session session, String state) {
-        byte[] body = PropertyListUtil.preparePlaybackStateEvent(state);
+        var hls = session.getHlsPlaylistState();
+        byte[] body;
+        if (hls != null) {
+            body = PropertyListUtil.preparePlaybackStateEvent(
+                    state, hls.getReverseEventSessionId(), hls.getItemUuid(), null);
+        } else {
+            body = PropertyListUtil.preparePlaybackStateEvent(state);
+        }
         log.info("Playback state event: {} session={}", state, session.getId());
         enqueueReverseEvent(session, body);
+    }
+
+    /**
+     * Working receiver VOD EOS sequence on reverse {@code POST /event}
+     * (after local player end). Queued FIFO — one in-flight request at a time.
+     */
+    public void sendVodEosEventBurst(Session session) {
+        var hls = session.getHlsPlaylistState();
+        if (hls == null) {
+            return;
+        }
+        int sid = hls.getReverseEventSessionId();
+        String itemUuid = hls.getItemUuid();
+        String playId = session.getId();
+        log.info("VOD EOS reverse burst playId={} reverseSessionId={} itemUuid={}",
+                playId, sid, itemUuid);
+        enqueueReverseEvent(session,
+                PropertyListUtil.preparePlaybackStateEvent("loading", sid, itemUuid, null));
+        enqueueReverseEvent(session,
+                PropertyListUtil.prepareVideoTypedEvent("itemPlayedToEnd", sid, itemUuid));
+        enqueueReverseEvent(session,
+                PropertyListUtil.preparePlaybackStateEvent("stopped", sid, itemUuid, "ended"));
+        enqueueReverseEvent(session,
+                PropertyListUtil.prepareItemRemovedEvent(playId, itemUuid));
+        enqueueReverseEvent(session,
+                PropertyListUtil.prepareCurrentItemChangedEvent(sid));
+        enqueueReverseEvent(session,
+                PropertyListUtil.preparePlaybackStateEvent("stopped", sid, itemUuid, null));
     }
 
     public void sendFcupRequest(Session session, String listUri) {

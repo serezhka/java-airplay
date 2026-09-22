@@ -12,13 +12,24 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Getter
 public class HlsPlaylistState {
 
+    /** Odd integers 1,3,5,… — reverse-event {@code sessionID} (distinct from play UUID). */
+    private static final AtomicInteger NEXT_REVERSE_SESSION_ID = new AtomicInteger(1);
+
     private final String remoteMasterUri;
     private final String playlistUriLocal;
+    /** Per-item uuid for reverse video events ({@code params.uuid} / typed {@code uuid}). */
+    private final String itemUuid;
+    /** Integer {@code sessionID} field inside reverse {@code /event} plists for this item. */
+    private final int reverseEventSessionId;
     private final List<String> pendingMediaUris = new ArrayList<>();
+    /** STREAM-INF / video itag mediadata URIs (prefetch these before audio-language alts). */
+    private final List<String> videoMediaUris = new ArrayList<>();
     private final Map<String, String> playlists = new LinkedHashMap<>();
     /** Hashes of last-seen mediadata bodies; survive {@link #invalidatePlaylists()} for EOS compare. */
     private final Map<String, Integer> mediaBodyHashes = new HashMap<>();
@@ -51,20 +62,30 @@ public class HlsPlaylistState {
      * YouTube sets pause (1) — on EOS we must pause and wait for the next {@code /play}.
      */
     private volatile int actionAtItemEnd = 1;
-    /** Ignore rate=0 until this nanoTime (YouTube pauses around /scrub). */
-    private volatile long ignorePauseUntilNanos;
+    /**
+     * After {@code /scrub}, ignore {@code rate=0} until the next {@code rate=1}.
+     * Event latch (not a timer): scrub brackets with rate=0 then rate=1.
+     */
+    private volatile boolean ignorePauseUntilRateOne;
 
     public HlsPlaylistState(String remoteMasterUri, String playlistUriLocal) {
         this.remoteMasterUri = remoteMasterUri;
         this.playlistUriLocal = playlistUriLocal;
+        this.itemUuid = UUID.randomUUID().toString().toUpperCase();
+        this.reverseEventSessionId = NEXT_REVERSE_SESSION_ID.getAndAdd(2);
     }
 
-    public void markScrubGrace(long durationNanos) {
-        ignorePauseUntilNanos = System.nanoTime() + Math.max(0, durationNanos);
+    /** Arm after {@code /scrub}: drop rate=0 until the client sends rate=1. */
+    public void markScrubIgnorePauseUntilPlay() {
+        ignorePauseUntilRateOne = true;
     }
 
     public boolean shouldIgnorePause() {
-        return System.nanoTime() < ignorePauseUntilNanos;
+        return ignorePauseUntilRateOne;
+    }
+
+    public void clearScrubIgnorePause() {
+        ignorePauseUntilRateOne = false;
     }
 
     public void setPendingSeekSeconds(Double pendingSeekSeconds) {
@@ -89,8 +110,10 @@ public class HlsPlaylistState {
             if (!endList) {
                 livePlaylist = true;
                 mediaDurationSeconds = 0;
-            } else if (!livePlaylist) {
+            } else if (!livePlaylist && !waitingForMasterChange) {
                 // Only finite VOD may raise duration. Live windows must not.
+                // Freeze duration while waiting for playlistRemove — post-EOS FCUP can
+                // deliver a longer next-item body and poison /playback-info (7s ad → 15.6).
                 double duration = sumMediaDurationSeconds(body);
                 if (duration > 0 && duration > mediaDurationSeconds) {
                     mediaDurationSeconds = duration;
@@ -292,10 +315,56 @@ public class HlsPlaylistState {
         lastMasterBody = rewrittenMaster;
         putPlaylist(remoteMasterUri, rewrittenMaster);
         pendingMediaUris.clear();
+        videoMediaUris.clear();
+        List<String> audioOrOther = new ArrayList<>();
         for (String uri : remoteMediaUris) {
-            pendingMediaUris.add(normalizeUri(uri));
+            String normalized = normalizeUri(uri);
+            if (isLikelyVideoMediaUri(normalized)) {
+                videoMediaUris.add(normalized);
+                pendingMediaUris.add(normalized);
+            } else {
+                audioOrOther.add(normalized);
+            }
         }
+        // Prefetch video before dozens of audio-language alternatives.
+        pendingMediaUris.addAll(audioOrOther);
         nextMediaUriIndex = 0;
+    }
+
+    /** True when at least one video mediadata body is cached (safe to start the player). */
+    public boolean hasCachedVideoMedia() {
+        for (String uri : videoMediaUris) {
+            if (playlists.containsKey(uri)) {
+                return true;
+            }
+        }
+        for (String key : playlists.keySet()) {
+            if (isLikelyVideoMediaUri(key)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public int videoMediaUriCount() {
+        return videoMediaUris.size();
+    }
+
+    /**
+     * YouTube audio alternatives use itag 233/234 and/or {@code /xtags/}; STREAM-INF video
+     * playlists use other itags without xtags.
+     */
+    static boolean isLikelyVideoMediaUri(String uri) {
+        if (uri == null || !uri.contains("mediadata")) {
+            return false;
+        }
+        if (uri.contains("/xtags/")) {
+            return false;
+        }
+        if (uri.contains("/itag/233/") || uri.contains("/itag/234/")) {
+            return false;
+        }
+        return true;
     }
 
     public boolean hasMoreMediaUris() {
