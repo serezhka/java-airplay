@@ -7,11 +7,18 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Arrays;
 
+/**
+ * AES-CTR encryptor for AirPlay mirror video payloads.
+ * <p>
+ * Key schedule matches the receiver-side decryptor:
+ * <ul>
+ *   <li>If {@code sharedSecret} is empty — {@code aesKey} is the stream master (raw 16-byte
+ *       {@code ekey} path, no pair-verify ECDH).</li>
+ *   <li>Otherwise master = {@code SHA-512(aesKey ‖ sharedSecret)[:16]}.</li>
+ * </ul>
+ * Then {@code AirPlayStreamKey/IV + unsigned streamConnectionID}.
+ */
 public class FairPlayVideoEncryptor {
-
-    private final byte[] aesKey;
-    private final byte[] sharedSecret;
-    private final String streamConnectionID;
 
     private final Cipher aesCtrEncrypt;
     private final byte[] og = new byte[16];
@@ -19,13 +26,8 @@ public class FairPlayVideoEncryptor {
     private int nextEncryptCount;
 
     public FairPlayVideoEncryptor(byte[] aesKey, byte[] sharedSecret, String streamConnectionID) throws Exception {
-        this.aesKey = aesKey;
-        this.sharedSecret = sharedSecret;
-        this.streamConnectionID = streamConnectionID;
-
         aesCtrEncrypt = Cipher.getInstance("AES/CTR/NoPadding");
-
-        initAesCtrCipher();
+        initAesCtrCipher(aesKey, sharedSecret == null ? new byte[0] : sharedSecret, streamConnectionID);
     }
 
     public void encrypt(byte[] video) throws Exception {
@@ -51,27 +53,33 @@ public class FairPlayVideoEncryptor {
         }
     }
 
-    private void initAesCtrCipher() throws Exception {
-        MessageDigest sha512Digest = MessageDigest.getInstance("SHA-512");
-        sha512Digest.update(aesKey);
-        sha512Digest.update(sharedSecret);
-        byte[] eaesKey = sha512Digest.digest();
+    private void initAesCtrCipher(byte[] aesKey, byte[] sharedSecret, String streamConnectionID) throws Exception {
+        byte[] eaesKeyMaterial;
+        if (sharedSecret.length == 0) {
+            eaesKeyMaterial = aesKey;
+        } else {
+            MessageDigest sha512Digest = MessageDigest.getInstance("SHA-512");
+            sha512Digest.update(aesKey);
+            sha512Digest.update(sharedSecret);
+            eaesKeyMaterial = sha512Digest.digest();
+        }
 
+        MessageDigest sha512Digest = MessageDigest.getInstance("SHA-512");
         byte[] skey = ("AirPlayStreamKey" + streamConnectionID).getBytes(StandardCharsets.UTF_8);
         sha512Digest.update(skey);
-        sha512Digest.update(eaesKey, 0, 16);
+        sha512Digest.update(eaesKeyMaterial, 0, 16);
         byte[] hash1 = sha512Digest.digest();
 
         byte[] siv = ("AirPlayStreamIV" + streamConnectionID).getBytes(StandardCharsets.UTF_8);
         sha512Digest.update(siv);
-        sha512Digest.update(eaesKey, 0, 16);
+        sha512Digest.update(eaesKeyMaterial, 0, 16);
         byte[] hash2 = sha512Digest.digest();
 
-        byte[] decryptAesKey = new byte[16];
-        byte[] decryptAesIV = new byte[16];
-        System.arraycopy(hash1, 0, decryptAesKey, 0, 16);
-        System.arraycopy(hash2, 0, decryptAesIV, 0, 16);
+        byte[] encryptAesKey = new byte[16];
+        byte[] encryptAesIV = new byte[16];
+        System.arraycopy(hash1, 0, encryptAesKey, 0, 16);
+        System.arraycopy(hash2, 0, encryptAesIV, 0, 16);
 
-        aesCtrEncrypt.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(decryptAesKey, "AES"), new IvParameterSpec(decryptAesIV));
+        aesCtrEncrypt.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(encryptAesKey, "AES"), new IvParameterSpec(encryptAesIV));
     }
 }

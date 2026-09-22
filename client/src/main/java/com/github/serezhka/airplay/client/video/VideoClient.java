@@ -3,7 +3,6 @@ package com.github.serezhka.airplay.client.video;
 import com.github.serezhka.airplay.client.crypto.FairPlayVideoEncryptor;
 import com.github.serezhka.airplay.client.video.source.GstTestSource;
 import io.netty.bootstrap.Bootstrap;
-import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.*;
 import io.netty.channel.epoll.Epoll;
@@ -14,6 +13,10 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
+
 @Slf4j
 public class VideoClient extends ChannelInboundHandlerAdapter implements Runnable {
 
@@ -23,6 +26,8 @@ public class VideoClient extends ChannelInboundHandlerAdapter implements Runnabl
 
     private GstTestSource gstTestSource;
     private ChannelHandlerContext ctx;
+    private final AtomicLong pts = new AtomicLong();
+    private boolean sentCodecConfig;
 
     public VideoClient(String address, int port, FairPlayVideoEncryptor encryptor) throws InterruptedException {
         this.address = address;
@@ -72,7 +77,7 @@ public class VideoClient extends ChannelInboundHandlerAdapter implements Runnabl
         super.channelActive(ctx);
         this.ctx = ctx;
         log.info("Video client connected");
-        gstTestSource = new GstTestSource(this::send);
+        gstTestSource = new GstTestSource(this::onAnnexBAccessUnit);
     }
 
     @Override
@@ -81,18 +86,47 @@ public class VideoClient extends ChannelInboundHandlerAdapter implements Runnabl
         log.info("Video client disconnected");
     }
 
-    private void send(byte[] bytes) {
-        ByteBuf header = Unpooled.buffer(128, 128);
-        header.writeIntLE(bytes.length);
-        header.writeShortLE(0);
-        header.writerIndex(header.capacity());
-        ctx.write(header);
-        try {
-            encryptor.encrypt(bytes);
-        } catch (Exception e) {
-            log.error(e.getMessage());
+    private void onAnnexBAccessUnit(byte[] annexB) {
+        List<MirrorVideoFraming.Nal> nals = MirrorVideoFraming.splitAnnexB(annexB);
+        if (nals.isEmpty()) {
+            return;
         }
-        ctx.writeAndFlush(Unpooled.wrappedBuffer(bytes));
+
+        byte[] sps = null;
+        byte[] pps = null;
+        List<MirrorVideoFraming.Nal> vcl = new ArrayList<>();
+        for (MirrorVideoFraming.Nal nal : nals) {
+            int t = nal.type();
+            if (t == 7) {
+                sps = nal.data();
+            } else if (t == 8) {
+                pps = nal.data();
+            } else if (t != 9) { // skip AUD
+                vcl.add(nal);
+            }
+        }
+
+        if (!sentCodecConfig && sps != null && pps != null) {
+            sendPacket(1, MirrorVideoFraming.buildType1CodecData(sps, pps));
+            sentCodecConfig = true;
+        }
+        if (vcl.isEmpty()) {
+            return;
+        }
+        sendPacket(0, MirrorVideoFraming.toAvcc(vcl));
+    }
+
+    private void sendPacket(int payloadType, byte[] payload) {
+        try {
+            encryptor.encrypt(payload);
+        } catch (Exception e) {
+            log.error("video encrypt failed: {}", e.getMessage());
+            return;
+        }
+        long timestamp = pts.getAndAdd(3000);
+        byte[] header = MirrorVideoFraming.header(payload.length, payloadType, timestamp);
+        ctx.write(Unpooled.wrappedBuffer(header));
+        ctx.writeAndFlush(Unpooled.wrappedBuffer(payload));
     }
 
     private EventLoopGroup eventLoopGroup() {

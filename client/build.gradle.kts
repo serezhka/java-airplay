@@ -3,7 +3,9 @@ plugins {
 }
 
 application {
-    mainClass = "com.github.serezhka.airplay.client.App"
+    // Override: -PmainClass=com.github.serezhka.airplay.client.legacy.LegacyMirrorApp
+    mainClass = providers.gradleProperty("mainClass")
+        .orElse("com.github.serezhka.airplay.client.App")
 }
 
 dependencies {
