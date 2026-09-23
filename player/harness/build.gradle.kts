@@ -24,13 +24,10 @@ dependencies {
 
     "integrationTestImplementation"(projects.lib)
     "integrationTestImplementation"(projects.server)
-    "integrationTestImplementation"(projects.client)
     "integrationTestImplementation"(projects.player.ffmpeg)
     "integrationTestImplementation"(projects.player.gstreamer)
     "integrationTestImplementation"(projects.player.dump)
     "integrationTestImplementation"(libs.bundles.logging)
-    "integrationTestImplementation"(libs.eddsa)
-    "integrationTestImplementation"(libs.curve25519)
     "integrationTestImplementation"(libs.netty.all)
 }
 

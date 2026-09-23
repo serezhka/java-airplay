@@ -23,7 +23,6 @@ enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
 
 include("lib")
 include("server")
-include("client")
 include("player:app")
 include("player:gstreamer")
 include("player:dump")
