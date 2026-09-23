@@ -1,6 +1,6 @@
 package com.github.serezhka.airplay.player.ffmpeg;
 
-import com.github.serezhka.airplay.lib.VideoStreamInfo;
+import com.github.serezhka.airplay.protocol.media.VideoStreamInfo;
 import com.github.serezhka.airplay.player.test.PlaybackFixture;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;

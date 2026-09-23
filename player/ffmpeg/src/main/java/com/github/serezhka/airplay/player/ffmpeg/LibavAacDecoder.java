@@ -1,6 +1,6 @@
 package com.github.serezhka.airplay.player.ffmpeg;
 
-import com.github.serezhka.airplay.lib.AudioStreamInfo;
+import com.github.serezhka.airplay.protocol.media.AudioStreamInfo;
 import org.bytedeco.ffmpeg.avcodec.AVCodec;
 import org.bytedeco.ffmpeg.avcodec.AVCodecContext;
 import org.bytedeco.ffmpeg.avcodec.AVPacket;

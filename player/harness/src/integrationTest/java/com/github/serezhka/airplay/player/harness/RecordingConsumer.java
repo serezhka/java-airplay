@@ -1,14 +1,14 @@
 package com.github.serezhka.airplay.player.harness;
 
-import com.github.serezhka.airplay.lib.AudioStreamInfo;
-import com.github.serezhka.airplay.lib.VideoStreamInfo;
-import com.github.serezhka.airplay.server.AirPlayConsumer;
+import com.github.serezhka.airplay.protocol.media.AudioStreamInfo;
+import com.github.serezhka.airplay.protocol.media.VideoStreamInfo;
+import com.github.serezhka.airplay.server.Playback;
 
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** Minimal consumer that records callbacks without touching media sinks. */
-public final class RecordingConsumer implements AirPlayConsumer {
+public final class RecordingConsumer implements Playback {
 
     private final AtomicReference<VideoStreamInfo> videoFormat = new AtomicReference<>();
     private final AtomicReference<AudioStreamInfo> audioFormat = new AtomicReference<>();

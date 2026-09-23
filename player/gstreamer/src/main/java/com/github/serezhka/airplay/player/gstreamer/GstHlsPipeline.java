@@ -1,6 +1,5 @@
 package com.github.serezhka.airplay.player.gstreamer;
 
-import com.github.serezhka.airplay.lib.HlsLifecycle;
 import com.sun.jna.Native;
 import lombok.extern.slf4j.Slf4j;
 import org.freedesktop.gstreamer.Bus;
@@ -38,6 +37,7 @@ final class GstHlsPipeline {
         return t;
     });
 
+    private volatile Runnable onEnded = () -> {};
     private Pipeline pipeline;
     private Element videoSink;
     private JFrame window;
@@ -335,7 +335,7 @@ final class GstHlsPipeline {
             positionBaseSeconds = dur;
         }
         // Local player stop at item end.
-        // Do not call AirPlayConsumer.onMediaPlaylistPause — that emits reverse "paused"
+        // Do not call Playback.onPause — that emits reverse "paused"
         // and YouTube treats it as a user pause (blocks playlistRemove).
         if (pipeline != null) {
             try {
@@ -346,7 +346,11 @@ final class GstHlsPipeline {
         }
         paused = true;
         log.info("HLS ended ({}), requesting playlist refresh for {}", reason, uri);
-        HlsLifecycle.notifyEnded();
+        onEnded.run();
+    }
+
+    void setOnEnded(Runnable onEnded) {
+        this.onEnded = onEnded == null ? () -> {} : onEnded;
     }
 
     private void cancelEndWatch() {

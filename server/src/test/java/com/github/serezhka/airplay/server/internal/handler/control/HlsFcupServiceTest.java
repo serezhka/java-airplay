@@ -1,6 +1,6 @@
 package com.github.serezhka.airplay.server.internal.handler.control;
 
-import com.github.serezhka.airplay.server.AirPlayConsumer;
+import com.github.serezhka.airplay.server.Playback;
 import com.github.serezhka.airplay.server.internal.handler.session.HlsPlaylistState;
 import com.github.serezhka.airplay.server.internal.handler.session.SessionManager;
 import org.junit.jupiter.api.AfterEach;
@@ -23,9 +23,9 @@ class HlsFcupServiceTest {
     private final List<String> reverseBodies = new CopyOnWriteArrayList<>();
     private final AtomicInteger pauseCalls = new AtomicInteger();
     private final AtomicInteger resumeCalls = new AtomicInteger();
-    private final AirPlayConsumer consumer = new AirPlayConsumer() {
+    private final Playback consumer = new Playback() {
         @Override
-        public void onVideoFormat(com.github.serezhka.airplay.lib.VideoStreamInfo videoStreamInfo) {
+        public void onVideoFormat(com.github.serezhka.airplay.protocol.media.VideoStreamInfo videoStreamInfo) {
         }
 
         @Override
@@ -37,7 +37,7 @@ class HlsFcupServiceTest {
         }
 
         @Override
-        public void onAudioFormat(com.github.serezhka.airplay.lib.AudioStreamInfo audioStreamInfo) {
+        public void onAudioFormat(com.github.serezhka.airplay.protocol.media.AudioStreamInfo audioStreamInfo) {
         }
 
         @Override
@@ -49,17 +49,17 @@ class HlsFcupServiceTest {
         }
 
         @Override
-        public void onMediaPlaylist(String playlistUri) {
+        public void onPlaylist(String playlistUri) {
             playlists.add(playlistUri);
         }
 
         @Override
-        public void onMediaPlaylistPause() {
+        public void onPause() {
             pauseCalls.incrementAndGet();
         }
 
         @Override
-        public void onMediaPlaylistResume() {
+        public void onResume() {
             resumeCalls.incrementAndGet();
         }
     };

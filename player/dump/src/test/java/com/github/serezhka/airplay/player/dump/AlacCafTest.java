@@ -1,6 +1,6 @@
 package com.github.serezhka.airplay.player.dump;
 
-import com.github.serezhka.airplay.lib.AudioStreamInfo;
+import com.github.serezhka.airplay.protocol.media.AudioStreamInfo;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 

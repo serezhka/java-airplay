@@ -20,6 +20,7 @@ systemTray = "4.4"
 javacv = "1.5.11"
 ffmpegPlatform = "7.1-1.5.11"
 jakartaAnnotation = "3.0.0"
+archunit = "1.4.1"
 
 [libraries]
 netty-all = { module = "io.netty:netty-all", version.ref = "netty" }
@@ -42,6 +43,7 @@ jakarta-annotation-api = { module = "jakarta.annotation:jakarta.annotation-api",
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
+archunit-junit5 = { module = "com.tngtech.archunit:archunit-junit5", version.ref = "archunit" }
 
 spring-boot-gradle-plugin = { module = "org.springframework.boot:spring-boot-gradle-plugin", version.ref = "springBoot" }
 spring-dependency-management-plugin = { module = "io.spring.gradle:dependency-management-plugin", version.ref = "springDependencyManagement" }

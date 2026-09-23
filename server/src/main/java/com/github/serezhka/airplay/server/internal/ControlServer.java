@@ -1,11 +1,10 @@
 package com.github.serezhka.airplay.server.internal;
 
 import com.github.serezhka.airplay.server.AirPlayConfig;
-import com.github.serezhka.airplay.server.AirPlayConsumer;
+import com.github.serezhka.airplay.server.Playback;
 import com.github.serezhka.airplay.server.internal.handler.control.ControlHandler;
 import com.github.serezhka.airplay.server.internal.handler.control.HlsFcupService;
 import com.github.serezhka.airplay.server.internal.handler.session.SessionManager;
-import com.github.serezhka.airplay.lib.HlsLifecycle;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
@@ -35,18 +34,18 @@ public class ControlServer implements Runnable {
     private final HlsFcupService hlsFcupService;
 
     private final AirPlayConfig airPlayConfig;
-    private final AirPlayConsumer airPlayConsumer;
+    private final Playback airPlayConsumer;
 
     private Thread thread;
 
     @Getter
     private int port;
 
-    public ControlServer(AirPlayConfig airPlayConfig, AirPlayConsumer airPlayConsumer) {
+    public ControlServer(AirPlayConfig airPlayConfig, Playback airPlayConsumer) {
         this.airPlayConfig = airPlayConfig;
         this.airPlayConsumer = airPlayConsumer;
         this.hlsFcupService = new HlsFcupService(sessionManager, airPlayConsumer);
-        HlsLifecycle.setOnEnded(hlsFcupService::refreshActivePlaylists);
+        airPlayConsumer.setObserver(hlsFcupService::refreshActivePlaylists);
     }
 
     public void start() throws InterruptedException {

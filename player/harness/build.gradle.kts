@@ -22,7 +22,7 @@ dependencies {
     implementation(libs.slf4j.api)
     implementation(libs.dd.plist)
 
-    "integrationTestImplementation"(projects.lib)
+    "integrationTestImplementation"(projects.protocol)
     "integrationTestImplementation"(projects.server)
     "integrationTestImplementation"(projects.player.ffmpeg)
     "integrationTestImplementation"(projects.player.gstreamer)

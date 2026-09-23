@@ -1,6 +1,5 @@
 package com.github.serezhka.airplay.player.ffmpeg;
 
-import com.github.serezhka.airplay.lib.HlsLifecycle;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -17,7 +16,6 @@ class FfmpegHlsPipelineTest {
     @AfterEach
     void tearDown() {
         hls.stop();
-        HlsLifecycle.setOnEnded(null);
     }
 
     @Test
@@ -111,15 +109,15 @@ class FfmpegHlsPipelineTest {
         FFmpegPlayer player = new FFmpegPlayer();
         System.setProperty("airplay.ffmpeg.hls.headless", "true");
         try {
-            player.onMediaPlaylistSeek(33.0);
-            player.onMediaPlaylist("http://127.0.0.1:9/missing.m3u8");
-            player.onMediaPlaylistContent(
+            player.onSeek(33.0);
+            player.onPlaylist("http://127.0.0.1:9/missing.m3u8");
+            player.onPlaylistContent(
                     "mlhls://localhost/itag/229/mediadata.m3u8",
                     "#EXTM3U\n#EXTINF:60.0,\nseg.ts\n#EXT-X-ENDLIST\n");
             Thread.sleep(80);
-            assertEquals(33.0, player.playbackInfo().position(), 0.5);
+            assertEquals(33.0, player.info().position(), 0.5);
         } finally {
-            player.onMediaPlaylistRemove();
+            player.onPlaylistRemoved();
             System.clearProperty("airplay.ffmpeg.hls.headless");
         }
     }
@@ -127,7 +125,7 @@ class FfmpegHlsPipelineTest {
     @Test
     void endOfStreamNotifiesLifecycleOnce() {
         AtomicInteger ends = new AtomicInteger();
-        HlsLifecycle.setOnEnded(ends::incrementAndGet);
+        hls.setOnEnded(ends::incrementAndGet);
         hls.noteMediaDuration(1.0);
         assertEquals(0, ends.get());
         hls.stop();
@@ -139,15 +137,15 @@ class FfmpegHlsPipelineTest {
         FFmpegPlayer player = new FFmpegPlayer();
         System.setProperty("airplay.ffmpeg.hls.headless", "true");
         try {
-            player.onMediaPlaylist("http://127.0.0.1:9/missing.m3u8");
-            player.onMediaPlaylistContent(
+            player.onPlaylist("http://127.0.0.1:9/missing.m3u8");
+            player.onPlaylistContent(
                     "mlhls://localhost/itag/229/mediadata.m3u8",
                     "#EXTM3U\n#EXTINF:6.5,\nad.ts\n#EXTINF:7.1,\nad2.ts\n#EXT-X-ENDLIST\n");
             Thread.sleep(50);
-            var info = player.playbackInfo();
+            var info = player.info();
             assertTrue(info.duration() >= 13.5 && info.duration() <= 13.7);
         } finally {
-            player.onMediaPlaylistRemove();
+            player.onPlaylistRemoved();
             System.clearProperty("airplay.ffmpeg.hls.headless");
         }
     }

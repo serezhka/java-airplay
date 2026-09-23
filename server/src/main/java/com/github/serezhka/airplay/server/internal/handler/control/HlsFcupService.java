@@ -1,6 +1,6 @@
 package com.github.serezhka.airplay.server.internal.handler.control;
 
-import com.github.serezhka.airplay.server.AirPlayConsumer;
+import com.github.serezhka.airplay.server.Playback;
 import com.github.serezhka.airplay.server.internal.handler.session.Session;
 import com.github.serezhka.airplay.server.internal.handler.session.SessionManager;
 import com.github.serezhka.airplay.server.internal.handler.util.PropertyListUtil;
@@ -33,7 +33,7 @@ public class HlsFcupService {
     private static final int MEDIA_RESWEEP_EVERY_MASTER_POLLS = 3;
 
     private final SessionManager sessionManager;
-    private final AirPlayConsumer airPlayConsumer;
+    private final Playback airPlayConsumer;
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread thread = new Thread(r, "airplay-hls-master-poll");
         thread.setDaemon(true);
@@ -43,7 +43,7 @@ public class HlsFcupService {
     /** One in-flight reverse {@code POST /event} per session (no HTTP pipelining). */
     private final Map<String, ReverseQueue> reverseQueues = new ConcurrentHashMap<>();
 
-    public HlsFcupService(SessionManager sessionManager, AirPlayConsumer airPlayConsumer) {
+    public HlsFcupService(SessionManager sessionManager, Playback airPlayConsumer) {
         this.sessionManager = sessionManager;
         this.airPlayConsumer = airPlayConsumer;
         startSignalFileWatcher();
@@ -170,11 +170,11 @@ public class HlsFcupService {
             } else {
                 hls.updateMasterPlaylist(rewrittenBody);
             }
-            airPlayConsumer.onMediaPlaylist(hls.getPlaylistUriLocal());
+            airPlayConsumer.onPlaylist(hls.getPlaylistUriLocal());
             sendPlaybackStateEvent(session, "playing");
             Double seek = hls.takePendingSeekSeconds();
             if (seek != null && seek > 0) {
-                airPlayConsumer.onMediaPlaylistSeek(seek);
+                airPlayConsumer.onSeek(seek);
             }
         } else if (hls.isWaitingForMasterChange()) {
             if (hls.isPostEosMediaRefreshing()) {
@@ -219,7 +219,7 @@ public class HlsFcupService {
             cancelMasterPoll(session.getId());
             hls.setWaitingForMasterChange(false);
             hls.setPlaybackRate(1);
-            airPlayConsumer.onMediaPlaylist(hls.getPlaylistUriLocal());
+            airPlayConsumer.onPlaylist(hls.getPlaylistUriLocal());
             sendPlaybackStateEvent(session, "playing");
         } else {
             log.info("HLS media unchanged after EOS, polling master session {}", session.getId());

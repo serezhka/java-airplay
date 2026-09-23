@@ -1,9 +1,9 @@
 package com.github.serezhka.airplay.player.dump;
 
-import com.github.serezhka.airplay.lib.AudioStreamInfo;
-import com.github.serezhka.airplay.lib.VideoStreamInfo;
+import com.github.serezhka.airplay.protocol.media.AudioStreamInfo;
+import com.github.serezhka.airplay.protocol.media.VideoStreamInfo;
 import com.github.serezhka.airplay.player.test.PlaybackFixture;
-import com.github.serezhka.airplay.server.AirPlayConsumer;
+import com.github.serezhka.airplay.server.Playback;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -35,7 +35,7 @@ class DumpPlaybackTest {
         assertArrayEquals(PlaybackFixture.h264(), Files.readAllBytes(dumped));
     }
 
-    private static final class NoopPlayer implements AirPlayConsumer {
+    private static final class NoopPlayer implements Playback {
         @Override
         public void onVideoFormat(VideoStreamInfo videoStreamInfo) {
         }

@@ -3,9 +3,9 @@ package com.github.serezhka.airplay.server.internal.handler.util;
 import com.dd.plist.BinaryPropertyListWriter;
 import com.dd.plist.NSArray;
 import com.dd.plist.NSDictionary;
-import com.github.serezhka.airplay.lib.ReceiverProfile;
+import com.github.serezhka.airplay.server.discovery.AdvertisedReceiver;
 import com.github.serezhka.airplay.server.AirPlayConfig;
-import com.github.serezhka.airplay.server.AirPlayConsumer;
+import com.github.serezhka.airplay.server.Playback;
 import lombok.extern.slf4j.Slf4j;
 
 import java.nio.charset.StandardCharsets;
@@ -58,14 +58,14 @@ public class PropertyListUtil {
         response.put("audioFormats", audioFormats);
         response.put("audioLatencies", audioLatencies);
         response.put("displays", displays);
-        response.put("features", ReceiverProfile.FEATURES);
+        response.put("features", AdvertisedReceiver.FEATURES);
         response.put("keepAliveSendStatsAsBody", 1);
-        response.put("model", ReceiverProfile.MODEL);
+        response.put("model", AdvertisedReceiver.MODEL);
         response.put("name", "Apple TV");
         response.put("pi", "b08f5a79-db29-4384-b456-a4784d9e6055");
-        response.put("sourceVersion", ReceiverProfile.SOURCE_VERSION);
-        response.put("statusFlags", ReceiverProfile.STATUS_FLAGS);
-        response.put("vv", ReceiverProfile.VV);
+        response.put("sourceVersion", AdvertisedReceiver.SOURCE_VERSION);
+        response.put("statusFlags", AdvertisedReceiver.STATUS_FLAGS);
+        response.put("vv", AdvertisedReceiver.VV);
         // response.put("pk", new NSData("XYMxJlYMsZoUGTcneJbw/UN7poAeshCsTDnZAHLXDag="));
 
         return BinaryPropertyListWriter.writeToArray(response);
@@ -108,7 +108,7 @@ public class PropertyListUtil {
         return response.toXMLPropertyList().getBytes(StandardCharsets.UTF_8);
     }
 
-    public static byte[] preparePlaybackInfoResponse(AirPlayConsumer.PlaybackInfo playbackInfo) {
+    public static byte[] preparePlaybackInfoResponse(Playback.Info playbackInfo) {
         NSDictionary response = new NSDictionary();
         double duration = Math.max(0, playbackInfo.duration());
         double position = Math.max(0, playbackInfo.position());

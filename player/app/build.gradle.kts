@@ -3,7 +3,6 @@ plugins {
 }
 
 dependencies {
-    implementation(projects.lib)
     implementation(projects.server)
     implementation(projects.player.gstreamer)
     implementation(projects.player.dump)

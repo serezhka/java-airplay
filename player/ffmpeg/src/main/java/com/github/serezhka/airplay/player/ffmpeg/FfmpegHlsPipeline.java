@@ -1,7 +1,6 @@
 package com.github.serezhka.airplay.player.ffmpeg;
 
-import com.github.serezhka.airplay.lib.AppLogs;
-import com.github.serezhka.airplay.lib.HlsLifecycle;
+import com.github.serezhka.airplay.player.support.NativeProcessLog;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayList;
@@ -30,6 +29,7 @@ final class FfmpegHlsPipeline {
     private final AtomicBoolean userStopped = new AtomicBoolean();
     private final AtomicLong epoch = new AtomicLong();
     private final AtomicReference<Double> pendingSeekSeconds = new AtomicReference<>();
+    private volatile Runnable onEnded = () -> {};
     private final Object processLock = new Object();
 
     private volatile String uri;
@@ -355,7 +355,7 @@ final class FfmpegHlsPipeline {
 
         ProcessBuilder pb = new ProcessBuilder(cmd);
         FfplayPcmSink.forcePulseAudioEnv(pb);
-        AppLogs.configureProcessLogging(pb, "ffmpeg");
+        NativeProcessLog.configureProcessLogging(pb, "ffmpeg");
         Process process = pb.start();
         // Give SDL a moment; if it dies immediately the URL/env is wrong.
         sleepQuiet(150);
@@ -414,7 +414,11 @@ final class FfmpegHlsPipeline {
             positionBaseSeconds = dur;
         }
         log.info("HLS ended ({}), requesting playlist refresh for {}", reason, uri);
-        HlsLifecycle.notifyEnded();
+        onEnded.run();
+    }
+
+    void setOnEnded(Runnable onEnded) {
+        this.onEnded = onEnded == null ? () -> {} : onEnded;
     }
 
     private static void sleepQuiet(long ms) {

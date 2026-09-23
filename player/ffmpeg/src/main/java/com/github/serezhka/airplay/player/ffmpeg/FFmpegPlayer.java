@@ -1,19 +1,20 @@
 package com.github.serezhka.airplay.player.ffmpeg;
 
-import com.github.serezhka.airplay.lib.AudioStreamInfo;
-import com.github.serezhka.airplay.lib.AppLogs;
-import com.github.serezhka.airplay.lib.HlsEndListDuration;
-import com.github.serezhka.airplay.lib.VideoStreamInfo;
-import com.github.serezhka.airplay.server.AirPlayConsumer;
+import com.github.serezhka.airplay.protocol.media.AudioStreamInfo;
+import com.github.serezhka.airplay.player.support.NativeProcessLog;
+import com.github.serezhka.airplay.protocol.media.EndListDuration;
+import com.github.serezhka.airplay.protocol.media.VideoStreamInfo;
+import com.github.serezhka.airplay.server.Playback;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
 
 @Slf4j
-public class FFmpegPlayer implements AirPlayConsumer {
+public class FFmpegPlayer implements Playback {
 
     private final int fps;
     private final FfmpegHlsPipeline hls = new FfmpegHlsPipeline();
+    private volatile Playback.Observer observer = Playback.Observer.NONE;
     private Process h264Process;
     private LibavAlacDecoder alacDecoder;
     private LibavAacDecoder aacDecoder;
@@ -28,7 +29,8 @@ public class FFmpegPlayer implements AirPlayConsumer {
 
     public FFmpegPlayer(int fps) {
         this.fps = Math.max(1, fps);
-        log.info("FFmpeg debug log: {}", AppLogs.playerLogFile("ffmpeg"));
+        hls.setOnEnded(() -> observer.onEnded());
+        log.info("FFmpeg debug log: {}", NativeProcessLog.playerLogFile("ffmpeg"));
     }
 
     @Override
@@ -41,7 +43,7 @@ public class FFmpegPlayer implements AirPlayConsumer {
                     "-codec:v", "h264", "-probesize", "32",
                     "-analyzeduration", "0", "-flags", "low_delay", "-");
             FfplayPcmSink.forcePulseAudioEnv(pb);
-            AppLogs.configureProcessLogging(pb, "ffmpeg");
+            NativeProcessLog.configureProcessLogging(pb, "ffmpeg");
             h264Process = pb.start();
         } catch (IOException e) {
             throw new IllegalStateException("Failed to start ffplay. Make sure it is available on PATH.", e);
@@ -101,41 +103,46 @@ public class FFmpegPlayer implements AirPlayConsumer {
     }
 
     @Override
-    public void onMediaPlaylist(String playlistUri) {
+    public void setObserver(Playback.Observer observer) {
+        this.observer = observer == null ? Playback.Observer.NONE : observer;
+    }
+
+    @Override
+    public void onPlaylist(String playlistUri) {
         Double seek = pendingStartSeekSeconds;
         pendingStartSeekSeconds = null;
         hls.start(playlistUri, volumeLinear, seek != null ? seek : 0);
     }
 
     @Override
-    public void onMediaPlaylistRemove() {
+    public void onPlaylistRemoved() {
         pendingStartSeekSeconds = null;
         hls.stop();
     }
 
     @Override
-    public void onMediaPlaylistContent(String playlistUri, String content) {
+    public void onPlaylistContent(String playlistUri, String content) {
         if (playlistUri == null || !playlistUri.contains("mediadata.m3u8") || content == null) {
             return;
         }
-        double sum = HlsEndListDuration.sumSeconds(content);
+        double sum = EndListDuration.sumSeconds(content);
         if (sum > 0) {
             hls.noteMediaDuration(sum);
         }
     }
 
     @Override
-    public void onMediaPlaylistPause() {
+    public void onPause() {
         hls.pause();
     }
 
     @Override
-    public void onMediaPlaylistResume() {
+    public void onResume() {
         hls.resume();
     }
 
     @Override
-    public void onMediaPlaylistSeek(double positionSeconds) {
+    public void onSeek(double positionSeconds) {
         if (!hls.isActive()) {
             pendingStartSeekSeconds = positionSeconds;
             return;
@@ -156,9 +163,9 @@ public class FFmpegPlayer implements AirPlayConsumer {
     }
 
     @Override
-    public PlaybackInfo playbackInfo() {
+    public Playback.Info info() {
         if (!hls.isActive()) {
-            return AirPlayConsumer.super.playbackInfo();
+            return Playback.super.info();
         }
         double duration = hls.durationSeconds();
         double position = hls.currentPositionSeconds();
@@ -167,7 +174,7 @@ public class FFmpegPlayer implements AirPlayConsumer {
         }
         // VOD EOS is paused locally; report rate=1 (rate=0 looks like user pause).
         double rate = (hls.isPaused() && !hls.isEnded()) ? 0 : 1;
-        return new PlaybackInfo(duration, position, rate);
+        return new Playback.Info(duration, position, rate);
     }
 
     boolean isHlsActive() {

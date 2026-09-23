@@ -4,10 +4,10 @@ import com.dd.plist.BinaryPropertyListParser;
 import com.dd.plist.NSData;
 import com.dd.plist.NSDictionary;
 import com.dd.plist.PropertyListParser;
-import com.github.serezhka.airplay.lib.AudioStreamInfo;
-import com.github.serezhka.airplay.lib.VideoStreamInfo;
+import com.github.serezhka.airplay.protocol.media.AudioStreamInfo;
+import com.github.serezhka.airplay.protocol.media.VideoStreamInfo;
 import com.github.serezhka.airplay.server.AirPlayConfig;
-import com.github.serezhka.airplay.server.AirPlayConsumer;
+import com.github.serezhka.airplay.server.Playback;
 import com.github.serezhka.airplay.server.ControlExchange;
 import com.github.serezhka.airplay.server.internal.handler.session.HlsPlaylistState;
 import com.github.serezhka.airplay.server.internal.handler.session.HlsUriRewrite;
@@ -56,7 +56,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     private final SessionManager sessionManager;
     private final HlsFcupService hlsFcupService;
     private final AirPlayConfig airPlayConfig;
-    private final AirPlayConsumer airPlayConsumer;
+    private final Playback airPlayConsumer;
     private final ScheduledExecutorService hlsScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "airplay-hls-scheduler");
         t.setDaemon(true);
@@ -67,7 +67,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     public ControlHandler(SessionManager sessionManager,
                           HlsFcupService hlsFcupService,
                           AirPlayConfig airPlayConfig,
-                          AirPlayConsumer airPlayConsumer) {
+                          Playback airPlayConsumer) {
         this.sessionManager = sessionManager;
         this.hlsFcupService = hlsFcupService;
         this.airPlayConfig = airPlayConfig;
@@ -93,7 +93,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         hlsFcupService.cancelAllMasterPolls();
         hlsFcupService.clearReverseQueue(session);
         session.setHlsPlaylistState(null);
-        airPlayConsumer.onMediaPlaylistRemove();
+        airPlayConsumer.onPlaylistRemoved();
     }
 
     private byte[] pendingRequestBody = new byte[0];
@@ -432,9 +432,9 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             log.info("HLS play from [{}]: prefetching playlists via FCUP, localUri={}", clientProcName, playlistUriLocal);
             hlsFcupService.sendFcupRequest(session, remotePlaylistUri);
         } else {
-            airPlayConsumer.onMediaPlaylist(playlistUriLocal);
+            airPlayConsumer.onPlaylist(playlistUriLocal);
             if (startPositionSeconds != null && startPositionSeconds > 0) {
-                airPlayConsumer.onMediaPlaylistSeek(startPositionSeconds);
+                airPlayConsumer.onSeek(startPositionSeconds);
             }
         }
     }
@@ -502,7 +502,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 if (hls != null) {
                     hls.setPlaybackRate(0);
                 }
-                airPlayConsumer.onMediaPlaylistPause();
+                airPlayConsumer.onPause();
                 hlsFcupService.sendPlaybackStateEvent(session, "paused");
             }
         } else {
@@ -513,7 +513,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             }
             // Only resume when leaving pause — rate=1 while already playing must not re-seek.
             if (wasPaused) {
-                airPlayConsumer.onMediaPlaylistResume();
+                airPlayConsumer.onResume();
             }
             hlsFcupService.sendPlaybackStateEvent(session, "playing");
         }
@@ -540,7 +540,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                     hls.setPendingSeekSeconds(position);
                     log.info("Deferring /scrub to pending seek until HLS starts");
                 } else {
-                    airPlayConsumer.onMediaPlaylistSeek(position);
+                    airPlayConsumer.onSeek(position);
                     hlsFcupService.sendPlaybackStateEvent(session, "playing");
                 }
             } catch (NumberFormatException e) {
@@ -564,7 +564,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     private void handlePlaybackInfo(ChannelHandlerContext ctx, FullHttpRequest request) {
         var session = resolveSession(request);
         var hls = session.getHlsPlaylistState();
-        var fromPlayer = airPlayConsumer.playbackInfo();
+        var fromPlayer = airPlayConsumer.info();
         double duration = fromPlayer.duration();
         double position = fromPlayer.position();
         double rate = fromPlayer.rate();
@@ -616,7 +616,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         } else if (duration > 600) {
             duration = 0;
         }
-        var playbackInfo = new AirPlayConsumer.PlaybackInfo(duration, position, rate);
+        var playbackInfo = new Playback.Info(duration, position, rate);
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
         response.headers().add(HttpHeaderNames.CONTENT_TYPE, "text/x-apple-plist+xml");
         response.content().writeBytes(PropertyListUtil.preparePlaybackInfoResponse(playbackInfo));
@@ -746,7 +746,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 hls.putPlaylist(fcupResponseURL, body);
                 maybeStartHlsPlayback(session, hls, "mediadata ready after error");
             }
-            airPlayConsumer.onMediaPlaylistContent(fcupResponseURL, body);
+            airPlayConsumer.onPlaylistContent(fcupResponseURL, body);
 
             replyPendingPlaylists(session, fcupResponseURL, body);
 
@@ -766,18 +766,18 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         }
 
         if (replyPendingPlaylists(session, fcupResponseURL, body)) {
-            airPlayConsumer.onMediaPlaylistContent(fcupResponseURL, body);
+            airPlayConsumer.onPlaylistContent(fcupResponseURL, body);
         } else {
             log.warn("No pending GET /playlist for {}", fcupResponseURL);
         }
     }
 
     private void startHlsPlayback(Session session, HlsPlaylistState hls) {
-        airPlayConsumer.onMediaPlaylist(hls.getPlaylistUriLocal());
+        airPlayConsumer.onPlaylist(hls.getPlaylistUriLocal());
         hlsFcupService.sendPlaybackStateEvent(session, "playing");
         Double seek = hls.takePendingSeekSeconds();
         if (seek != null && seek > 0) {
-            airPlayConsumer.onMediaPlaylistSeek(seek);
+            airPlayConsumer.onSeek(seek);
         }
     }
 

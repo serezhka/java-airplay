@@ -1,19 +1,19 @@
 package com.github.serezhka.airplay.player.dump;
 
-import com.github.serezhka.airplay.lib.AudioStreamInfo;
-import com.github.serezhka.airplay.lib.VideoStreamInfo;
-import com.github.serezhka.airplay.server.AirPlayConsumer;
+import com.github.serezhka.airplay.protocol.media.AudioStreamInfo;
+import com.github.serezhka.airplay.protocol.media.VideoStreamInfo;
+import com.github.serezhka.airplay.server.Playback;
 import com.github.serezhka.airplay.server.ControlExchange;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
-public class DumpingAirPlayConsumer implements AirPlayConsumer {
+public class DumpingAirPlayConsumer implements Playback {
 
-    private final AirPlayConsumer player;
+    private final Playback player;
     private final DumpPlayer dump;
 
-    public DumpingAirPlayConsumer(AirPlayConsumer player, DumpPlayer dump) {
+    public DumpingAirPlayConsumer(Playback player, DumpPlayer dump) {
         this.player = player;
         this.dump = dump;
     }
@@ -55,38 +55,43 @@ public class DumpingAirPlayConsumer implements AirPlayConsumer {
     }
 
     @Override
-    public void onMediaPlaylist(String playlistUri) {
-        player.onMediaPlaylist(playlistUri);
-        dumpSafely(() -> dump.onMediaPlaylist(playlistUri));
+    public void setObserver(Playback.Observer observer) {
+        player.setObserver(observer);
     }
 
     @Override
-    public void onMediaPlaylistContent(String playlistUri, String content) {
-        player.onMediaPlaylistContent(playlistUri, content);
-        dumpSafely(() -> dump.onMediaPlaylistContent(playlistUri, content));
+    public void onPlaylist(String playlistUri) {
+        player.onPlaylist(playlistUri);
+        dumpSafely(() -> dump.onPlaylist(playlistUri));
     }
 
     @Override
-    public void onMediaPlaylistRemove() {
-        player.onMediaPlaylistRemove();
-        dumpSafely(dump::onMediaPlaylistRemove);
+    public void onPlaylistContent(String playlistUri, String content) {
+        player.onPlaylistContent(playlistUri, content);
+        dumpSafely(() -> dump.onPlaylistContent(playlistUri, content));
     }
 
     @Override
-    public void onMediaPlaylistPause() {
-        player.onMediaPlaylistPause();
-        dumpSafely(dump::onMediaPlaylistPause);
+    public void onPlaylistRemoved() {
+        player.onPlaylistRemoved();
+        dumpSafely(dump::onPlaylistRemoved);
     }
 
     @Override
-    public void onMediaPlaylistResume() {
-        player.onMediaPlaylistResume();
-        dumpSafely(dump::onMediaPlaylistResume);
+    public void onPause() {
+        player.onPause();
+        dumpSafely(dump::onPause);
     }
 
     @Override
-    public void onMediaPlaylistSeek(double positionSeconds) {
-        player.onMediaPlaylistSeek(positionSeconds);
+    public void onResume() {
+        player.onResume();
+        dumpSafely(dump::onResume);
+    }
+
+    @Override
+    public void onSeek(double positionSeconds) {
+        player.onSeek(positionSeconds);
     }
 
     @Override
@@ -106,8 +111,8 @@ public class DumpingAirPlayConsumer implements AirPlayConsumer {
     }
 
     @Override
-    public PlaybackInfo playbackInfo() {
-        return player.playbackInfo();
+    public Playback.Info info() {
+        return player.info();
     }
 
     @PreDestroy

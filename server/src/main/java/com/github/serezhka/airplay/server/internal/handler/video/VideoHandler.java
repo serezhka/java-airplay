@@ -1,7 +1,7 @@
 package com.github.serezhka.airplay.server.internal.handler.video;
 
-import com.github.serezhka.airplay.lib.AirPlay;
-import com.github.serezhka.airplay.server.AirPlayConsumer;
+import com.github.serezhka.airplay.protocol.FairPlaySession;
+import com.github.serezhka.airplay.server.Playback;
 import com.github.serezhka.airplay.server.internal.packet.VideoPacket;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
@@ -16,8 +16,8 @@ import lombok.extern.slf4j.Slf4j;
 @ChannelHandler.Sharable
 public class VideoHandler extends ChannelInboundHandlerAdapter {
 
-    private final AirPlay airPlay;
-    private final AirPlayConsumer dataConsumer;
+    private final FairPlaySession airPlay;
+    private final Playback dataConsumer;
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {

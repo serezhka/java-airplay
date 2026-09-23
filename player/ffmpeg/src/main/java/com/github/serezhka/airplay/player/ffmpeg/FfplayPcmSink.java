@@ -1,6 +1,6 @@
 package com.github.serezhka.airplay.player.ffmpeg;
 
-import com.github.serezhka.airplay.lib.AppLogs;
+import com.github.serezhka.airplay.player.support.NativeProcessLog;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -63,7 +63,7 @@ final class FfplayPcmSink implements AutoCloseable {
         if (System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("linux")) {
             pb.environment().put("SDL_AUDIOBUFFERSIZE", "1024");
         }
-        AppLogs.configureProcessLogging(pb, "ffmpeg");
+        NativeProcessLog.configureProcessLogging(pb, "ffmpeg");
         Process process = pb.start();
         FfplayPcmSink sink = new FfplayPcmSink(process, rate, ch);
         // Keep the pipe from looking like EOF before the first real samples arrive.

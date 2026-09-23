@@ -1,7 +1,7 @@
 package com.github.serezhka.airplay.player.dump;
 
-import com.github.serezhka.airplay.lib.AudioStreamInfo;
-import com.github.serezhka.airplay.lib.VideoStreamInfo;
+import com.github.serezhka.airplay.protocol.media.AudioStreamInfo;
+import com.github.serezhka.airplay.protocol.media.VideoStreamInfo;
 import com.github.serezhka.airplay.server.ControlExchange;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -127,7 +127,7 @@ class DumpPlayerTest {
     @Test
     void savesPlaylistUri() throws Exception {
         DumpPlayer player = player();
-        player.onMediaPlaylist("mlhls://localhost/master.m3u8");
+        player.onPlaylist("mlhls://localhost/master.m3u8");
         player.close();
 
         Path uriFile = player.sessionDirectory().resolve("extras").resolve("playlist-001.uri.txt");
@@ -138,9 +138,9 @@ class DumpPlayerTest {
     @Test
     void savesPlaylistContentWithoutHttpFetch() throws Exception {
         DumpPlayer player = player();
-        player.onMediaPlaylist("http://localhost:9/playlist/master.m3u8?session=x");
-        player.onMediaPlaylistContent("mlhls://localhost/master.m3u8", "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nmediadata.m3u8\n");
-        player.onMediaPlaylistContent("mlhls://localhost/mediadata.m3u8", "#EXTM3U\n#EXTINF:1.0,\nseg.ts\n");
+        player.onPlaylist("http://localhost:9/playlist/master.m3u8?session=x");
+        player.onPlaylistContent("mlhls://localhost/master.m3u8", "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nmediadata.m3u8\n");
+        player.onPlaylistContent("mlhls://localhost/mediadata.m3u8", "#EXTM3U\n#EXTINF:1.0,\nseg.ts\n");
         player.close();
 
         Path extras = player.sessionDirectory().resolve("extras");
