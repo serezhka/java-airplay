@@ -1,10 +1,10 @@
 name: Setup native player
 
-description: Install ffmpeg, gstreamer, or vlc for harness tests
+description: Install ffmpeg or gstreamer for harness tests
 
 inputs:
   player:
-    description: ffmpeg, gstreamer, or vlc
+    description: ffmpeg or gstreamer
     required: true
 
 runs:
@@ -19,7 +19,6 @@ runs:
         case "${{ inputs.player }}" in
           ffmpeg) sudo apt-get install -y ffmpeg xvfb ;;
           gstreamer) sudo apt-get install -y gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad xvfb ;;
-          vlc) sudo apt-get install -y vlc xvfb ;;
           *) echo "Unknown player: ${{ inputs.player }}"; exit 1 ;;
         esac
 
@@ -51,10 +50,3 @@ runs:
         Add-Content $env:GITHUB_PATH $bin
         Add-Content $env:GITHUB_ENV "GSTREAMER_1_0_ROOT_MSVC_X86_64=$root"
         Add-Content $env:GITHUB_ENV "GSTREAMER_BIN=$bin"
-
-    - name: Windows VLC
-      if: runner.os == 'Windows' && inputs.player == 'vlc'
-      shell: pwsh
-      run: |
-        choco install vlc -y --no-progress
-        Add-Content $env:GITHUB_PATH 'C:\Program Files\VideoLAN\VLC'

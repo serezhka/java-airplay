@@ -25,7 +25,7 @@
 - FairPlay decryption for mirrored streams
 - Volume control
 - YouTube HLS playback (AirPlay video from the YouTube app)
-- Playbacks: GStreamer, FFmpeg (`ffplay`), VLC
+- Playbacks: GStreamer, FFmpeg (`ffplay`)
 - Optional session dump (protocol + decrypted media) for debugging
 
 ## Quick start
@@ -58,7 +58,7 @@ airplay.serverName=srzhka
 airplay.width=1280
 airplay.height=720
 airplay.fps=24
-# player (gstreamer, ffmpeg, vlc)
+# player (gstreamer, ffmpeg)
 player.implementation=gstreamer
 player.tray.enabled=true
 # dump (optional sidecar)
@@ -74,7 +74,7 @@ dump.videoFps=60
 
 ## Playback
 
-Pick a backend with `player.implementation` (`gstreamer`, `ffmpeg`, or `vlc`). Install the matching native player first.
+Pick a backend with `player.implementation` (`gstreamer` or `ffmpeg`). Install the matching native player first.
 
 ### GStreamer (recommended)
 
@@ -87,12 +87,6 @@ Install: [GStreamer documentation](https://gstreamer.freedesktop.org/documentati
 Uses `ffplay` on `PATH`. Video works; **mirroring audio is unreliable** on stock builds (AAC-ELD usually needs a custom ffmpeg with `libfdk-aac`). Prefer GStreamer when you need audio.
 
 Install: [FFmpeg download](https://ffmpeg.org/download.html)
-
-### VLC
-
-**Very unstable** in this project (sessions often drop). Use only for experiments.
-
-Install: [VLC download](https://www.videolan.org/vlc/)
 
 ## Session dump
 

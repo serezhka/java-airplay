@@ -37,7 +37,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        player: [ffmpeg, gstreamer, vlc]
+        player: [ffmpeg, gstreamer]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -52,12 +52,11 @@ jobs:
       - name: Integration test
         timeout-minutes: 10
         env:
-          AIRPLAY_VLC_HEADLESS: 'true'
           AIRPLAY_GST_CLI: 'true'
         shell: bash
         run: |
           TASK="${{ matrix.player }}IntegrationTest"
-          EXTRA=(-Dairplay.vlc.headless=true -Dairplay.gst.cli=true)
+          EXTRA=(-Dairplay.gst.cli=true)
           if [ -n "${GSTREAMER_BIN:-}" ]; then EXTRA+=("-Dgstreamer.path=$GSTREAMER_BIN"); fi
           if [ "${{ runner.os }}" = "Linux" ]; then
             xvfb-run -a ./gradlew ":player:harness:$TASK" --no-daemon "${EXTRA[@]}"
@@ -73,10 +72,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        player: [ffmpeg, gstreamer, vlc]
+        player: [ffmpeg, gstreamer]
     runs-on: ubuntu-latest
     env:
-      AIRPLAY_VLC_HEADLESS: 'true'
       AIRPLAY_GST_CLI: 'true'
     steps:
       - uses: actions/checkout@v7
@@ -95,7 +93,6 @@ jobs:
             -Dairplay.harness.metrics=true \
             -Dairplay.harness.bench.seconds=300 \
             -Dairplay.harness.bench.player=${{ matrix.player }} \
-            -Dairplay.vlc.headless=true \
             -Dairplay.gst.cli=true
       - if: always()
         uses: actions/upload-artifact@v7

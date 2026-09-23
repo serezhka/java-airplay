@@ -4,7 +4,6 @@ import com.github.serezhka.airplay.lib.VideoStreamInfo;
 import com.github.serezhka.airplay.player.ffmpeg.FFmpegPlayer;
 import com.github.serezhka.airplay.player.gstreamer.GstPlayer;
 import com.github.serezhka.airplay.player.test.PlaybackFixture;
-import com.github.serezhka.airplay.player.vlc.VlcPlayer;
 import com.github.serezhka.airplay.server.AirPlayConsumer;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -72,13 +71,9 @@ class BenchPlaybackTest {
                 }
                 yield new GstPlayer();
             }
-            case "vlc" -> {
-                assumeTrue(vlcLikelyAvailable(), "VLC native libraries not available");
-                yield new VlcPlayer();
-            }
             case "recording", "none" -> new RecordingConsumer();
             default -> throw new IllegalArgumentException("Unknown bench player: " + player
-                    + " (use ffmpeg|gstreamer|vlc|recording)");
+                    + " (use ffmpeg|gstreamer|recording)");
         };
     }
 
@@ -145,14 +140,5 @@ class BenchPlaybackTest {
             return Files.isDirectory(Path.of("/opt/homebrew/lib")) || Files.isDirectory(Path.of("/usr/local/lib"));
         }
         return onPath("gst-launch-1.0");
-    }
-
-    static boolean vlcLikelyAvailable() {
-        return Files.isRegularFile(Path.of("/Applications/VLC.app/Contents/MacOS/lib/libvlc.dylib"))
-                || Files.isRegularFile(Path.of("/usr/lib/x86_64-linux-gnu/libvlc.so.5"))
-                || Files.isRegularFile(Path.of("/usr/lib/aarch64-linux-gnu/libvlc.so.5"))
-                || Files.isRegularFile(Path.of("/usr/lib/libvlc.so.5"))
-                || onPath("vlc")
-                || onPath("cvlc");
     }
 }
