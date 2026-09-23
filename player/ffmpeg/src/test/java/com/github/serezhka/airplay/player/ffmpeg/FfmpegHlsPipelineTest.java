@@ -2,7 +2,6 @@ package com.github.serezhka.airplay.player.ffmpeg;
 
 import com.github.serezhka.airplay.lib.HlsLifecycle;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.atomic.AtomicInteger;
@@ -11,7 +10,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-@Disabled("FFmpeg HLS pipeline is dead code")
 class FfmpegHlsPipelineTest {
 
     private final FfmpegHlsPipeline hls = new FfmpegHlsPipeline();
@@ -131,10 +129,6 @@ class FfmpegHlsPipelineTest {
         AtomicInteger ends = new AtomicInteger();
         HlsLifecycle.setOnEnded(ends::incrementAndGet);
         hls.noteMediaDuration(1.0);
-        // Simulate active session URI via start against unreachable host then stop quickly —
-        // instead invoke ended path through seek+manual: start headless with invalid URI is slow.
-        // Use package behavior: start then stop should not notify; notify via duration watchdog needs grabber.
-        // Directly exercise debounce by reflecting markEnded — prefer public stop semantics:
         assertEquals(0, ends.get());
         hls.stop();
         assertEquals(0, ends.get());

@@ -2,6 +2,7 @@ package com.github.serezhka.airplay.player.ffmpeg;
 
 import com.github.serezhka.airplay.lib.AudioStreamInfo;
 import com.github.serezhka.airplay.lib.AppLogs;
+import com.github.serezhka.airplay.lib.HlsEndListDuration;
 import com.github.serezhka.airplay.lib.VideoStreamInfo;
 import com.github.serezhka.airplay.server.AirPlayConsumer;
 import lombok.extern.slf4j.Slf4j;
@@ -12,12 +13,14 @@ import java.io.IOException;
 public class FFmpegPlayer implements AirPlayConsumer {
 
     private final int fps;
+    private final FfmpegHlsPipeline hls = new FfmpegHlsPipeline();
     private Process h264Process;
     private LibavAlacDecoder alacDecoder;
     private LibavAacDecoder aacDecoder;
     private FfplayPcmSink pcmSink;
     private AudioStreamInfo.CompressionType audioCompressionType;
     private volatile double volumeLinear = 1.0;
+    private volatile Double pendingStartSeekSeconds;
 
     public FFmpegPlayer() {
         this(60);
@@ -97,47 +100,78 @@ public class FFmpegPlayer implements AirPlayConsumer {
         audioCompressionType = null;
     }
 
-    // --- HLS parked: FfmpegHlsPipeline remains in-tree as dead code until revived. ---
-
     @Override
     public void onMediaPlaylist(String playlistUri) {
-        log.debug("Ignoring HLS playlist (FFmpeg HLS disabled): {}", playlistUri);
+        Double seek = pendingStartSeekSeconds;
+        pendingStartSeekSeconds = null;
+        hls.start(playlistUri, volumeLinear, seek != null ? seek : 0);
     }
 
     @Override
     public void onMediaPlaylistRemove() {
-        // no-op
+        pendingStartSeekSeconds = null;
+        hls.stop();
     }
 
     @Override
     public void onMediaPlaylistContent(String playlistUri, String content) {
-        // no-op
+        if (playlistUri == null || !playlistUri.contains("mediadata.m3u8") || content == null) {
+            return;
+        }
+        double sum = HlsEndListDuration.sumSeconds(content);
+        if (sum > 0) {
+            hls.noteMediaDuration(sum);
+        }
     }
 
     @Override
     public void onMediaPlaylistPause() {
-        // no-op
+        hls.pause();
     }
 
     @Override
     public void onMediaPlaylistResume() {
-        // no-op
+        hls.resume();
     }
 
     @Override
     public void onMediaPlaylistSeek(double positionSeconds) {
-        // no-op
+        if (!hls.isActive()) {
+            pendingStartSeekSeconds = positionSeconds;
+            return;
+        }
+        hls.seek(positionSeconds);
     }
 
     @Override
     public void onVolume(double volumeLinear) {
         this.volumeLinear = Math.max(0.0, Math.min(1.0, volumeLinear));
+        hls.setVolume(this.volumeLinear);
         log.info("Volume set to {}", this.volumeLinear);
     }
 
     @Override
     public double volume() {
         return volumeLinear;
+    }
+
+    @Override
+    public PlaybackInfo playbackInfo() {
+        if (!hls.isActive()) {
+            return AirPlayConsumer.super.playbackInfo();
+        }
+        double duration = hls.durationSeconds();
+        double position = hls.currentPositionSeconds();
+        if (duration > 0) {
+            position = Math.min(position, duration);
+        }
+        // VOD EOS is paused locally; report rate=1 (rate=0 looks like user pause).
+        double rate = (hls.isPaused() && !hls.isEnded()) ? 0 : 1;
+        return new PlaybackInfo(duration, position, rate);
+    }
+
+    boolean isHlsActive() {
+        return hls.isActive();
     }
 
     boolean isVideoProcessAlive() {

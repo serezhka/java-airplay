@@ -22,6 +22,9 @@ public final class HlsUriRewrite {
     }
 
     public static String toLocalUri(String remoteUri, String baseUrl, String sessionId) {
+        if (remoteUri.startsWith("http://") || remoteUri.startsWith("https://")) {
+            return remoteUri;
+        }
         String path = remoteUri.replace("mlhls://localhost", "");
         if (!path.startsWith("/")) {
             path = "/" + path;

@@ -13,10 +13,6 @@ import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * HLS playback via system {@code ffplay} (native SDL video + Pulse audio).
- * <p>
- * <strong>Dead code for now:</strong> {@link FFmpegPlayer} does not wire this pipeline.
- * Keep this class in-tree for a future revive; do not call from production paths until then.
- * <p>
  * Semantics mirror {@code GstHlsPipeline} for AirPlay (position, pause, seek, volume, EOS).
  */
 @Slf4j
@@ -185,6 +181,10 @@ final class FfmpegHlsPipeline {
         return paused.get() || ended.get();
     }
 
+    boolean isEnded() {
+        return ended.get();
+    }
+
     double currentPositionSeconds() {
         if (ended.get()) {
             double dur = durationSeconds();
@@ -339,8 +339,7 @@ final class FfmpegHlsPipeline {
             cmd.add("-allowed_segment_extensions");
             cmd.add("ALL");
         }
-        cmd.add("-fflags");
-        cmd.add("nobuffer");
+        // -fflags nobuffer makes ffplay exit in ~200ms on short VOD ENDLIST items.
         cmd.add("-flags");
         cmd.add("low_delay");
         cmd.add("-framedrop");

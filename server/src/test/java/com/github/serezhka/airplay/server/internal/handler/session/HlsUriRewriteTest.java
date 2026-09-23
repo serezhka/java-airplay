@@ -5,10 +5,19 @@ import org.junit.jupiter.api.Test;
 import java.util.Base64;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class HlsUriRewriteTest {
+
+    @Test
+    void absoluteHttpContentLocationPassesThrough() {
+        String http = "http://127.0.0.1:18765/ad1/index.m3u8";
+        String https = "https://cdn.example/vod.m3u8?token=1";
+        assertEquals(http, HlsUriRewrite.toLocalUri(http, "http://127.0.0.1:9/playlist", "sess"));
+        assertEquals(https, HlsUriRewrite.toLocalUri(https, "http://127.0.0.1:9/playlist", "sess"));
+    }
 
     @Test
     void rewriteMasterPlaylistWithXtagsPaths() {

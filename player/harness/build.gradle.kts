@@ -28,7 +28,6 @@ dependencies {
     "integrationTestImplementation"(projects.player.ffmpeg)
     "integrationTestImplementation"(projects.player.gstreamer)
     "integrationTestImplementation"(projects.player.dump)
-    "integrationTestImplementation"(projects.player.vlc)
     "integrationTestImplementation"(libs.bundles.logging)
     "integrationTestImplementation"(libs.eddsa)
     "integrationTestImplementation"(libs.curve25519)
@@ -54,7 +53,6 @@ fun registerIntegrationTest(taskName: String, tag: String?, taskDescription: Str
             "airplay.harness.reportDir",
             "airplay.gst.appsink",
             "airplay.gst.cli",
-            "airplay.vlc.headless",
             "gstreamer.path",
             "jna.library.path"
         ).forEach { key ->
@@ -65,7 +63,6 @@ fun registerIntegrationTest(taskName: String, tag: String?, taskDescription: Str
         }
         // Prefer env from CI when -D was not set on the Gradle JVM.
         System.getenv("AIRPLAY_GST_CLI")?.let { systemProperty("airplay.gst.cli", it) }
-        System.getenv("AIRPLAY_VLC_HEADLESS")?.let { systemProperty("airplay.vlc.headless", it) }
         // Defaults for bench when not overridden
         if (tag == "bench") {
             // Never run benches in parallel on one machine (local or single runner).
@@ -85,14 +82,6 @@ fun registerIntegrationTest(taskName: String, tag: String?, taskDescription: Str
             )
             val seconds = System.getProperty("airplay.harness.bench.seconds", "300").toLongOrNull() ?: 300L
             timeout.set(Duration.ofSeconds(seconds + 120))
-        }
-        if (tag == "vlc") {
-            // Hard cap so a stuck libvlc/Swing path cannot burn the whole job.
-            timeout.set(Duration.ofMinutes(2))
-            systemProperty(
-                "airplay.vlc.headless",
-                System.getProperty("airplay.vlc.headless", "true")
-            )
         }
         if (tag == "ffmpeg" || tag == "gstreamer" || tag == "dump" || tag == "loopback") {
             timeout.set(Duration.ofMinutes(3))
@@ -120,11 +109,6 @@ registerIntegrationTest(
     "dumpIntegrationTest",
     "dump",
     "Runs the dump sidecar recording smoke test."
-)
-registerIntegrationTest(
-    "vlcIntegrationTest",
-    "vlc",
-    "Runs the VLC playback smoke test."
 )
 registerIntegrationTest(
     "loopbackIntegrationTest",

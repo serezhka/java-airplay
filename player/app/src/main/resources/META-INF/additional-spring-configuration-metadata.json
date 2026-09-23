@@ -23,7 +23,7 @@
     {
       "name": "player.implementation",
       "type": "java.lang.String",
-      "description": "Player implementation: gstreamer, ffmpeg, or vlc."
+      "description": "Player implementation: gstreamer or ffmpeg."
     },
     {
       "name": "player.tray.enabled",
@@ -77,9 +77,6 @@
       "values": [
         {
           "value": "gstreamer"
-        },
-        {
-          "value": "vlc"
         },
         {
           "value": "ffmpeg"
