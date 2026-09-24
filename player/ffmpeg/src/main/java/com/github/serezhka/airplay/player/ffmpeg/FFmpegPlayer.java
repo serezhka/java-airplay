@@ -47,18 +47,12 @@ public class FFmpegPlayer implements Playback {
             FfplayPcmSink.applyDisplayEnv(pb);
             NativeProcessLog.configureProcessLogging(pb, "ffmpeg");
             h264Process = pb.start();
-            // SDL may abort after start if the display/audio driver is wrong.
-            Thread.sleep(150);
             if (!h264Process.isAlive()) {
                 h264Process = null;
                 throw new IllegalStateException("ffplay exited immediately after start");
             }
         } catch (IOException e) {
             throw new IllegalStateException("Failed to start ffplay. Make sure it is available on PATH.", e);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            stopVideoProcess();
-            throw new IllegalStateException("Interrupted while starting ffplay", e);
         }
     }
 

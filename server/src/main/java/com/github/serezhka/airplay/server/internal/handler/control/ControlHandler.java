@@ -430,6 +430,8 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 hls.setPendingSeekSeconds(startPositionSeconds);
             }
             log.info("HLS play from [{}]: prefetching playlists via FCUP, localUri={}", clientProcName, playlistUriLocal);
+            // Gear on the phone while FCUP + first video playlist are still in flight.
+            hlsFcupService.sendPlaybackStateEvent(session, "loading");
             hlsFcupService.sendFcupRequest(session, remotePlaylistUri);
         } else {
             airPlayConsumer.onPlaylist(playlistUriLocal);
@@ -568,13 +570,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         double duration = fromPlayer.duration();
         double position = fromPlayer.position();
         double rate = fromPlayer.rate();
-        var override = PlaybackInfoOverride.get();
-        if (override != null) {
-            duration = override.duration();
-            position = override.position();
-            rate = override.rate();
-            log.info("Playback-info override duration={} position={} rate={}", duration, position, rate);
-        } else if (hls != null && hls.isWaitingForMasterChange() && hls.isLivePlaylist()) {
+        if (hls != null && hls.isWaitingForMasterChange() && hls.isLivePlaylist()) {
             // Live post-EOS gap: duration=0 → buffer-empty / not ready (loading).
             duration = 0;
             position = 0;
@@ -965,7 +961,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     private MasterRewrite rewriteMasterPlaylist(String masterPlaylist, String baseUrl, String sessionId) {
         String filteredRemote = HlsUriRewrite.preferAvcVariants(masterPlaylist);
         if (!filteredRemote.equals(masterPlaylist)) {
-            log.info("Filtered HLS master to AVC-only variants (drop VP9/AV1/subtitles)");
+            log.info("Filtered HLS master to AVC variants and the default audio track");
         }
         List<String> remoteMediaUris;
         try {

@@ -46,7 +46,6 @@ public class HlsFcupService {
     public HlsFcupService(SessionManager sessionManager, Playback airPlayConsumer) {
         this.sessionManager = sessionManager;
         this.airPlayConsumer = airPlayConsumer;
-        startSignalFileWatcher();
     }
 
     public void refreshActivePlaylists() {
@@ -75,72 +74,7 @@ public class HlsFcupService {
                 log.info("HLS ended (VOD actionAtItemEnd={}), emit EOS reverse-event burst session={}",
                         hls.getActionAtItemEnd(), session.getId());
                 hls.setPlaybackRate(1);
-                PlaybackInfoOverride.clear();
                 sendVodEosEventBurst(session);
-            }
-        }
-    }
-
-    /** Poll {@code /tmp/airplay-hls-signal} for manual reverse/FCUP/playback-info experiments. */
-    private void startSignalFileWatcher() {
-        scheduler.scheduleAtFixedRate(this::drainSignalFile, 500, 250, TimeUnit.MILLISECONDS);
-    }
-
-    private void drainSignalFile() {
-        java.nio.file.Path path = java.nio.file.Path.of("/tmp/airplay-hls-signal");
-        if (!java.nio.file.Files.isRegularFile(path)) {
-            return;
-        }
-        try {
-            String raw = java.nio.file.Files.readString(path).trim();
-            java.nio.file.Files.deleteIfExists(path);
-            if (raw.isEmpty()) {
-                return;
-            }
-            for (String line : raw.split("\\R")) {
-                applySignal(line.trim());
-            }
-        } catch (Exception e) {
-            log.warn("airplay-hls-signal: {}", e.toString());
-        }
-    }
-
-    private void applySignal(String line) {
-        if (line.isEmpty() || line.startsWith("#")) {
-            return;
-        }
-        log.warn("HLS debug signal: {}", line);
-        for (Session session : sessionManager.allSessions()) {
-            var hls = session.getHlsPlaylistState();
-            if (hls == null || !hls.isPlaybackStarted()) {
-                continue;
-            }
-            switch (line) {
-                case "loading", "playing", "paused", "stopped" -> sendPlaybackStateEvent(session, line);
-                case "fcup-master" -> {
-                    requestMasterRefresh(session);
-                    scheduleMasterPoll(session);
-                }
-                case "rate0" -> hls.setPlaybackRate(0);
-                case "rate1" -> hls.setPlaybackRate(1);
-                case "clear-wait" -> {
-                    hls.setWaitingForMasterChange(false);
-                    PlaybackInfoOverride.clear();
-                }
-                case "clear-override" -> PlaybackInfoOverride.clear();
-                default -> {
-                    if (line.startsWith("info:")) {
-                        String[] p = line.substring(5).split(",");
-                        if (p.length >= 3) {
-                            PlaybackInfoOverride.set(
-                                    Double.parseDouble(p[0].trim()),
-                                    Double.parseDouble(p[1].trim()),
-                                    Double.parseDouble(p[2].trim()));
-                        }
-                    } else {
-                        log.warn("Unknown HLS debug signal: {}", line);
-                    }
-                }
             }
         }
     }

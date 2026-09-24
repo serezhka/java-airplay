@@ -48,7 +48,11 @@ public final class HlsUriRewrite {
 
     /**
      * Keep H.264 ({@code avc1}) variants only. YouTube masters mix AVC + VP9/AV1; a single
-     * HLS consumer cannot switch video codecs mid-playlist. Also drops subtitle renditions.
+     * HLS consumer cannot switch video codecs mid-playlist.
+     * <p>
+     * Drops subtitles and every audio rendition except one default per {@code GROUP-ID}
+     * referenced by a remaining variant ({@code DEFAULT=YES}, else the first). Extra
+     * languages make the consumer probe dozens of playlists before the first video frame.
      */
     public static String preferAvcVariants(String masterPlaylist) {
         String[] lines = masterPlaylist.split("\\R", -1);
@@ -93,16 +97,31 @@ public final class HlsUriRewrite {
             }
             out.append(header).append('\n');
         }
-        for (String media : audioMedia) {
-            String group = extractAttr(media, "GROUP-ID").orElse("");
-            if (audioGroups.isEmpty() || audioGroups.contains(group)) {
-                out.append(media).append('\n');
-            }
+        for (String media : defaultAudioOnly(audioMedia, audioGroups)) {
+            out.append(media).append('\n');
         }
         for (String variantLine : variants) {
             out.append(variantLine).append('\n');
         }
         return out.toString();
+    }
+
+    /** One audio rendition per referenced group: {@code DEFAULT=YES}, otherwise the first. */
+    private static List<String> defaultAudioOnly(List<String> audioMedia, Set<String> audioGroups) {
+        java.util.Map<String, String> chosen = new java.util.LinkedHashMap<>();
+        java.util.Map<String, Boolean> chosenIsDefault = new java.util.LinkedHashMap<>();
+        for (String media : audioMedia) {
+            String group = extractAttr(media, "GROUP-ID").orElse("");
+            if (!audioGroups.isEmpty() && !audioGroups.contains(group)) {
+                continue;
+            }
+            boolean isDefault = extractAttr(media, "DEFAULT").orElse("").equalsIgnoreCase("YES");
+            if (!chosen.containsKey(group) || (isDefault && !chosenIsDefault.getOrDefault(group, false))) {
+                chosen.put(group, media);
+                chosenIsDefault.put(group, isDefault);
+            }
+        }
+        return new ArrayList<>(chosen.values());
     }
 
     private static boolean isAvcStreamInfo(String streamInf) {
