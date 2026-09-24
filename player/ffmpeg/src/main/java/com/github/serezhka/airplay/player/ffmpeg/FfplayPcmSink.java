@@ -159,19 +159,34 @@ final class FfplayPcmSink implements AutoCloseable {
         }
     }
 
-    /** Prefer Pulse/PipeWire over ALSA HDMI when ffplay is spawned from Java on Linux. */
-    static void forcePulseAudioEnv(ProcessBuilder pb) {
+    /**
+     * X11 display only — for video-only ffplay (no audio device). Prefer this over
+     * {@link #forcePulseAudioEnv} when the process has {@code -an}; Pulse is often
+     * missing under CI/xvfb and aborts SDL before the first frame.
+     */
+    static void applyDisplayEnv(ProcessBuilder pb) {
         Map<String, String> env = pb.environment();
         String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
         if (os.contains("linux")) {
-            env.putIfAbsent("SDL_AUDIODRIVER", "pulse");
             env.putIfAbsent("SDL_VIDEODRIVER", "x11");
+            env.putIfAbsent("SDL_AUDIODRIVER", "dummy");
         }
-        copyEnv(env, "PULSE_SERVER");
-        copyEnv(env, "PULSE_SINK");
         copyEnv(env, "DISPLAY");
         copyEnv(env, "XAUTHORITY");
         copyEnv(env, "XDG_RUNTIME_DIR");
+    }
+
+    /** Prefer Pulse/PipeWire over ALSA HDMI when ffplay is spawned from Java on Linux. */
+    static void forcePulseAudioEnv(ProcessBuilder pb) {
+        applyDisplayEnv(pb);
+        Map<String, String> env = pb.environment();
+        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+        if (os.contains("linux")) {
+            // Override dummy from applyDisplayEnv — this process needs real audio.
+            env.put("SDL_AUDIODRIVER", "pulse");
+        }
+        copyEnv(env, "PULSE_SERVER");
+        copyEnv(env, "PULSE_SINK");
     }
 
     private static void copyEnv(Map<String, String> env, String key) {

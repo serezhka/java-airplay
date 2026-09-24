@@ -37,16 +37,28 @@ public class FFmpegPlayer implements Playback {
     public synchronized void onVideoFormat(VideoStreamInfo videoStreamInfo) {
         stopVideoProcess();
         try {
-            ProcessBuilder pb = new ProcessBuilder("ffplay", "-fs", "-loglevel", "debug",
+            // Video-only: -an + dummy SDL audio. Do not force Pulse here — CI/xvfb has no
+            // Pulse server, and SDL_AUDIODRIVER=pulse makes ffplay exit before the first NAL.
+            ProcessBuilder pb = new ProcessBuilder("ffplay", "-fs", "-an", "-loglevel", "debug",
                     "-f", "h264",
                     "-framerate", String.valueOf(this.fps),
                     "-codec:v", "h264", "-probesize", "32",
                     "-analyzeduration", "0", "-flags", "low_delay", "-");
-            FfplayPcmSink.forcePulseAudioEnv(pb);
+            FfplayPcmSink.applyDisplayEnv(pb);
             NativeProcessLog.configureProcessLogging(pb, "ffmpeg");
             h264Process = pb.start();
+            // SDL may abort after start if the display/audio driver is wrong.
+            Thread.sleep(150);
+            if (!h264Process.isAlive()) {
+                h264Process = null;
+                throw new IllegalStateException("ffplay exited immediately after start");
+            }
         } catch (IOException e) {
             throw new IllegalStateException("Failed to start ffplay. Make sure it is available on PATH.", e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            stopVideoProcess();
+            throw new IllegalStateException("Interrupted while starting ffplay", e);
         }
     }
 
