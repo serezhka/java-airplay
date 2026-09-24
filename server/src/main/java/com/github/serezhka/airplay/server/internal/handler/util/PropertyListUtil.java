@@ -3,8 +3,9 @@ package com.github.serezhka.airplay.server.internal.handler.util;
 import com.dd.plist.BinaryPropertyListWriter;
 import com.dd.plist.NSArray;
 import com.dd.plist.NSDictionary;
+import com.github.serezhka.airplay.server.discovery.AdvertisedReceiver;
 import com.github.serezhka.airplay.server.AirPlayConfig;
-import com.github.serezhka.airplay.server.AirPlayConsumer;
+import com.github.serezhka.airplay.server.Playback;
 import lombok.extern.slf4j.Slf4j;
 
 import java.nio.charset.StandardCharsets;
@@ -57,14 +58,14 @@ public class PropertyListUtil {
         response.put("audioFormats", audioFormats);
         response.put("audioLatencies", audioLatencies);
         response.put("displays", displays);
-        response.put("features", 0x527FFEE6L);
+        response.put("features", AdvertisedReceiver.FEATURES);
         response.put("keepAliveSendStatsAsBody", 1);
-        response.put("model", "AppleTV3,2");
+        response.put("model", AdvertisedReceiver.MODEL);
         response.put("name", "Apple TV");
         response.put("pi", "b08f5a79-db29-4384-b456-a4784d9e6055");
-        response.put("sourceVersion", "220.68");
-        response.put("statusFlags", 68);
-        response.put("vv", 2);
+        response.put("sourceVersion", AdvertisedReceiver.SOURCE_VERSION);
+        response.put("statusFlags", AdvertisedReceiver.STATUS_FLAGS);
+        response.put("vv", AdvertisedReceiver.VV);
         // response.put("pk", new NSData("XYMxJlYMsZoUGTcneJbw/UN7poAeshCsTDnZAHLXDag="));
 
         return BinaryPropertyListWriter.writeToArray(response);
@@ -107,34 +108,119 @@ public class PropertyListUtil {
         return response.toXMLPropertyList().getBytes(StandardCharsets.UTF_8);
     }
 
-    public static byte[] preparePlaybackInfoResponse(AirPlayConsumer.PlaybackInfo playbackInfo) {
+    public static byte[] preparePlaybackInfoResponse(Playback.Info playbackInfo) {
         NSDictionary response = new NSDictionary();
         double duration = Math.max(0, playbackInfo.duration());
         double position = Math.max(0, playbackInfo.position());
         if (duration > 0) {
             position = Math.min(position, duration);
         }
+        double rate = playbackInfo.rate() <= 0 ? 0 : 1;
         response.put("duration", duration);
         NSDictionary loadedTimeRanges = new NSDictionary();
         loadedTimeRanges.put("duration", duration);
         loadedTimeRanges.put("start", 0.0);
         response.put("loadedTimeRanges", new NSArray(loadedTimeRanges));
         boolean hasDuration = duration > 0;
-        boolean hasPosition = position > 0;
-        boolean atEnd = hasDuration && position >= duration;
-        boolean bufferEmpty = !hasDuration && !hasPosition;
-        response.put("playbackBufferEmpty", bufferEmpty);
-        response.put("playbackBufferFull", hasDuration && !atEnd);
-        response.put("playbackLikelyToKeepUp", hasDuration && !atEnd);
+        // Do NOT force rate=0 when position≈duration. That made short VOD ads look like a
+        // user pause; YouTube then stuck until Skip (ControlHandler pins rate=1 while waiting
+        // for playlistRemove — dump 20260916-164913 kept rate=1 through the gap).
+        //
+        // Buffer flags match known receiver /playback-info templates (and
+        // reverse_engineering/get_playback_info_response.txt): empty=true, full=false,
+        // keepUp=true while readyToPlay. Flipping empty/full with hasDuration diverged from
+        // that and is a candidate cause of VOD ad EOS hangs.
+        if (hasDuration) {
+            response.put("playbackBufferEmpty", true);
+            response.put("playbackBufferFull", false);
+            response.put("playbackLikelyToKeepUp", true);
+            response.put("readyToPlay", true);
+        } else {
+            response.put("playbackBufferEmpty", true);
+            response.put("playbackBufferFull", false);
+            response.put("playbackLikelyToKeepUp", false);
+            response.put("readyToPlay", false);
+        }
         response.put("position", position);
-        response.put("rate", atEnd ? 0 : 1);
-        response.put("readyToPlay", hasDuration);
+        response.put("rate", rate);
         NSDictionary seekableTimeRanges = new NSDictionary();
         seekableTimeRanges.put("duration", duration);
         seekableTimeRanges.put("start", 0.0);
         response.put("seekableTimeRanges", new NSArray(seekableTimeRanges));
-        log.debug("Playback info: duration={}, position={}", duration, position);
+        log.debug("Playback info: duration={}, position={}, rate={}", duration, position, rate);
         return response.toXMLPropertyList().getBytes(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Playback state event sent to the client over the reverse HTTP channel.
+     * States: {@code loading}, {@code playing}, {@code paused}, {@code stopped}.
+     */
+    public static byte[] preparePlaybackStateEvent(String state) {
+        return preparePlaybackStateEvent(state, 1, null, null);
+    }
+
+    /**
+     * Reverse {@code POST /event} with {@code category=video} and a {@code state}.
+     *
+     * @param reason optional; working VOD EOS uses {@code "ended"} with {@code stopped}
+     * @param itemUuid optional playlist-item uuid under {@code params}
+     */
+    public static byte[] preparePlaybackStateEvent(String state, int reverseSessionId,
+                                                   String itemUuid, String reason) {
+        NSDictionary event = new NSDictionary();
+        event.put("category", "video");
+        event.put("sessionID", reverseSessionId);
+        event.put("state", state);
+        if (reason != null) {
+            event.put("reason", reason);
+        }
+        if (itemUuid != null) {
+            NSDictionary params = new NSDictionary();
+            params.put("uuid", itemUuid);
+            event.put("params", params);
+        }
+        return event.toXMLPropertyList().getBytes(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Typed video event ({@code itemPlayedToEnd}, etc.) with top-level {@code uuid}.
+     */
+    public static byte[] prepareVideoTypedEvent(String type, int reverseSessionId, String itemUuid) {
+        NSDictionary event = new NSDictionary();
+        event.put("category", "video");
+        event.put("sessionID", reverseSessionId);
+        event.put("type", type);
+        if (itemUuid != null) {
+            event.put("uuid", itemUuid);
+        }
+        return event.toXMLPropertyList().getBytes(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * {@code itemRemoved}: {@code sessionID} is the play UUID string (X-Apple-Session-ID), not the
+     * integer reverse-event session id.
+     */
+    public static byte[] prepareItemRemovedEvent(String playSessionId, String itemUuid) {
+        NSDictionary event = new NSDictionary();
+        event.put("category", "video");
+        event.put("sessionID", playSessionId);
+        event.put("type", "itemRemoved");
+        if (itemUuid != null) {
+            event.put("uuid", itemUuid);
+        }
+        return event.toXMLPropertyList().getBytes(StandardCharsets.UTF_8);
+    }
+
+    public static byte[] prepareCurrentItemChangedEvent(int reverseSessionId) {
+        NSDictionary event = new NSDictionary();
+        event.put("category", "video");
+        event.put("sessionID", reverseSessionId);
+        event.put("type", "currentItemChanged");
+        return event.toXMLPropertyList().getBytes(StandardCharsets.UTF_8);
+    }
+
+    public static byte[] prepareEmptyPropertyResponse() {
+        return new NSDictionary().toXMLPropertyList().getBytes(StandardCharsets.UTF_8);
     }
 
     public static byte[] prepareEventRequest(String sessionId, String listUri, int requestId) {

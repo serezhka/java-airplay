@@ -1,6 +1,6 @@
 package com.github.serezhka.airplay.server.internal.handler.session;
 
-import com.github.serezhka.airplay.lib.AirPlay;
+import com.github.serezhka.airplay.protocol.FairPlaySession;
 import com.github.serezhka.airplay.server.internal.AudioControlServer;
 import com.github.serezhka.airplay.server.internal.AudioServer;
 import com.github.serezhka.airplay.server.internal.VideoServer;
@@ -17,7 +17,7 @@ public class Session {
 
     private final String id;
 
-    private final AirPlay airPlay;
+    private final FairPlaySession airPlay;
     private final VideoServer videoServer;
     private final AudioServer audioServer;
     private final AudioControlServer audioControlServer;
@@ -27,7 +27,7 @@ public class Session {
 
     Session(String id) {
         this.id = id;
-        airPlay = new AirPlay();
+        airPlay = new FairPlaySession();
         videoServer = new VideoServer(airPlay);
         audioServer = new AudioServer(airPlay);
         audioControlServer = new AudioControlServer();

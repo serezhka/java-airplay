@@ -1,8 +1,8 @@
 package com.github.serezhka.airplay.player.dump;
 
-import com.github.serezhka.airplay.lib.AudioStreamInfo;
-import com.github.serezhka.airplay.lib.VideoStreamInfo;
-import com.github.serezhka.airplay.server.AirPlayConsumer;
+import com.github.serezhka.airplay.protocol.media.AudioStreamInfo;
+import com.github.serezhka.airplay.protocol.media.VideoStreamInfo;
+import com.github.serezhka.airplay.server.Playback;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -64,10 +64,10 @@ class DumpingAirPlayConsumerTest {
     @Test
     void playbackInfoComesFromPlayer() {
         RecordingConsumer player = new RecordingConsumer();
-        player.playbackInfo = new AirPlayConsumer.PlaybackInfo(10, 3);
+        player.playbackInfo = new Playback.Info(10, 3);
         DumpingAirPlayConsumer consumer = new DumpingAirPlayConsumer(player, dumpPlayer());
 
-        assertEquals(new AirPlayConsumer.PlaybackInfo(10, 3), consumer.playbackInfo());
+        assertEquals(new Playback.Info(10, 3), consumer.info());
     }
 
     private DumpPlayer dumpPlayer() {
@@ -81,9 +81,9 @@ class DumpingAirPlayConsumerTest {
         return config;
     }
 
-    private static final class RecordingConsumer implements AirPlayConsumer {
+    private static final class RecordingConsumer implements Playback {
         private final List<byte[]> videoFrames = new ArrayList<>();
-        private AirPlayConsumer.PlaybackInfo playbackInfo = new AirPlayConsumer.PlaybackInfo(0, 0);
+        private Playback.Info playbackInfo = new Playback.Info(0, 0);
 
         @Override
         public void onVideoFormat(VideoStreamInfo videoStreamInfo) {
@@ -111,7 +111,7 @@ class DumpingAirPlayConsumerTest {
         }
 
         @Override
-        public AirPlayConsumer.PlaybackInfo playbackInfo() {
+        public Playback.Info info() {
             return playbackInfo;
         }
     }

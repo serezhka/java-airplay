@@ -6,9 +6,8 @@ import com.github.serezhka.airplay.player.dump.DumpPlayer;
 import com.github.serezhka.airplay.player.dump.DumpingAirPlayConsumer;
 import com.github.serezhka.airplay.player.ffmpeg.FFmpegPlayer;
 import com.github.serezhka.airplay.player.gstreamer.GstPlayer;
-import com.github.serezhka.airplay.player.vlc.VlcPlayer;
 import com.github.serezhka.airplay.server.AirPlayConfig;
-import com.github.serezhka.airplay.server.AirPlayConsumer;
+import com.github.serezhka.airplay.server.Playback;
 import com.github.serezhka.airplay.server.AirPlayServer;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -33,17 +32,16 @@ public class PlayerConfig {
     }
 
     @Bean
-    public AirPlayConsumer airPlayConsumer(
+    public Playback airPlayConsumer(
             @Value("${player.implementation:gstreamer}") String implementation,
             AirPlayConfig airPlayConfig,
             DumpConfig dumpConfig) {
         int fps = Math.max(1, airPlayConfig.getFps());
-        AirPlayConsumer player = switch (implementation) {
+        Playback player = switch (implementation) {
             case "gstreamer" -> new GstPlayer(fps);
             case "ffmpeg" -> new FFmpegPlayer(fps);
-            case "vlc" -> new VlcPlayer();
             default -> throw new IllegalArgumentException(
-                    "Unknown player.implementation '" + implementation + "'. Use gstreamer, ffmpeg, or vlc.");
+                    "Unknown player.implementation '" + implementation + "'. Use gstreamer or ffmpeg.");
         };
         if (!dumpConfig.isEnabled()) {
             return player;
@@ -59,7 +57,7 @@ public class PlayerConfig {
 
     @Bean
     public AirPlayServer airPlayServer(AirPlayConfig airPlayConfig,
-                                       AirPlayConsumer airPlayConsumer) {
+                                       Playback airPlayConsumer) {
         return new AirPlayServer(airPlayConfig, airPlayConsumer);
     }
 }

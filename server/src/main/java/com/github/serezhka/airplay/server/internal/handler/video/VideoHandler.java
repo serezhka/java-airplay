@@ -1,7 +1,7 @@
 package com.github.serezhka.airplay.server.internal.handler.video;
 
-import com.github.serezhka.airplay.lib.AirPlay;
-import com.github.serezhka.airplay.server.AirPlayConsumer;
+import com.github.serezhka.airplay.protocol.FairPlaySession;
+import com.github.serezhka.airplay.server.Playback;
 import com.github.serezhka.airplay.server.internal.packet.VideoPacket;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
@@ -16,8 +16,8 @@ import lombok.extern.slf4j.Slf4j;
 @ChannelHandler.Sharable
 public class VideoHandler extends ChannelInboundHandlerAdapter {
 
-    private final AirPlay airPlay;
-    private final AirPlayConsumer dataConsumer;
+    private final FairPlaySession airPlay;
+    private final Playback dataConsumer;
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
@@ -27,7 +27,10 @@ public class VideoHandler extends ChannelInboundHandlerAdapter {
                 // Type 0 only: type 5 is an unencrypted streaming-report plist; decrypting it
                 // advances AES-CTR and corrupts subsequent video frames.
                 airPlay.decryptVideo(packet.getPayload());
-                toAnnexB(packet.getPayload());
+                // Never feed partial/corrupt Annex-B to the consumer.
+                if (!toAnnexB(packet.getPayload())) {
+                    return;
+                }
                 dataConsumer.onVideo(packet.getPayload());
             } else if (packet.getPayloadType() == 1) {
                 byte[] spsPps = prepareSpsPpsNALUnits(packet.getPayload());
@@ -38,7 +41,8 @@ public class VideoHandler extends ChannelInboundHandlerAdapter {
         }
     }
 
-    static void toAnnexB(byte[] payload) {
+    /** @return false if length-prefixed NALs are invalid (likely bad decrypt) */
+    static boolean toAnnexB(byte[] payload) {
         int idx = 0;
         while (idx + 4 <= payload.length) {
             int naluSize = (payload[idx + 3] & 0xFF)
@@ -47,7 +51,7 @@ public class VideoHandler extends ChannelInboundHandlerAdapter {
                     | ((payload[idx] & 0xFF) << 24);
             if (naluSize <= 0 || idx + 4 + naluSize > payload.length) {
                 log.error("Video packet contains corrupted NAL unit. It might be decrypt error");
-                return;
+                return false;
             }
             payload[idx] = 0;
             payload[idx + 1] = 0;
@@ -55,6 +59,7 @@ public class VideoHandler extends ChannelInboundHandlerAdapter {
             payload[idx + 3] = 1;
             idx += naluSize + 4;
         }
+        return true;
     }
 
     private byte[] prepareSpsPpsNALUnits(byte[] payload) {

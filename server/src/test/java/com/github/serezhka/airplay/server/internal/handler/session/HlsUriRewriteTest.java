@@ -5,10 +5,19 @@ import org.junit.jupiter.api.Test;
 import java.util.Base64;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class HlsUriRewriteTest {
+
+    @Test
+    void absoluteHttpContentLocationPassesThrough() {
+        String http = "http://127.0.0.1:18765/ad1/index.m3u8";
+        String https = "https://cdn.example/vod.m3u8?token=1";
+        assertEquals(http, HlsUriRewrite.toLocalUri(http, "http://127.0.0.1:9/playlist", "sess"));
+        assertEquals(https, HlsUriRewrite.toLocalUri(https, "http://127.0.0.1:9/playlist", "sess"));
+    }
 
     @Test
     void rewriteMasterPlaylistWithXtagsPaths() {
@@ -24,6 +33,30 @@ class HlsUriRewriteTest {
         assertTrue(rewritten.contains("http://localhost:9/playlist/itag/230/mediadata.m3u8?session=sess-1"));
         assertTrue(rewritten.contains("http://localhost:9/playlist/itag/234/xtags/ChQKBWFjb250EgtkdWJiZWQtYXV0bwoNCgRsYW5nEgVlbi1VUw/mediadata.m3u8?session=sess-1"));
         assertFalse(rewritten.contains("mlhls://"));
+    }
+
+    @Test
+    void preferAvcVariantsDropsVp9AndSubtitles() {
+        String master = """
+                #EXTM3U
+                #EXT-X-INDEPENDENT-SEGMENTS
+                #EXT-X-MEDIA:URI="http://localhost/a233.m3u8",TYPE=AUDIO,GROUP-ID="233",NAME="he-aac"
+                #EXT-X-MEDIA:URI="http://localhost/a234.m3u8",TYPE=AUDIO,GROUP-ID="234",NAME="aac-lc"
+                #EXT-X-MEDIA:URI="https://example/subs.m3u8",TYPE=SUBTITLES,GROUP-ID="vtt",NAME="en"
+                #EXT-X-STREAM-INF:BANDWIDTH=1000,CODECS="avc1.4D401E,mp4a.40.2",RESOLUTION=640x360,AUDIO="234"
+                http://localhost/avc.m3u8
+                #EXT-X-STREAM-INF:BANDWIDTH=2000,CODECS="vp09.00.31.08,mp4a.40.2",RESOLUTION=1280x720,AUDIO="234"
+                http://localhost/vp9.m3u8
+                """;
+
+        String filtered = HlsUriRewrite.preferAvcVariants(master);
+
+        assertTrue(filtered.contains("avc.m3u8"));
+        assertTrue(filtered.contains("GROUP-ID=\"234\""));
+        assertFalse(filtered.contains("vp9.m3u8"));
+        assertFalse(filtered.contains("TYPE=SUBTITLES"));
+        // AUDIO 233 unused by remaining AVC variants
+        assertFalse(filtered.contains("GROUP-ID=\"233\""));
     }
 
     @Test

@@ -1,6 +1,6 @@
 package com.github.serezhka.airplay.player.gstreamer;
 
-import com.github.serezhka.airplay.lib.VideoStreamInfo;
+import com.github.serezhka.airplay.protocol.media.VideoStreamInfo;
 import com.github.serezhka.airplay.player.harness.GstLaunchPlayer;
 import com.github.serezhka.airplay.player.test.PlaybackFixture;
 import org.junit.jupiter.api.Tag;

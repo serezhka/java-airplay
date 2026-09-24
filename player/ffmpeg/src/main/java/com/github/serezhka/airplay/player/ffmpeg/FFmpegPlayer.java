@@ -1,21 +1,27 @@
 package com.github.serezhka.airplay.player.ffmpeg;
 
-import com.github.serezhka.airplay.lib.AudioStreamInfo;
-import com.github.serezhka.airplay.lib.AppLogs;
-import com.github.serezhka.airplay.lib.VideoStreamInfo;
-import com.github.serezhka.airplay.server.AirPlayConsumer;
+import com.github.serezhka.airplay.protocol.media.AudioStreamInfo;
+import com.github.serezhka.airplay.player.support.NativeProcessLog;
+import com.github.serezhka.airplay.protocol.media.EndListDuration;
+import com.github.serezhka.airplay.protocol.media.VideoStreamInfo;
+import com.github.serezhka.airplay.server.Playback;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
 
 @Slf4j
-public class FFmpegPlayer implements AirPlayConsumer {
+public class FFmpegPlayer implements Playback {
 
     private final int fps;
+    private final FfmpegHlsPipeline hls = new FfmpegHlsPipeline();
+    private volatile Playback.Observer observer = Playback.Observer.NONE;
     private Process h264Process;
-    private Process alacProcess;
-    private Process hlsProcess;
+    private LibavAlacDecoder alacDecoder;
+    private LibavAacDecoder aacDecoder;
+    private FfplayPcmSink pcmSink;
     private AudioStreamInfo.CompressionType audioCompressionType;
+    private volatile double volumeLinear = 1.0;
+    private volatile Double pendingStartSeekSeconds;
 
     public FFmpegPlayer() {
         this(60);
@@ -23,7 +29,8 @@ public class FFmpegPlayer implements AirPlayConsumer {
 
     public FFmpegPlayer(int fps) {
         this.fps = Math.max(1, fps);
-        log.info("FFmpeg debug log: {}", AppLogs.playerLogFile("ffmpeg"));
+        hls.setOnEnded(() -> observer.onEnded());
+        log.info("FFmpeg debug log: {}", NativeProcessLog.playerLogFile("ffmpeg"));
     }
 
     @Override
@@ -35,7 +42,8 @@ public class FFmpegPlayer implements AirPlayConsumer {
                     "-framerate", String.valueOf(this.fps),
                     "-codec:v", "h264", "-probesize", "32",
                     "-analyzeduration", "0", "-flags", "low_delay", "-");
-            AppLogs.configureProcessLogging(pb, "ffmpeg");
+            FfplayPcmSink.forcePulseAudioEnv(pb);
+            NativeProcessLog.configureProcessLogging(pb, "ffmpeg");
             h264Process = pb.start();
         } catch (IOException e) {
             throw new IllegalStateException("Failed to start ffplay. Make sure it is available on PATH.", e);
@@ -65,24 +73,26 @@ public class FFmpegPlayer implements AirPlayConsumer {
         this.audioCompressionType = audioStreamInfo.getCompressionType();
         stopAudioProcess();
         switch (audioCompressionType) {
-            case ALAC -> startAlacProcess();
-            case AAC -> startAacLcProcess();
-            case AAC_ELD -> startAacEldProcess();
+            case ALAC -> startAlacProcess(audioStreamInfo);
+            case AAC -> startAacLcProcess(audioStreamInfo);
+            case AAC_ELD -> startAacEldProcess(audioStreamInfo);
             default -> log.warn("Unsupported audio compression {}", audioCompressionType);
         }
     }
 
     @Override
     public synchronized void onAudio(byte[] bytes) {
-        Process audioProcess = alacProcess;
-        if (audioProcess == null || !audioProcess.isAlive()) {
+        if (pcmSink == null) {
             return;
         }
         try {
-            audioProcess.getOutputStream().write(bytes);
-            audioProcess.getOutputStream().flush();
+            if (alacDecoder != null) {
+                alacDecoder.decode(bytes, pcmSink);
+            } else if (aacDecoder != null) {
+                aacDecoder.decode(bytes, pcmSink);
+            }
         } catch (IOException e) {
-            throw new IllegalStateException("Failed to send audio data to ffplay", e);
+            throw new IllegalStateException("Failed to decode/play audio", e);
         }
     }
 
@@ -93,31 +103,82 @@ public class FFmpegPlayer implements AirPlayConsumer {
     }
 
     @Override
-    public synchronized void onMediaPlaylist(String playlistUri) {
-        stopHlsProcess();
-        try {
-            ProcessBuilder pb = new ProcessBuilder("ffplay", "-fs", "-loglevel", "debug", playlistUri);
-            AppLogs.configureProcessLogging(pb, "ffmpeg");
-            hlsProcess = pb.start();
-            log.info("Started ffplay for HLS playlist {}", playlistUri);
-        } catch (IOException e) {
-            throw new IllegalStateException("Failed to start ffplay for HLS playlist " + playlistUri, e);
+    public void setObserver(Playback.Observer observer) {
+        this.observer = observer == null ? Playback.Observer.NONE : observer;
+    }
+
+    @Override
+    public void onPlaylist(String playlistUri) {
+        Double seek = pendingStartSeekSeconds;
+        pendingStartSeekSeconds = null;
+        hls.start(playlistUri, volumeLinear, seek != null ? seek : 0);
+    }
+
+    @Override
+    public void onPlaylistRemoved() {
+        pendingStartSeekSeconds = null;
+        hls.stop();
+    }
+
+    @Override
+    public void onPlaylistContent(String playlistUri, String content) {
+        if (playlistUri == null || !playlistUri.contains("mediadata.m3u8") || content == null) {
+            return;
+        }
+        double sum = EndListDuration.sumSeconds(content);
+        if (sum > 0) {
+            hls.noteMediaDuration(sum);
         }
     }
 
     @Override
-    public synchronized void onMediaPlaylistRemove() {
-        stopHlsProcess();
+    public void onPause() {
+        hls.pause();
     }
 
     @Override
-    public synchronized void onMediaPlaylistPause() {
-        log.debug("ffplay HLS pause is not implemented");
+    public void onResume() {
+        hls.resume();
     }
 
     @Override
-    public synchronized void onMediaPlaylistResume() {
-        log.debug("ffplay HLS resume is not implemented");
+    public void onSeek(double positionSeconds) {
+        if (!hls.isActive()) {
+            pendingStartSeekSeconds = positionSeconds;
+            return;
+        }
+        hls.seek(positionSeconds);
+    }
+
+    @Override
+    public void onVolume(double volumeLinear) {
+        this.volumeLinear = Math.max(0.0, Math.min(1.0, volumeLinear));
+        hls.setVolume(this.volumeLinear);
+        log.info("Volume set to {}", this.volumeLinear);
+    }
+
+    @Override
+    public double volume() {
+        return volumeLinear;
+    }
+
+    @Override
+    public Playback.Info info() {
+        if (!hls.isActive()) {
+            return Playback.super.info();
+        }
+        double duration = hls.durationSeconds();
+        double position = hls.currentPositionSeconds();
+        if (duration > 0) {
+            position = Math.min(position, duration);
+        }
+        // VOD EOS is paused locally; report rate=1 (rate=0 looks like user pause).
+        double rate = (hls.isPaused() && !hls.isEnded()) ? 0 : 1;
+        return new Playback.Info(duration, position, rate);
+    }
+
+    boolean isHlsActive() {
+        return hls.isActive();
     }
 
     boolean isVideoProcessAlive() {
@@ -129,58 +190,35 @@ public class FFmpegPlayer implements AirPlayConsumer {
         return h264Process != null && h264Process.isAlive() ? h264Process.pid() : -1L;
     }
 
-    boolean isHlsProcessAlive() {
-        return hlsProcess != null && hlsProcess.isAlive();
-    }
-
-    private void startAlacProcess() {
+    private void startAlacProcess(AudioStreamInfo audioStreamInfo) {
         try {
-            ProcessBuilder pb = new ProcessBuilder("ffplay", "-nodisp", "-loglevel", "debug",
-                    "-f", "alac", "-ar", "44100", "-ac", "2", "-i", "pipe:0");
-            AppLogs.configureProcessLogging(pb, "ffmpeg");
-            alacProcess = pb.start();
-        } catch (IOException e) {
-            throw new IllegalStateException("Failed to start ffplay for ALAC audio", e);
-        }
-    }
-
-    private void startAacLcProcess() {
-        try {
-            ProcessBuilder pb = new ProcessBuilder("ffplay", "-nodisp", "-loglevel", "debug",
-                    "-f", "aac", "-i", "pipe:0");
-            AppLogs.configureProcessLogging(pb, "ffmpeg");
-            alacProcess = pb.start();
-        } catch (IOException e) {
-            throw new IllegalStateException("Failed to start ffplay for AAC-LC audio", e);
-        }
-    }
-
-    private void startAacEldProcess() {
-        if (!hasLibFdkAacDecoder()) {
-            log.warn("AAC-ELD mirroring audio requires ffmpeg with libfdk_aac decoder; audio will be skipped");
-            return;
-        }
-        try {
-            ProcessBuilder pb = new ProcessBuilder("ffplay", "-nodisp", "-loglevel", "debug",
-                    "-f", "aac", "-acodec", "libfdk_aac", "-i", "pipe:0");
-            AppLogs.configureProcessLogging(pb, "ffmpeg");
-            alacProcess = pb.start();
-        } catch (IOException e) {
-            throw new IllegalStateException("Failed to start ffplay for AAC-ELD audio", e);
-        }
-    }
-
-    private static boolean hasLibFdkAacDecoder() {
-        try {
-            Process process = new ProcessBuilder("ffmpeg", "-hide_banner", "-decoders")
-                    .redirectErrorStream(true)
-                    .start();
-            String output = new String(process.getInputStream().readAllBytes());
-            process.waitFor();
-            return output.contains("libfdk_aac");
+            alacDecoder = new LibavAlacDecoder(audioStreamInfo);
+            pcmSink = FfplayPcmSink.start(alacDecoder.sampleRate(), alacDecoder.channels());
         } catch (Exception e) {
-            log.debug("Unable to inspect ffmpeg decoders", e);
-            return false;
+            closeAudioDecoders();
+            throw new IllegalStateException("Failed to start libav ALAC → ffplay PCM sink", e);
+        }
+    }
+
+    private void startAacLcProcess(AudioStreamInfo audioStreamInfo) {
+        try {
+            aacDecoder = new LibavAacDecoder(audioStreamInfo);
+            pcmSink = FfplayPcmSink.start(aacDecoder.sampleRate(), aacDecoder.channels());
+            log.info("AAC-LC: using libav → ffplay PCM sink");
+        } catch (Exception e) {
+            closeAudioDecoders();
+            throw new IllegalStateException("Failed to start libav AAC-LC → ffplay PCM sink", e);
+        }
+    }
+
+    private void startAacEldProcess(AudioStreamInfo audioStreamInfo) {
+        try {
+            aacDecoder = new LibavAacDecoder(audioStreamInfo);
+            pcmSink = FfplayPcmSink.start(aacDecoder.sampleRate(), aacDecoder.channels());
+            log.info("AAC-ELD: using libav → ffplay PCM sink");
+        } catch (Exception e) {
+            closeAudioDecoders();
+            throw new IllegalStateException("Failed to start libav AAC-ELD → ffplay PCM sink", e);
         }
     }
 
@@ -198,23 +236,21 @@ public class FFmpegPlayer implements AirPlayConsumer {
     }
 
     private void stopAudioProcess() {
-        if (alacProcess == null) {
-            return;
-        }
-        try {
-            alacProcess.getOutputStream().close();
-        } catch (IOException e) {
-            log.debug("Failed to close ffplay audio input", e);
-        }
-        alacProcess.destroy();
-        alacProcess = null;
+        closeAudioDecoders();
     }
 
-    private void stopHlsProcess() {
-        if (hlsProcess == null) {
-            return;
+    private void closeAudioDecoders() {
+        if (pcmSink != null) {
+            pcmSink.close();
+            pcmSink = null;
         }
-        hlsProcess.destroy();
-        hlsProcess = null;
+        if (alacDecoder != null) {
+            alacDecoder.close();
+            alacDecoder = null;
+        }
+        if (aacDecoder != null) {
+            aacDecoder.close();
+            aacDecoder = null;
+        }
     }
 }

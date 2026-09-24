@@ -17,11 +17,10 @@ gstreamerCore = "1.4.0"
 gstreamerSwing = "0.9.0"
 m3u8 = "0.30"
 systemTray = "4.4"
-vlcj = "4.11.0"
-spf4j = "8.9.8"
-flatlaf = "3.5.4"
-avro = "1.12.0"
+javacv = "1.5.11"
+ffmpegPlatform = "7.1-1.5.11"
 jakartaAnnotation = "3.0.0"
+archunit = "1.4.1"
 
 [libraries]
 netty-all = { module = "io.netty:netty-all", version.ref = "netty" }
@@ -38,14 +37,13 @@ gst1-java-core = { module = "org.freedesktop.gstreamer:gst1-java-core", version.
 gst1-java-swing = { module = "org.freedesktop.gstreamer:gst1-java-swing", version.ref = "gstreamerSwing" }
 m3u8-parser = { module = "io.lindstrom:m3u8-parser", version.ref = "m3u8" }
 system-tray = { module = "com.dorkbox:SystemTray", version.ref = "systemTray" }
-vlcj = { module = "uk.co.caprica:vlcj", version.ref = "vlcj" }
-spf4j-core = { module = "org.spf4j:spf4j-core", version.ref = "spf4j" }
-flatlaf = { module = "com.formdev:flatlaf", version.ref = "flatlaf" }
-avro = { module = "org.apache.avro:avro", version.ref = "avro" }
+javacv = { module = "org.bytedeco:javacv", version.ref = "javacv" }
+ffmpeg-platform = { module = "org.bytedeco:ffmpeg-platform", version.ref = "ffmpegPlatform" }
 jakarta-annotation-api = { module = "jakarta.annotation:jakarta.annotation-api", version.ref = "jakartaAnnotation" }
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
+archunit-junit5 = { module = "com.tngtech.archunit:archunit-junit5", version.ref = "archunit" }
 
 spring-boot-gradle-plugin = { module = "org.springframework.boot:spring-boot-gradle-plugin", version.ref = "springBoot" }
 spring-dependency-management-plugin = { module = "io.spring.gradle:dependency-management-plugin", version.ref = "springDependencyManagement" }

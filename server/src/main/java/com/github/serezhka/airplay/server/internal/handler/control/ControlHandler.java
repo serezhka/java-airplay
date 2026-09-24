@@ -4,16 +4,17 @@ import com.dd.plist.BinaryPropertyListParser;
 import com.dd.plist.NSData;
 import com.dd.plist.NSDictionary;
 import com.dd.plist.PropertyListParser;
-import com.github.serezhka.airplay.lib.AudioStreamInfo;
-import com.github.serezhka.airplay.lib.VideoStreamInfo;
+import com.github.serezhka.airplay.protocol.media.AudioStreamInfo;
+import com.github.serezhka.airplay.protocol.media.VideoStreamInfo;
 import com.github.serezhka.airplay.server.AirPlayConfig;
-import com.github.serezhka.airplay.server.AirPlayConsumer;
+import com.github.serezhka.airplay.server.Playback;
 import com.github.serezhka.airplay.server.ControlExchange;
 import com.github.serezhka.airplay.server.internal.handler.session.HlsPlaylistState;
 import com.github.serezhka.airplay.server.internal.handler.session.HlsUriRewrite;
 import com.github.serezhka.airplay.server.internal.handler.session.PlaylistRequest;
 import com.github.serezhka.airplay.server.internal.handler.session.Session;
 import com.github.serezhka.airplay.server.internal.handler.session.SessionManager;
+import com.github.serezhka.airplay.server.internal.handler.util.AirPlayVolume;
 import com.github.serezhka.airplay.server.internal.handler.util.PropertyListUtil;
 import io.lindstrom.m3u8.model.*;
 import io.lindstrom.m3u8.parser.MediaPlaylistParser;
@@ -35,27 +36,64 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Slf4j
 public class ControlHandler extends ChannelInboundHandlerAdapter {
 
+    /** If video mediadata never arrives, start anyway so /play does not hang. */
+    private static final long PLAYBACK_START_FALLBACK_MS = 8_000;
+
     private final SessionManager sessionManager;
     private final HlsFcupService hlsFcupService;
     private final AirPlayConfig airPlayConfig;
-    private final AirPlayConsumer airPlayConsumer;
+    private final Playback airPlayConsumer;
+    private final ScheduledExecutorService hlsScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "airplay-hls-scheduler");
+        t.setDaemon(true);
+        return t;
+    });
+    private final ConcurrentHashMap<String, ScheduledFuture<?>> pendingPlaybackStarts = new ConcurrentHashMap<>();
 
     public ControlHandler(SessionManager sessionManager,
                           HlsFcupService hlsFcupService,
                           AirPlayConfig airPlayConfig,
-                          AirPlayConsumer airPlayConsumer) {
+                          Playback airPlayConsumer) {
         this.sessionManager = sessionManager;
         this.hlsFcupService = hlsFcupService;
         this.airPlayConfig = airPlayConfig;
         this.airPlayConsumer = airPlayConsumer;
+    }
+
+    @Override
+    public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+        for (Session session : sessionManager.allSessions()) {
+            var reverse = session.getReverseContexts();
+            ChannelHandlerContext eventCtx = reverse.get("event");
+            if (eventCtx == ctx) {
+                log.info("Reverse event channel closed, stopping HLS session {}", session.getId());
+                stopHlsPlayback(session);
+            }
+            reverse.entrySet().removeIf(entry -> entry.getValue() == ctx);
+        }
+        super.channelInactive(ctx);
+    }
+
+    private void stopHlsPlayback(Session session) {
+        cancelPlaybackStartFallback(session.getId());
+        hlsFcupService.cancelAllMasterPolls();
+        hlsFcupService.clearReverseQueue(session);
+        session.setHlsPlaylistState(null);
+        airPlayConsumer.onPlaylistRemoved();
     }
 
     private byte[] pendingRequestBody = new byte[0];
@@ -72,6 +110,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 }
             } else if (msg instanceof FullHttpResponse response) {
                 log.debug("Reverse channel response: {} {}", response.status(), response.content().readableBytes());
+                hlsFcupService.onReverseEventResponse(ctx);
             } else {
                 log.error("Unknown control message type: {}", msg);
             }
@@ -135,9 +174,10 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/getProperty")) {
                     handleGetProperty(ctx, request);
                 } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/scrub")) {
-                    log.info(request.uri()); // TODO
-                } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/stop")) {
-                    log.info(request.uri()); // TODO
+                    handleScrub(ctx, request);
+                } else if (HttpMethod.POST.equals(request.method())
+                        && (decoder.path().equals("/stop") || decoder.path().equals("/stop2"))) {
+                    handleStop(ctx, request);
                 } else if (HttpMethod.GET.equals(request.method()) && decoder.path().startsWith("/playlist")) {
                     handleGetPlaylist(ctx, request);
                 } else {
@@ -229,8 +269,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     }
 
     private void handleRtspGetParameter(ChannelHandlerContext ctx, FullHttpRequest request) {
-        // TODO get requested param and respond accordingly
-        byte[] content = "volume: 0.000000\r\n".getBytes(StandardCharsets.US_ASCII);
+        byte[] content = AirPlayVolume.formatRtspParameter(airPlayConsumer.volume()).getBytes(StandardCharsets.US_ASCII);
         var response = createRtspResponse(request);
         response.content().writeBytes(content);
         sendResponse(ctx, request, response);
@@ -244,7 +283,22 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     }
 
     private void handleRtspSetParameter(ChannelHandlerContext ctx, FullHttpRequest request) {
-        // TODO get requested param and respond accordingly
+        var contentType = Optional.ofNullable(request.headers().get(HttpHeaderNames.CONTENT_TYPE)).orElse("");
+        if (contentType.contains("text/parameters") && request.content().isReadable()) {
+            String body = request.content().toString(StandardCharsets.US_ASCII);
+            for (String line : body.split("\r?\n")) {
+                if (line.regionMatches(true, 0, "volume:", 0, 7)) {
+                    try {
+                        double db = Double.parseDouble(line.substring(7).trim());
+                        double linear = AirPlayVolume.fromDecibels(db);
+                        airPlayConsumer.onVolume(linear);
+                        log.info("RTSP volume {} dB -> linear {}", db, linear);
+                    } catch (NumberFormatException e) {
+                        log.warn("Invalid RTSP volume line: {}", line);
+                    }
+                }
+            }
+        }
         var response = createRtspResponse(request);
         response.headers().add("Audio-Jack-Status", "connected; type=analog");
         sendResponse(ctx, request, response);
@@ -276,6 +330,11 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             session.getAudioServer().stop();
             session.getAudioControlServer().stop();
             session.getVideoServer().stop();
+            // Full session teardown only — stream-specific TEARDOWN must not stop HLS.
+            if (session.getHlsPlaylistState() != null) {
+                log.info("RTSP TEARDOWN (full): stopping HLS session {}", session.getId());
+                stopHlsPlayback(session);
+            }
         }
         var response = createRtspResponse(request);
         sendResponse(ctx, request, response);
@@ -314,6 +373,24 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             log.debug("POST /play body:\n{}", play.toXMLPropertyList());
         }
 
+        if (play.get("volume") != null) {
+            try {
+                double linear = AirPlayVolume.clampLinear(play.get("volume").toJavaObject(Double.class));
+                airPlayConsumer.onVolume(linear);
+            } catch (Exception e) {
+                log.debug("Ignoring /play volume", e);
+            }
+        }
+
+        Double startPositionSeconds = null;
+        if (play.get("Start-Position-Seconds") != null) {
+            try {
+                startPositionSeconds = play.get("Start-Position-Seconds").toJavaObject(Double.class);
+            } catch (Exception e) {
+                log.debug("Ignoring Start-Position-Seconds", e);
+            }
+        }
+
         var clientProcName = play.get("clientProcName") != null
                 ? play.get("clientProcName").toJavaObject(String.class)
                 : "";
@@ -321,21 +398,9 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 ? play.get("Content-Location").toJavaObject(String.class)
                 : null;
         if (playlistUri != null && !playlistUri.isBlank()) {
-            var session = resolveSession(request);
-            var playlistUriLocal = playlistUriToLocal(playlistUri, playlistBaseUrl(ctx), session.getId());
-            var remotePlaylistUri = playlistUri.split("\\?")[0];
-
             var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
             sendResponse(ctx, request, response);
-
-            if (remotePlaylistUri.contains("master.m3u8")) {
-                var hls = new HlsPlaylistState(remotePlaylistUri, playlistUriLocal);
-                session.setHlsPlaylistState(hls);
-                log.info("HLS play from [{}]: prefetching playlists via FCUP, localUri={}", clientProcName, playlistUriLocal);
-                hlsFcupService.sendFcupRequest(session, remotePlaylistUri);
-            } else {
-                airPlayConsumer.onMediaPlaylist(playlistUriLocal);
-            }
+            startMediaPlaylist(ctx, resolveSession(request), playlistUri, clientProcName, startPositionSeconds);
         } else {
             log.error("Client proc name [{}] has no Content-Location playlist", clientProcName);
             var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.NOT_IMPLEMENTED);
@@ -343,12 +408,70 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         }
     }
 
+    /**
+     * Start (or restart) media/HLS playback from a Content-Location URI.
+     * Used by POST /play and by playlistInsert (e.g. quality switch).
+     */
+    private void startMediaPlaylist(ChannelHandlerContext ctx, Session session, String playlistUri,
+                                    String clientProcName, Double startPositionSeconds) {
+        // Clients often keep the mirror stream up when starting YouTube HLS; drop it so we
+        // do not keep rendering a stale mirrored UI beside the media player.
+        stopMirrorVideoIfRunning(session);
+
+        var playlistUriLocal = playlistUriToLocal(playlistUri, playlistBaseUrl(ctx), session.getId());
+        var remotePlaylistUri = playlistUri.split("\\?")[0];
+
+        if (remotePlaylistUri.contains("master.m3u8")) {
+            hlsFcupService.cancelAllMasterPolls();
+            var hls = new HlsPlaylistState(remotePlaylistUri, playlistUriLocal);
+            hls.setPlaybackRate(1);
+            session.setHlsPlaylistState(hls);
+            if (startPositionSeconds != null && startPositionSeconds > 0) {
+                hls.setPendingSeekSeconds(startPositionSeconds);
+            }
+            log.info("HLS play from [{}]: prefetching playlists via FCUP, localUri={}", clientProcName, playlistUriLocal);
+            hlsFcupService.sendFcupRequest(session, remotePlaylistUri);
+        } else {
+            airPlayConsumer.onPlaylist(playlistUriLocal);
+            if (startPositionSeconds != null && startPositionSeconds > 0) {
+                airPlayConsumer.onSeek(startPositionSeconds);
+            }
+        }
+    }
+
+    private void stopMirrorVideoIfRunning(Session session) {
+        try {
+            log.info("Stopping screen-mirror video before HLS session {}", session.getId());
+            airPlayConsumer.onVideoSrcDisconnect();
+            session.getVideoServer().stop();
+        } catch (Exception e) {
+            log.debug("Mirror video stop before HLS ignored: {}", e.toString());
+        }
+    }
+
     private void handleSetProperty(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
         var decoder = new QueryStringDecoder(request.uri());
-        log.debug("SET_PARAMETER path={}, params={}", decoder.path(), decoder.parameters());
+        var path = decoder.path();
+        var params = decoder.parameters();
         var play = (NSDictionary) BinaryPropertyListParser.parse(new ByteBufInputStream(request.content()));
-        if (log.isDebugEnabled()) {
-            log.debug("SET_PARAMETER body:\n{}", play.toXMLPropertyList());
+        boolean isActionAtItemEnd = params.containsKey("actionAtItemEnd") || request.uri().contains("actionAtItemEnd");
+        boolean isSelectedMedia = params.containsKey("selectedMediaArray") || request.uri().contains("selectedMediaArray");
+        if (isActionAtItemEnd || isSelectedMedia) {
+            log.info("SET_PROPERTY {}: {}", request.uri(), play.toXMLPropertyList().replaceAll("\\s+", " ").trim());
+        } else {
+            log.debug("SET_PARAMETER path={}, params={}", path, params);
+            if (log.isDebugEnabled()) {
+                log.debug("SET_PARAMETER body:\n{}", play.toXMLPropertyList());
+            }
+        }
+        if (isActionAtItemEnd && play.get("value") != null) {
+            var session = resolveSession(request);
+            var hls = session.getHlsPlaylistState();
+            if (hls != null) {
+                int action = ((Number) play.get("value").toJavaObject()).intValue();
+                hls.setActionAtItemEnd(action);
+                log.info("actionAtItemEnd={} session={}", action, session.getId());
+            }
         }
 
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
@@ -357,23 +480,146 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
 
     private void handleRate(ChannelHandlerContext ctx, FullHttpRequest request) {
         var decoder = new QueryStringDecoder(request.uri());
-        var rate = (int) Double.parseDouble(decoder.parameters().get("value").get(0));
+        double value = Double.parseDouble(decoder.parameters().get("value").get(0));
+        var session = resolveSession(request);
+        var hls = session.getHlsPlaylistState();
+        log.info("POST /rate value={}", value);
 
-        if (rate == 0) {
-            airPlayConsumer.onMediaPlaylistPause();
+        // After VOD ad EOS we wait for the next /play; YouTube still probes rate 0/1.
+        // Answering with paused→playing makes it think the ad is still active.
+        if (hls != null && hls.isWaitingForMasterChange()) {
+            log.info("Ignoring rate={} while waiting for next HLS item session={}", value, session.getId());
+            var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+            sendResponse(ctx, request, response);
+            return;
+        }
+
+        if (value == 0) {
+            if (hls != null && hls.shouldIgnorePause()) {
+                // /scrub arms a latch: drop rate=0 until the matching rate=1 (no timer).
+                log.info("Ignoring rate=0 until rate=1 after scrub session={}", session.getId());
+            } else {
+                if (hls != null) {
+                    hls.setPlaybackRate(0);
+                }
+                airPlayConsumer.onPause();
+                hlsFcupService.sendPlaybackStateEvent(session, "paused");
+            }
         } else {
-            airPlayConsumer.onMediaPlaylistResume();
+            boolean wasPaused = hls != null && hls.getPlaybackRate() <= 0;
+            if (hls != null) {
+                hls.clearScrubIgnorePause();
+                hls.setPlaybackRate(1);
+            }
+            // Only resume when leaving pause — rate=1 while already playing must not re-seek.
+            if (wasPaused) {
+                airPlayConsumer.onResume();
+            }
+            hlsFcupService.sendPlaybackStateEvent(session, "playing");
         }
 
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
         sendResponse(ctx, request, response);
     }
 
+    private void handleScrub(ChannelHandlerContext ctx, FullHttpRequest request) {
+        var decoder = new QueryStringDecoder(request.uri());
+        var positions = decoder.parameters().get("position");
+        if (positions != null && !positions.isEmpty()) {
+            try {
+                double position = Double.parseDouble(positions.get(0));
+                log.info("POST /scrub position={}", position);
+                var session = resolveSession(request);
+                var hls = session.getHlsPlaylistState();
+                if (hls != null) {
+                    // Latch: post-scrub rate=0 is bracket noise until rate=1.
+                    hls.markScrubIgnorePauseUntilPlay();
+                    hls.setPlaybackRate(1);
+                }
+                if (hls != null && !hls.isPlaybackStarted()) {
+                    hls.setPendingSeekSeconds(position);
+                    log.info("Deferring /scrub to pending seek until HLS starts");
+                } else {
+                    airPlayConsumer.onSeek(position);
+                    hlsFcupService.sendPlaybackStateEvent(session, "playing");
+                }
+            } catch (NumberFormatException e) {
+                log.warn("Invalid /scrub position: {}", positions.get(0));
+            }
+        } else {
+            log.warn("POST /scrub without position: {}", request.uri());
+        }
+        var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+        sendResponse(ctx, request, response);
+    }
+
+    private void handleStop(ChannelHandlerContext ctx, FullHttpRequest request) {
+        var path = new QueryStringDecoder(request.uri()).path();
+        log.info("POST {}", path);
+        stopHlsPlayback(resolveSession(request));
+        var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+        sendResponse(ctx, request, response);
+    }
+
     private void handlePlaybackInfo(ChannelHandlerContext ctx, FullHttpRequest request) {
+        var session = resolveSession(request);
+        var hls = session.getHlsPlaylistState();
+        var fromPlayer = airPlayConsumer.info();
+        double duration = fromPlayer.duration();
+        double position = fromPlayer.position();
+        double rate = fromPlayer.rate();
+        var override = PlaybackInfoOverride.get();
+        if (override != null) {
+            duration = override.duration();
+            position = override.position();
+            rate = override.rate();
+            log.info("Playback-info override duration={} position={} rate={}", duration, position, rate);
+        } else if (hls != null && hls.isWaitingForMasterChange() && hls.isLivePlaylist()) {
+            // Live post-EOS gap: duration=0 → buffer-empty / not ready (loading).
+            duration = 0;
+            position = 0;
+            rate = 0;
+        } else if (hls != null) {
+            // Live / sliding windows: duration unknown. Finite ENDLIST VOD is authoritative.
+            // Consumer clocks alone can report multi-hour values for short ads.
+            if (hls.isLivePlaylist()) {
+                duration = 0;
+            } else {
+                double playlistDur = hls.getMediaDurationSeconds();
+                if (playlistDur > 0) {
+                    duration = playlistDur;
+                } else if (duration > 600) {
+                    duration = 0;
+                }
+            }
+            if (hls.isWaitingForMasterChange() && duration > 0) {
+                // VOD ad finished: pin clock at end. Keep rate=1 (dump 20260916-164913
+                // advanced with duration>0 rate=1). rate=0 here looks like a user pause and
+                // blocks playlistRemove until Skip. Never emit "paused" / duration=0.
+                // Prefer the player/EOS length when session mediaDuration was inflated by a
+                // later FCUP body (seen: 7.04s ad reported as 15.6 → no playlistRemove).
+                double playerDur = fromPlayer.duration();
+                if (playerDur > 0.5 && playerDur + 0.25 < duration) {
+                    duration = playerDur;
+                }
+                position = duration;
+                rate = 1;
+            } else {
+                if (duration > 0) {
+                    position = Math.min(position, duration);
+                }
+                // Prefer session rate from POST /rate. Player rate stays 0 while MSE/hls.js
+                // buffers — OR-ing it forced rate=0 with duration=6 at t≈0 (dump
+                // 20260918-080456) → phone pause UI → rate 1/0 fight → debounced "paused".
+                rate = hls.getPlaybackRate() <= 0 ? 0 : 1;
+            }
+        } else if (duration > 600) {
+            duration = 0;
+        }
+        var playbackInfo = new Playback.Info(duration, position, rate);
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
         response.headers().add(HttpHeaderNames.CONTENT_TYPE, "text/x-apple-plist+xml");
-        var playbackInfo = PropertyListUtil.preparePlaybackInfoResponse(airPlayConsumer.playbackInfo());
-        response.content().writeBytes(playbackInfo);
+        response.content().writeBytes(PropertyListUtil.preparePlaybackInfoResponse(playbackInfo));
         sendResponse(ctx, request, response);
     }
 
@@ -388,33 +634,41 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         if ("unhandledURLResponse".equals(type)) {
             handleUnhandledUrlResponse(ctx, request, action);
         } else if ("playlistRemove".equals(type)) {
-            /*<plist version="1.0">
-            <dict>
-            	<key>type</key>
-            	<string>playlistRemove</string>
-            	<key>params</key>
-            	<dict>
-            		<key>item</key>
-            		<dict>
-            			<key>uuid</key>
-            			<string>59F93E62-4E79-4A8F-A55A-D7DA65247AF1</string>
-            		</dict>
-            	</dict>
-            </dict>
-            </plist>*/
-            airPlayConsumer.onMediaPlaylistRemove();
-            hlsFcupService.cancelAllMasterPolls();
+            stopHlsPlayback(resolveSession(request));
+        } else if ("playlistInsert".equals(type)) {
+            handlePlaylistInsert(ctx, request, action);
         }
 
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
         sendResponse(ctx, request, response);
     }
 
+    private void handlePlaylistInsert(ChannelHandlerContext ctx, FullHttpRequest request, NSDictionary action) {
+        var params = action.get("params") instanceof NSDictionary dictionary ? dictionary : null;
+        var item = params != null && params.get("item") instanceof NSDictionary dictionary ? dictionary : null;
+        if (item == null || item.get("Content-Location") == null) {
+            log.warn("playlistInsert without Content-Location: {}", action.toXMLPropertyList());
+            return;
+        }
+        var playlistUri = item.get("Content-Location").toJavaObject(String.class);
+        var clientProcName = item.get("clientProcName") != null
+                ? item.get("clientProcName").toJavaObject(String.class)
+                : "";
+        log.info("playlistInsert Content-Location={} from [{}]", playlistUri, clientProcName);
+        startMediaPlaylist(ctx, resolveSession(request), playlistUri, clientProcName, null);
+    }
+
     private void handleGetProperty(ChannelHandlerContext ctx, FullHttpRequest request) {
-        // TODO get requested param and respond accordingly
         var decoder = new QueryStringDecoder(request.uri());
-        log.debug("GET_PARAMETER path={}, params={}", decoder.path(), decoder.parameters());
+        // YouTube probes playbackAccessLog / playbackErrorLog after VOD EOS (prelude to
+        // playlistRemove in good dumps). Log the property name; body stays empty until we
+        // have a verified AccessLog template from a working receiver.
+        log.info("POST /getProperty {}", decoder.parameters().keySet());
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+        response.headers().add(HttpHeaderNames.CONTENT_TYPE, "text/x-apple-plist+xml");
+        byte[] body = PropertyListUtil.prepareEmptyPropertyResponse();
+        response.content().writeBytes(body);
+        HttpUtil.setContentLength(response, body.length);
         sendResponse(ctx, request, response);
     }
 
@@ -434,12 +688,12 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             log.warn("FCUP response is missing URL: {}", action.toXMLPropertyList());
             return;
         }
-        var fcupResponseURL = params.get("FCUP_Response_URL").toJavaObject(String.class);
+        var fcupResponseURL = normalizeFcupUrl(params.get("FCUP_Response_URL").toJavaObject(String.class));
         var session = resolveSession(request);
         if (params.get("FCUP_Response_Data") == null) {
             log.warn("FCUP response without data: url={}, session={}", fcupResponseURL, session.getId());
             var hls = session.getHlsPlaylistState();
-            if (hls != null) {
+            if (hls != null && !hls.isWaitingForMasterChange()) {
                 continueMediaPrefetch(session, hls);
             }
             return;
@@ -449,9 +703,12 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         log.info("FCUP response: url={}, bytes={}, session={}", fcupResponseURL, fcupResponse.length(), session.getId());
 
         String body;
+        List<String> remoteMediaUris = null;
         try {
             if (fcupResponseURL.contains("master.m3u8")) {
-                body = masterPlaylistToLocalUrls(fcupResponse, playlistBaseUrl(ctx), session.getId());
+                var rewritten = rewriteMasterPlaylist(fcupResponse, playlistBaseUrl(ctx), session.getId());
+                body = rewritten.localBody();
+                remoteMediaUris = rewritten.remoteMediaUris();
             } else if (fcupResponseURL.contains("mediadata.m3u8")) {
                 body = mediaPlaylistBody(fcupResponse);
             } else {
@@ -467,35 +724,96 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             try {
                 if (fcupResponseURL.contains("master.m3u8")) {
                     if (hls.isPlaybackStarted()) {
-                        hlsFcupService.onMasterRefreshDuringPlayback(session, body);
+                        hlsFcupService.onMasterRefreshDuringPlayback(session, body, fcupResponse, remoteMediaUris);
                     } else {
-                        hls.storeMasterPlaylist(body, fcupResponse);
-                        log.info("HLS master received: {} media playlists queued, state={}", hls.pendingMediaUriCount(), hls);
+                        hls.storeMasterPlaylist(body, remoteMediaUris);
+                        hls.recordRawMasterIfChanged(fcupResponse);
+                        log.info("HLS master received: {} media playlists queued ({} video), state={}",
+                                hls.pendingMediaUriCount(), hls.videoMediaUriCount(), hls);
+                        // Wait for at least one video mediadata before starting the player.
+                        // Starting on master alone (48 audio-language alts first) yields black
+                        // screen + wall-clock EOS while GST still has no fragments.
                         if (!hls.isPlaybackStarted()) {
-                            hls.markPlaybackStarted();
-                            log.info("HLS starting playback after master: {}", hls.getPlaylistUriLocal());
-                            airPlayConsumer.onMediaPlaylist(hls.getPlaylistUriLocal());
+                            schedulePlaybackStartFallback(session, hls);
                         }
                     }
                 } else {
                     hls.putPlaylist(fcupResponseURL, body);
+                    maybeStartHlsPlayback(session, hls, "mediadata ready");
                 }
             } catch (Exception e) {
                 log.warn("Failed to update HLS state for {}", fcupResponseURL, e);
                 hls.putPlaylist(fcupResponseURL, body);
+                maybeStartHlsPlayback(session, hls, "mediadata ready after error");
             }
-            airPlayConsumer.onMediaPlaylistContent(fcupResponseURL, body);
+            airPlayConsumer.onPlaylistContent(fcupResponseURL, body);
 
             replyPendingPlaylists(session, fcupResponseURL, body);
 
-            continueMediaPrefetch(session, hls);
+            if (hls.isPostEosMediaRefreshing()) {
+                // Only advance on mediadata responses — master handler already queued the first URI.
+                if (fcupResponseURL.contains("mediadata.m3u8")) {
+                    if (hls.hasMoreMediaUris()) {
+                        hlsFcupService.sendFcupRequest(session, hls.nextMediaUri());
+                    } else {
+                        hlsFcupService.onPostEosMediaRefreshComplete(session);
+                    }
+                }
+            } else if (!hls.isWaitingForMasterChange()) {
+                continueMediaPrefetch(session, hls);
+            }
             return;
         }
 
         if (replyPendingPlaylists(session, fcupResponseURL, body)) {
-            airPlayConsumer.onMediaPlaylistContent(fcupResponseURL, body);
+            airPlayConsumer.onPlaylistContent(fcupResponseURL, body);
         } else {
             log.warn("No pending GET /playlist for {}", fcupResponseURL);
+        }
+    }
+
+    private void startHlsPlayback(Session session, HlsPlaylistState hls) {
+        airPlayConsumer.onPlaylist(hls.getPlaylistUriLocal());
+        hlsFcupService.sendPlaybackStateEvent(session, "playing");
+        Double seek = hls.takePendingSeekSeconds();
+        if (seek != null && seek > 0) {
+            airPlayConsumer.onSeek(seek);
+        }
+    }
+
+    private void maybeStartHlsPlayback(Session session, HlsPlaylistState hls, String reason) {
+        if (hls == null || hls.isPlaybackStarted() || !hls.hasCachedVideoMedia()) {
+            return;
+        }
+        hls.markPlaybackStarted();
+        cancelPlaybackStartFallback(session.getId());
+        log.info("HLS starting playback ({}): {}", reason, hls.getPlaylistUriLocal());
+        startHlsPlayback(session, hls);
+    }
+
+    private void schedulePlaybackStartFallback(Session session, HlsPlaylistState hls) {
+        cancelPlaybackStartFallback(session.getId());
+        String sessionId = session.getId();
+        ScheduledFuture<?> future = hlsScheduler.schedule(() -> {
+            pendingPlaybackStarts.remove(sessionId);
+            if (hls.isPlaybackStarted()) {
+                return;
+            }
+            if (session.getHlsPlaylistState() != hls) {
+                return;
+            }
+            hls.markPlaybackStarted();
+            log.info("HLS starting playback (fallback after {}ms): {}",
+                    PLAYBACK_START_FALLBACK_MS, hls.getPlaylistUriLocal());
+            startHlsPlayback(session, hls);
+        }, PLAYBACK_START_FALLBACK_MS, TimeUnit.MILLISECONDS);
+        pendingPlaybackStarts.put(sessionId, future);
+    }
+
+    private void cancelPlaybackStartFallback(String sessionId) {
+        ScheduledFuture<?> future = pendingPlaybackStarts.remove(sessionId);
+        if (future != null) {
+            future.cancel(false);
         }
     }
 
@@ -586,24 +904,26 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
 
         var hls = session.getHlsPlaylistState();
         var cached = hls != null ? hls.getPlaylist(playlistUriRemote) : null;
-        boolean isMediaPlaylist = playlistUriRemote.contains("mediadata.m3u8");
         boolean isMasterPlaylist = playlistUriRemote.contains("master.m3u8");
-        boolean refreshPlaylist = isMediaPlaylist || (isMasterPlaylist && hls != null && hls.isPlaybackStarted());
+        // Prefer cache so the consumer is not blocked; re-FCUP in the background so live
+        // mediadata keeps growing (stale cache freezes livestreams after the first window).
+        boolean refreshPlaylist = isMasterPlaylist && hls != null && hls.isPlaybackStarted() && cached == null;
 
-        if (cached != null && !refreshPlaylist) {
+        if (cached != null) {
             log.info("Serving cached playlist {}", playlistUriRemote);
             replyPlaylist(pending, cached);
+            if (hls != null && hls.isPlaybackStarted()
+                    && hls.shouldRefreshPlaylist(playlistUriRemote, TimeUnit.MILLISECONDS.toNanos(1500))) {
+                hlsFcupService.sendFcupRequest(session, playlistUriRemote);
+            }
             return;
         }
 
         session.enqueuePlaylistRequest(playlistUriRemote, pending);
         recordPendingPlaylistRequest(pending);
 
-        if (refreshPlaylist) {
-            log.info("GET /playlist {} requesting FCUP refresh", playlistUriRemote);
-            hlsFcupService.sendFcupRequest(session, playlistUriRemote);
-        } else if (hls == null) {
-            log.info("GET /playlist {} without HLS prefetch, requesting FCUP", playlistUriRemote);
+        if (cached == null && (refreshPlaylist || hls == null || !hls.hasMoreMediaUris())) {
+            log.info("GET /playlist {} requesting FCUP", playlistUriRemote);
             hlsFcupService.sendFcupRequest(session, playlistUriRemote);
         } else {
             log.info("GET /playlist {} waiting for HLS prefetch ({})", playlistUriRemote, hls);
@@ -626,11 +946,49 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
 
     private String playlistBaseUrl(ChannelHandlerContext ctx) {
         var port = ((ServerSocketChannel) ctx.channel().parent()).localAddress().getPort();
-        return String.format("http://localhost:%s/playlist", port);
+        // Use IPv4 loopback: on Windows "localhost" often resolves to ::1 while the
+        // control server listens on IPv4, so the local HLS consumer cannot fetch playlists.
+        return String.format("http://127.0.0.1:%s/playlist", port);
     }
 
     private String masterPlaylistToLocalUrls(String masterPlaylist, String baseUrl, String sessionId) {
-        return HlsUriRewrite.rewritePlaylist(masterPlaylist, baseUrl, sessionId);
+        return rewriteMasterPlaylist(masterPlaylist, baseUrl, sessionId).localBody();
+    }
+
+    private record MasterRewrite(String localBody, List<String> remoteMediaUris) {
+    }
+
+    /**
+     * Prefer AVC on the remote (mlhls) master so FCUP URIs stay mlhls://…,
+     * then rewrite those URIs to local http for the media consumer.
+     */
+    private MasterRewrite rewriteMasterPlaylist(String masterPlaylist, String baseUrl, String sessionId) {
+        String filteredRemote = HlsUriRewrite.preferAvcVariants(masterPlaylist);
+        if (!filteredRemote.equals(masterPlaylist)) {
+            log.info("Filtered HLS master to AVC-only variants (drop VP9/AV1/subtitles)");
+        }
+        List<String> remoteMediaUris;
+        try {
+            remoteMediaUris = HlsUriRewrite.extractMediaUris(filteredRemote);
+        } catch (PlaylistParserException e) {
+            log.warn("Failed to extract media URIs from filtered master", e);
+            remoteMediaUris = List.of();
+        }
+        String localBody = HlsUriRewrite.rewritePlaylist(filteredRemote, baseUrl, sessionId);
+        return new MasterRewrite(localBody, remoteMediaUris);
+    }
+
+    /** Map accidental local playlist URLs back to mlhls:// for cache / pending-request keys. */
+    private static String normalizeFcupUrl(String url) {
+        if (url == null) {
+            return null;
+        }
+        String bare = url.split("\\?")[0];
+        int playlistIdx = bare.indexOf("/playlist/");
+        if (bare.startsWith("http") && playlistIdx >= 0) {
+            return "mlhls://localhost" + bare.substring(playlistIdx + "/playlist".length());
+        }
+        return bare;
     }
 
     private DefaultFullHttpResponse createRtspResponse(FullHttpRequest request) {

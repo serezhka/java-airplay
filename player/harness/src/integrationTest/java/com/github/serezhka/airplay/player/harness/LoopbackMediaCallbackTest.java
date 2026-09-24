@@ -1,7 +1,7 @@
 package com.github.serezhka.airplay.player.harness;
 
-import com.github.serezhka.airplay.lib.AudioStreamInfo;
-import com.github.serezhka.airplay.lib.VideoStreamInfo;
+import com.github.serezhka.airplay.protocol.media.AudioStreamInfo;
+import com.github.serezhka.airplay.protocol.media.VideoStreamInfo;
 import com.github.serezhka.airplay.player.test.PlaybackFixture;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;

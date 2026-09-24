@@ -3,11 +3,9 @@ plugins {
 }
 
 dependencies {
-    implementation(projects.lib)
     implementation(projects.server)
     implementation(projects.player.gstreamer)
     implementation(projects.player.dump)
-    implementation(projects.player.vlc)
     implementation(projects.player.ffmpeg)
 
     implementation(libs.slf4j.api)

@@ -1,7 +1,7 @@
 package com.github.serezhka.airplay.server.internal.handler.audio;
 
-import com.github.serezhka.airplay.lib.AirPlay;
-import com.github.serezhka.airplay.server.AirPlayConsumer;
+import com.github.serezhka.airplay.protocol.FairPlaySession;
+import com.github.serezhka.airplay.server.Playback;
 import com.github.serezhka.airplay.server.internal.packet.AudioPacket;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
@@ -14,8 +14,8 @@ import java.util.Arrays;
 @RequiredArgsConstructor
 public class AudioHandler extends ChannelInboundHandlerAdapter {
 
-    private final AirPlay airPlay;
-    private final AirPlayConsumer dataConsumer;
+    private final FairPlaySession airPlay;
+    private final Playback dataConsumer;
 
     private final AudioPacket[] buffer = new AudioPacket[512];
 

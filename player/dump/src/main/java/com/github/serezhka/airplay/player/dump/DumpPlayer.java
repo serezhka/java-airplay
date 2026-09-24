@@ -1,8 +1,8 @@
 package com.github.serezhka.airplay.player.dump;
 
-import com.github.serezhka.airplay.lib.AudioStreamInfo;
-import com.github.serezhka.airplay.lib.VideoStreamInfo;
-import com.github.serezhka.airplay.server.AirPlayConsumer;
+import com.github.serezhka.airplay.protocol.media.AudioStreamInfo;
+import com.github.serezhka.airplay.protocol.media.VideoStreamInfo;
+import com.github.serezhka.airplay.server.Playback;
 import com.github.serezhka.airplay.server.ControlExchange;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
@@ -25,7 +25,7 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 @Slf4j
-public class DumpPlayer implements AirPlayConsumer {
+public class DumpPlayer implements Playback {
 
     private static final DateTimeFormatter DIR_TIME =
             DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss").withZone(ZoneOffset.UTC);
@@ -161,7 +161,7 @@ public class DumpPlayer implements AirPlayConsumer {
     }
 
     @Override
-    public synchronized void onMediaPlaylist(String playlistUri) {
+    public synchronized void onPlaylist(String playlistUri) {
         this.playlistUri = playlistUri;
         ensureSession();
         if (!config.isPlaylist() || playlistUri == null || playlistUri.isBlank()) {
@@ -176,7 +176,7 @@ public class DumpPlayer implements AirPlayConsumer {
     }
 
     @Override
-    public synchronized void onMediaPlaylistContent(String playlistUri, String content) {
+    public synchronized void onPlaylistContent(String playlistUri, String content) {
         ensureSession();
         if (!config.isPlaylist() || content == null || content.isBlank()) {
             return;

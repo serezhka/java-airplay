@@ -1,6 +1,6 @@
 package com.github.serezhka.airplay.player.test;
 
-import com.github.serezhka.airplay.server.AirPlayConsumer;
+import com.github.serezhka.airplay.server.Playback;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -19,7 +19,7 @@ public final class PlaybackFixture {
         }
     }
 
-    public static void play(AirPlayConsumer player) throws InterruptedException {
+    public static void play(Playback player) throws InterruptedException {
         byte[] video = h264();
         int chunkSize = Math.max(1, (video.length + FRAME_COUNT - 1) / FRAME_COUNT);
         for (int offset = 0; offset < video.length; offset += chunkSize) {

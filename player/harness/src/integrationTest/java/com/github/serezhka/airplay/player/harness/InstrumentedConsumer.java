@@ -1,19 +1,19 @@
 package com.github.serezhka.airplay.player.harness;
 
-import com.github.serezhka.airplay.lib.AudioStreamInfo;
-import com.github.serezhka.airplay.lib.VideoStreamInfo;
-import com.github.serezhka.airplay.server.AirPlayConsumer;
+import com.github.serezhka.airplay.protocol.media.AudioStreamInfo;
+import com.github.serezhka.airplay.protocol.media.VideoStreamInfo;
+import com.github.serezhka.airplay.server.Playback;
 
 /**
  * Decorator that times {@link #onVideo} / {@link #onAudio} and feeds {@link PlaybackMetrics}.
  * Keeps instrumentation out of production player classes.
  */
-public final class InstrumentedConsumer implements AirPlayConsumer {
+public final class InstrumentedConsumer implements Playback {
 
-    private final AirPlayConsumer delegate;
+    private final Playback delegate;
     private final PlaybackMetrics metrics;
 
-    public InstrumentedConsumer(AirPlayConsumer delegate, PlaybackMetrics metrics) {
+    public InstrumentedConsumer(Playback delegate, PlaybackMetrics metrics) {
         this.delegate = delegate;
         this.metrics = metrics;
     }
@@ -56,26 +56,41 @@ public final class InstrumentedConsumer implements AirPlayConsumer {
     }
 
     @Override
-    public void onMediaPlaylist(String playlistUri) {
-        delegate.onMediaPlaylist(playlistUri);
+    public void onPlaylist(String playlistUri) {
+        delegate.onPlaylist(playlistUri);
     }
 
     @Override
-    public void onMediaPlaylistRemove() {
-        delegate.onMediaPlaylistRemove();
+    public void onPlaylistRemoved() {
+        delegate.onPlaylistRemoved();
     }
 
     @Override
-    public void onMediaPlaylistPause() {
-        delegate.onMediaPlaylistPause();
+    public void onPause() {
+        delegate.onPause();
     }
 
     @Override
-    public void onMediaPlaylistResume() {
-        delegate.onMediaPlaylistResume();
+    public void onResume() {
+        delegate.onResume();
     }
 
-    public AirPlayConsumer delegate() {
+    @Override
+    public void onSeek(double positionSeconds) {
+        delegate.onSeek(positionSeconds);
+    }
+
+    @Override
+    public void onVolume(double volumeLinear) {
+        delegate.onVolume(volumeLinear);
+    }
+
+    @Override
+    public double volume() {
+        return delegate.volume();
+    }
+
+    public Playback delegate() {
         return delegate;
     }
 }

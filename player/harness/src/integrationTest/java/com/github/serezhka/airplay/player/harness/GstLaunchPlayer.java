@@ -1,8 +1,8 @@
 package com.github.serezhka.airplay.player.harness;
 
-import com.github.serezhka.airplay.lib.AudioStreamInfo;
-import com.github.serezhka.airplay.lib.VideoStreamInfo;
-import com.github.serezhka.airplay.server.AirPlayConsumer;
+import com.github.serezhka.airplay.protocol.media.AudioStreamInfo;
+import com.github.serezhka.airplay.protocol.media.VideoStreamInfo;
+import com.github.serezhka.airplay.server.Playback;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -16,7 +16,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * Parses only (no decoder) so runners need just tools + base plugins — avoids JNI SIGSEGV
  * and missing avdec_* plugin issues on minimal images.
  */
-public final class GstLaunchPlayer implements AirPlayConsumer {
+public final class GstLaunchPlayer implements Playback {
 
     private final AtomicBoolean closed = new AtomicBoolean();
     private final AtomicBoolean started = new AtomicBoolean();
