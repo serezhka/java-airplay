@@ -180,4 +180,25 @@ class HlsFcupServiceTest {
         assertTrue(xmls.get(4).contains("<string>currentItemChanged</string>"));
         recording.cancelAllMasterPolls();
     }
+
+    @Test
+    void playingIsAnnouncedOnlyAfterThePicture() {
+        var session = sessions.getSession("show");
+        var hls = new HlsPlaylistState(
+                "mlhls://localhost/master.m3u8",
+                "http://127.0.0.1/playlist/master.m3u8?session=show");
+        session.setHlsPlaylistState(hls);
+
+        service.beginDisplayedPlayback(session);
+
+        assertEquals(List.of("http://127.0.0.1/playlist/master.m3u8?session=show"), playlists);
+        assertTrue(reverseBodies.stream().noneMatch(body -> body.contains("playing")));
+
+        service.onPlaybackPresented();
+        assertTrue(reverseBodies.stream().anyMatch(body -> body.contains("state:playing")));
+
+        reverseBodies.clear();
+        service.onPlaybackPresented();
+        assertTrue(reverseBodies.isEmpty());
+    }
 }

@@ -45,7 +45,22 @@ public class ControlServer implements Runnable {
         this.airPlayConfig = airPlayConfig;
         this.airPlayConsumer = airPlayConsumer;
         this.hlsFcupService = new HlsFcupService(sessionManager, airPlayConsumer);
-        airPlayConsumer.setObserver(hlsFcupService::refreshActivePlaylists);
+        airPlayConsumer.setObserver(new Playback.Observer() {
+            @Override
+            public void onEnded() {
+                hlsFcupService.refreshActivePlaylists();
+            }
+
+            @Override
+            public void onPresented() {
+                hlsFcupService.onPlaybackPresented();
+            }
+
+            @Override
+            public void onSeekDisplayed() {
+                hlsFcupService.onSeekDisplayed();
+            }
+        });
     }
 
     public void start() throws InterruptedException {

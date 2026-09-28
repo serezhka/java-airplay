@@ -33,7 +33,21 @@ public class GstPlayer implements Playback {
         GLib.setEnv("GST_DEBUG_NO_COLOR", "1", true);
         GLib.setEnv("GST_DEBUG_FILE", NativeProcessLog.playerLogFile("gstreamer").toString(), true);
         GLib.setEnv("GST_DEBUG", System.getProperty("airplay.gst.debug", "3"), true);
+        preferSoftwareVideoDecode();
         Gst.init(Version.of(1, 10), "BasicPipeline");
+    }
+
+    /**
+     * The device H.264 decoder drops frames and rewinds timestamps when it has no usable
+     * context, which shows up as stutter a short way into playback. Keep it out of autoplug.
+     */
+    private static void preferSoftwareVideoDecode() {
+        String drop = "nvh264dec:NONE,nvh265dec:NONE,nvvp8dec:NONE,nvvp9dec:NONE,nvav1dec:NONE";
+        String existing = System.getenv("GST_PLUGIN_FEATURE_RANK");
+        String rank = existing == null || existing.isBlank() || existing.contains("nvh264dec:")
+                ? (existing == null || existing.isBlank() ? drop : existing)
+                : existing + "," + drop;
+        GLib.setEnv("GST_PLUGIN_FEATURE_RANK", rank, true);
     }
 
     private final Pipeline h264Pipeline;
@@ -63,6 +77,7 @@ public class GstPlayer implements Playback {
     public GstPlayer(int fps) {
         log.info("GStreamer debug log: {}", NativeProcessLog.playerLogFile("gstreamer"));
         hls.setOnEnded(() -> observer.onEnded());
+        hls.setOnPresented(() -> observer.onPresented());
         int framerate = Math.max(1, fps);
         useD3d11 = GstVideoSinkFactory.hasD3d11();
         boolean useXimage = GstVideoSinkFactory.hasXimage();

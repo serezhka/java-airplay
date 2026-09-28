@@ -8,6 +8,9 @@ import org.freedesktop.gstreamer.Element;
 import org.freedesktop.gstreamer.ElementFactory;
 import org.freedesktop.gstreamer.Format;
 import org.freedesktop.gstreamer.Gst;
+import org.freedesktop.gstreamer.Pad;
+import org.freedesktop.gstreamer.PadProbeReturn;
+import org.freedesktop.gstreamer.PadProbeType;
 import org.freedesktop.gstreamer.Pipeline;
 import org.freedesktop.gstreamer.State;
 import org.freedesktop.gstreamer.event.SeekFlags;
@@ -20,6 +23,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -38,6 +42,8 @@ final class GstHlsPipeline {
     });
 
     private volatile Runnable onEnded = () -> {};
+    private volatile Runnable onPresented = () -> {};
+    private final AtomicBoolean presented = new AtomicBoolean();
     private Pipeline pipeline;
     private Element videoSink;
     private JFrame window;
@@ -55,6 +61,7 @@ final class GstHlsPipeline {
     private volatile long startedAtNanos;
     /** Wall-clock position must not run until GST reports a real media clock (avoids black-screen EOS). */
     private volatile boolean mediaClockTrusted;
+    private final ScrubClock scrubClock = new ScrubClock();
 
     void start(String playlistUri, double volumeLinear) {
         stop();
@@ -85,6 +92,7 @@ final class GstHlsPipeline {
         pipeline.set("uri", playlistUri);
         pipeline.set("volume", clampVolume(volumeLinear));
         pipeline.set("video-sink", videoSink);
+        watchFirstPicture(videoSink);
         log.info("HLS pipeline using {} headless={}", launch.split(" ")[0], headless);
 
         if (!headless && display != null && display.overlay() && display.canvas() != null) {
@@ -150,6 +158,8 @@ final class GstHlsPipeline {
         lastEndedNotifyNanos = 0;
         startedAtNanos = 0;
         mediaClockTrusted = false;
+        scrubClock.clear();
+        presented.set(false);
         uri = null;
         if (pipeline != null) {
             try {
@@ -175,8 +185,10 @@ final class GstHlsPipeline {
         if (pipeline == null || ended) {
             return;
         }
-        double gstPos = querySeconds(false);
-        positionBaseSeconds = gstPos > 0 ? gstPos : currentPositionSeconds();
+        // Anchor on the position we already told the sender. A raw demux query
+        // here is the earlier keyframe and would walk the timeline backward.
+        double reported = currentPositionSeconds();
+        positionBaseSeconds = reported > 0 ? reported : positionBaseSeconds;
         paused = true;
         pipeline.pause();
         log.info("HLS paused at {}s", positionBaseSeconds);
@@ -214,6 +226,9 @@ final class GstHlsPipeline {
         ended = false;
         positionBaseSeconds = positionSeconds;
         positionAnchorNanos = System.nanoTime();
+        // Demux often answers with the previous picture or an earlier keyframe.
+        // Hold the scrub clock so /playback-info does not step backward.
+        scrubClock.arm(positionSeconds);
         paused = false;
         if (pipeline != null) {
             pipeline.play();
@@ -244,7 +259,7 @@ final class GstHlsPipeline {
             double dur = durationSeconds();
             return dur > 0 ? dur : positionBaseSeconds;
         }
-        double pos = rawPositionSeconds();
+        double pos = scrubClock.report(rawPositionSeconds(), wallClockSeconds());
         checkPositionAtEnd(pos);
         return ended ? durationSeconds() : pos;
     }
@@ -300,6 +315,16 @@ final class GstHlsPipeline {
         }
     }
 
+    private double wallClockSeconds() {
+        if (paused || positionAnchorNanos == 0) {
+            return positionBaseSeconds;
+        }
+        double elapsed = (System.nanoTime() - positionAnchorNanos) / 1_000_000_000.0;
+        double wall = Math.max(0, positionBaseSeconds + elapsed);
+        double playlist = playlistDurationSeconds;
+        return playlist > 0 ? Math.min(wall, playlist) : wall;
+    }
+
     private double rawPositionSeconds() {
         double playlist = playlistDurationSeconds;
         double gst = querySeconds(false);
@@ -351,6 +376,38 @@ final class GstHlsPipeline {
 
     void setOnEnded(Runnable onEnded) {
         this.onEnded = onEnded == null ? () -> {} : onEnded;
+    }
+
+    void setOnPresented(Runnable onPresented) {
+        this.onPresented = onPresented == null ? () -> {} : onPresented;
+    }
+
+    /** First buffer on the sink is the frame that is about to be shown. */
+    private void watchFirstPicture(Element sink) {
+        if (sink == null) {
+            return;
+        }
+        Pad pad = sink.getStaticPad("sink");
+        if (pad == null) {
+            log.warn("HLS sink has no sink pad; picture announcement will use the fallback");
+            return;
+        }
+        pad.addProbe(PadProbeType.BUFFER, (probed, info) -> {
+            notePresented();
+            return PadProbeReturn.REMOVE;
+        });
+    }
+
+    private void notePresented() {
+        if (uri == null || !presented.compareAndSet(false, true)) {
+            return;
+        }
+        log.info("HLS first picture");
+        try {
+            onPresented.run();
+        } catch (RuntimeException e) {
+            log.warn("HLS picture callback failed: {}", e.toString());
+        }
     }
 
     private void cancelEndWatch() {

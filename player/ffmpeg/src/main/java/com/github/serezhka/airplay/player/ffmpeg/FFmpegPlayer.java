@@ -30,6 +30,8 @@ public class FFmpegPlayer implements Playback {
     public FFmpegPlayer(int fps) {
         this.fps = Math.max(1, fps);
         hls.setOnEnded(() -> observer.onEnded());
+        hls.setOnPresented(() -> observer.onPresented());
+        hls.setOnSeekDisplayed(() -> observer.onSeekDisplayed());
         log.info("FFmpeg debug log: {}", NativeProcessLog.playerLogFile("ffmpeg"));
     }
 

@@ -126,11 +126,18 @@ public class PropertyListUtil {
         // user pause; YouTube then stuck until Skip (ControlHandler pins rate=1 while waiting
         // for playlistRemove — dump 20260916-164913 kept rate=1 through the gap).
         //
-        // Buffer flags match known receiver /playback-info templates (and
-        // reverse_engineering/get_playback_info_response.txt): empty=true, full=false,
-        // keepUp=true while readyToPlay. Flipping empty/full with hasDuration diverged from
-        // that and is a candidate cause of VOD ad EOS hangs.
-        if (hasDuration) {
+        // While the clock is moving, the buffer is full. A poll that says empty=true after
+        // the sender's own rate=0 freezes its timeline even when position and rate advance
+        // (session 20260928-135155: position 40→273, rate=1, UI stayed paused).
+        // At the end of the item keep empty=true / full=false: that is the end pin, and
+        // reporting a full buffer there hung VOD ad removal.
+        boolean atEnd = hasDuration && position + 0.25 >= duration;
+        if (hasDuration && rate > 0 && !atEnd) {
+            response.put("playbackBufferEmpty", false);
+            response.put("playbackBufferFull", true);
+            response.put("playbackLikelyToKeepUp", true);
+            response.put("readyToPlay", true);
+        } else if (hasDuration) {
             response.put("playbackBufferEmpty", true);
             response.put("playbackBufferFull", false);
             response.put("playbackLikelyToKeepUp", true);
@@ -167,6 +174,21 @@ public class PropertyListUtil {
      */
     public static byte[] preparePlaybackStateEvent(String state, int reverseSessionId,
                                                    String itemUuid, String reason) {
+        return preparePlaybackStateEvent(state, reverseSessionId, itemUuid, reason, null);
+    }
+
+    /**
+     * Same as {@link #preparePlaybackStateEvent(String, int, String, String)} plus the
+     * clock fields when {@code playback} has a known duration.
+     *
+     * <p>Those fields belong under {@code params}, next to the item uuid. A bare
+     * {@code state=playing}, or the same keys at the top of the event, leaves the sender
+     * on the pause UI it entered with {@code rate=0}. The reverse playing event reports
+     * the buffer as full; {@code GET /playback-info} keeps its own flag template.
+     */
+    public static byte[] preparePlaybackStateEvent(String state, int reverseSessionId,
+                                                   String itemUuid, String reason,
+                                                   Playback.Info playback) {
         NSDictionary event = new NSDictionary();
         event.put("category", "video");
         event.put("sessionID", reverseSessionId);
@@ -174,12 +196,39 @@ public class PropertyListUtil {
         if (reason != null) {
             event.put("reason", reason);
         }
+        NSDictionary params = new NSDictionary();
+        boolean hasParams = false;
         if (itemUuid != null) {
-            NSDictionary params = new NSDictionary();
             params.put("uuid", itemUuid);
+            hasParams = true;
+        }
+        if (playback != null && playback.duration() > 0 && "playing".equals(state)) {
+            double duration = playback.duration();
+            double position = Math.max(0, Math.min(playback.position(), duration));
+            params.put("duration", duration);
+            params.put("position", position);
+            // state=playing is the un-pause. rate=0 here keeps the sender paused.
+            params.put("rate", 1.0);
+            params.put("readyToPlay", true);
+            params.put("stallCount", 0);
+            params.put("playbackBufferEmpty", false);
+            params.put("playbackBufferFull", true);
+            params.put("playbackLikelyToKeepUp", true);
+            params.put("loadedTimeRanges", new NSArray(timeRange(duration, 0)));
+            params.put("seekableTimeRanges", new NSArray(timeRange(duration, 0)));
+            hasParams = true;
+        }
+        if (hasParams) {
             event.put("params", params);
         }
         return event.toXMLPropertyList().getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static NSDictionary timeRange(double duration, double start) {
+        NSDictionary range = new NSDictionary();
+        range.put("duration", duration);
+        range.put("start", start);
+        return range;
     }
 
     /**

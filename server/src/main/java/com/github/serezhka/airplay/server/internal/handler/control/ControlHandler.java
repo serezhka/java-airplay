@@ -62,7 +62,19 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         t.setDaemon(true);
         return t;
     });
+    /** YouTube sometimes sends another rate=0 just after the rate=1 that ends a scrub. */
+    private static final long POST_SCRUB_RATE0_GRACE_NS = 2_000_000_000L;
+    /**
+     * rate=0 is also how a scrub starts (finger down). /scrub can follow several
+     * seconds later (seen at 5.4s). Publishing rate=0 or pausing the picture before
+     * that lights the phone pause UI. Wait this long, and cancel if /scrub arrives.
+     */
+    private static final long RATE_ZERO_DELAY_MS = 8_000;
+
     private final ConcurrentHashMap<String, ScheduledFuture<?>> pendingPlaybackStarts = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, ScheduledFuture<?>> pendingRateZeros = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Long> rateZeroTokens = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Long> suppressPauseUntilNanos = new ConcurrentHashMap<>();
 
     public ControlHandler(SessionManager sessionManager,
                           HlsFcupService hlsFcupService,
@@ -90,6 +102,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
 
     private void stopHlsPlayback(Session session) {
         cancelPlaybackStartFallback(session.getId());
+        cancelReportedPause(session.getId());
         hlsFcupService.cancelAllMasterPolls();
         hlsFcupService.clearReverseQueue(session);
         session.setHlsPlaylistState(null);
@@ -497,27 +510,40 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         }
 
         if (value == 0) {
-            if (hls != null && hls.shouldIgnorePause()) {
+            Long suppressUntil = suppressPauseUntilNanos.get(session.getId());
+            if (suppressUntil != null && System.nanoTime() < suppressUntil) {
+                log.info("Ignoring rate=0 shortly after scrub resume session={}", session.getId());
+            } else if (hls != null && hls.shouldIgnorePause()) {
                 // /scrub arms a latch: drop rate=0 until the matching rate=1 (no timer).
                 log.info("Ignoring rate=0 until rate=1 after scrub session={}", session.getId());
             } else {
-                if (hls != null) {
-                    hls.setPlaybackRate(0);
-                }
-                airPlayConsumer.onPause();
-                hlsFcupService.sendPlaybackStateEvent(session, "paused");
+                // Keep playing and keep reporting rate=1 until this is clearly a pause
+                // and not the start of a scrub. Do not emit reverse "paused" yet.
+                log.info("Holding rate=1 for rate=0 session={}", session.getId());
+                scheduleReportedPause(session);
             }
         } else {
-            boolean wasPaused = hls != null && hls.getPlaybackRate() <= 0;
+            boolean heldForScrub = cancelReportedPause(session.getId());
+            boolean scrubResume = hls != null && hls.shouldIgnorePause();
+            boolean wasPaused = heldForScrub || (hls != null && hls.getPlaybackRate() <= 0);
             if (hls != null) {
                 hls.clearScrubIgnorePause();
                 hls.setPlaybackRate(1);
+            }
+            if (scrubResume) {
+                suppressPauseUntilNanos.put(session.getId(), System.nanoTime() + POST_SCRUB_RATE0_GRACE_NS);
             }
             // Only resume when leaving pause — rate=1 while already playing must not re-seek.
             if (wasPaused) {
                 airPlayConsumer.onResume();
             }
-            hlsFcupService.sendPlaybackStateEvent(session, "playing");
+            // rate=1 arrives before the first frame. Announcing playing here starts the
+            // sender clock while the display is still black (ffplay probe is several seconds).
+            if (hls == null || !hls.isAwaitingPresentation()) {
+                hlsFcupService.sendPlaybackStateEvent(session, "playing");
+            } else {
+                log.info("Holding playing until the picture session={}", session.getId());
+            }
         }
 
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
@@ -534,6 +560,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 var session = resolveSession(request);
                 var hls = session.getHlsPlaylistState();
                 if (hls != null) {
+                    cancelReportedPause(session.getId());
                     // Latch: post-scrub rate=0 is bracket noise until rate=1.
                     hls.markScrubIgnorePauseUntilPlay();
                     hls.setPlaybackRate(1);
@@ -543,6 +570,9 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                     log.info("Deferring /scrub to pending seek until HLS starts");
                 } else {
                     airPlayConsumer.onSeek(position);
+                    // Seek acknowledgement, then playing with the new position in params.
+                    // A lone playing event left the sender on the pause UI.
+                    hlsFcupService.sendPlaybackStateEvent(session, "loading");
                     hlsFcupService.sendPlaybackStateEvent(session, "playing");
                 }
             } catch (NumberFormatException e) {
@@ -769,8 +799,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     }
 
     private void startHlsPlayback(Session session, HlsPlaylistState hls) {
-        airPlayConsumer.onPlaylist(hls.getPlaylistUriLocal());
-        hlsFcupService.sendPlaybackStateEvent(session, "playing");
+        hlsFcupService.beginDisplayedPlayback(session);
         Double seek = hls.takePendingSeekSeconds();
         if (seek != null && seek > 0) {
             airPlayConsumer.onSeek(seek);
@@ -804,6 +833,49 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             startHlsPlayback(session, hls);
         }, PLAYBACK_START_FALLBACK_MS, TimeUnit.MILLISECONDS);
         pendingPlaybackStarts.put(sessionId, future);
+    }
+
+    private void scheduleReportedPause(Session session) {
+        String sessionId = session.getId();
+        long token = System.nanoTime();
+        rateZeroTokens.put(sessionId, token);
+        ScheduledFuture<?> previous = pendingRateZeros.remove(sessionId);
+        if (previous != null) {
+            previous.cancel(false);
+        }
+        ScheduledFuture<?> future = hlsScheduler.schedule(() -> {
+            pendingRateZeros.remove(sessionId);
+            if (!Long.valueOf(token).equals(rateZeroTokens.get(sessionId))) {
+                return;
+            }
+            Session current = sessionManager.getSession(sessionId);
+            if (current == null) {
+                return;
+            }
+            var hls = current.getHlsPlaylistState();
+            if (hls == null || hls.shouldIgnorePause() || hls.isWaitingForMasterChange()) {
+                return;
+            }
+            if (!Long.valueOf(token).equals(rateZeroTokens.get(sessionId))) {
+                return;
+            }
+            hls.setPlaybackRate(0);
+            airPlayConsumer.onPause();
+            hlsFcupService.sendPlaybackStateEvent(current, "paused");
+            log.info("Reporting pause after rate=0 with no scrub session={}", sessionId);
+        }, RATE_ZERO_DELAY_MS, TimeUnit.MILLISECONDS);
+        pendingRateZeros.put(sessionId, future);
+    }
+
+    /** @return true when a not-yet-published pause was cancelled */
+    private boolean cancelReportedPause(String sessionId) {
+        rateZeroTokens.remove(sessionId);
+        ScheduledFuture<?> future = pendingRateZeros.remove(sessionId);
+        if (future == null) {
+            return false;
+        }
+        future.cancel(false);
+        return true;
     }
 
     private void cancelPlaybackStartFallback(String sessionId) {

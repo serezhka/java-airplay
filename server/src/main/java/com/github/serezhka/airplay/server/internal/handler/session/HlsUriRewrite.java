@@ -51,8 +51,9 @@ public final class HlsUriRewrite {
      * HLS consumer cannot switch video codecs mid-playlist.
      * <p>
      * Drops subtitles and every audio rendition except one default per {@code GROUP-ID}
-     * referenced by a remaining variant ({@code DEFAULT=YES}, else the first). Extra
-     * languages make the consumer probe dozens of playlists before the first video frame.
+     * referenced by the remaining variant ({@code DEFAULT=YES}, else the first). Keeps a
+     * single AVC video variant (highest bandwidth). Extra renditions make ffplay probe
+     * every playlist before the first frame — about five seconds on a full YouTube master.
      */
     public static String preferAvcVariants(String masterPlaylist) {
         String[] lines = masterPlaylist.split("\\R", -1);
@@ -89,6 +90,21 @@ public final class HlsUriRewrite {
         if (variants.isEmpty()) {
             return masterPlaylist;
         }
+        int best = 0;
+        long bestBandwidth = -1;
+        for (int i = 0; i < variants.size(); i += 2) {
+            long bandwidth = extractAttr(variants.get(i), "BANDWIDTH")
+                    .map(HlsUriRewrite::parseLong)
+                    .orElse(0L);
+            if (bandwidth >= bestBandwidth) {
+                bestBandwidth = bandwidth;
+                best = i;
+            }
+        }
+        String chosenInfo = variants.get(best);
+        String chosenUri = variants.get(best + 1);
+        audioGroups.clear();
+        extractAttr(chosenInfo, "AUDIO").ifPresent(audioGroups::add);
 
         StringBuilder out = new StringBuilder();
         for (String header : headers) {
@@ -100,10 +116,17 @@ public final class HlsUriRewrite {
         for (String media : defaultAudioOnly(audioMedia, audioGroups)) {
             out.append(media).append('\n');
         }
-        for (String variantLine : variants) {
-            out.append(variantLine).append('\n');
-        }
+        out.append(chosenInfo).append('\n');
+        out.append(chosenUri).append('\n');
         return out.toString();
+    }
+
+    private static long parseLong(String value) {
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException e) {
+            return 0L;
+        }
     }
 
     /** One audio rendition per referenced group: {@code DEFAULT=YES}, otherwise the first. */

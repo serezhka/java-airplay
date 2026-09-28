@@ -13,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Getter
@@ -67,12 +68,29 @@ public class HlsPlaylistState {
      * Event latch (not a timer): scrub brackets with rate=0 then rate=1.
      */
     private volatile boolean ignorePauseUntilRateOne;
+    /** True from pipeline start until the first displayed frame is announced. */
+    private final AtomicBoolean presentationPending = new AtomicBoolean();
 
     public HlsPlaylistState(String remoteMasterUri, String playlistUriLocal) {
         this.remoteMasterUri = remoteMasterUri;
         this.playlistUriLocal = playlistUriLocal;
         this.itemUuid = UUID.randomUUID().toString().toUpperCase();
         this.reverseEventSessionId = NEXT_REVERSE_SESSION_ID.getAndAdd(2);
+    }
+
+    /** Pipeline is up; do not tell the sender {@code playing} until a frame is visible. */
+    public void awaitPresentation() {
+        presentationPending.set(true);
+    }
+
+    /** @return true the first time a visible frame (or the fallback) may be announced */
+    public boolean claimPresentation() {
+        return presentationPending.compareAndSet(true, false);
+    }
+
+    /** Sender must stay on {@code loading} until {@link #claimPresentation()} succeeds. */
+    public boolean isAwaitingPresentation() {
+        return presentationPending.get();
     }
 
     /** Arm after {@code /scrub}: drop rate=0 until the client sends rate=1. */
