@@ -17,4 +17,12 @@ class ReceiverProfileTest {
     void txtMatchesLoHi() {
         assertEquals("0x5A7FFFF7,0x1E", AdvertisedReceiver.FEATURES_TXT);
     }
+
+    @Test
+    void hlsDisabledDropsVideoBits() {
+        assertEquals(AdvertisedReceiver.FEATURES_LO, AdvertisedReceiver.featuresLo(true));
+        assertEquals(0x5A7FFFE2, AdvertisedReceiver.featuresLo(false));
+        assertEquals(0x80, AdvertisedReceiver.featuresLo(false) & 0x80);
+        assertEquals(0, AdvertisedReceiver.featuresLo(false) & 0x15);
+    }
 }

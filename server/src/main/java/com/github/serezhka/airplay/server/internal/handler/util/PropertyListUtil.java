@@ -58,7 +58,7 @@ public class PropertyListUtil {
         response.put("audioFormats", audioFormats);
         response.put("audioLatencies", audioLatencies);
         response.put("displays", displays);
-        response.put("features", AdvertisedReceiver.FEATURES);
+        response.put("features", AdvertisedReceiver.features(airPlayConfig.isHlsEnabled()));
         response.put("keepAliveSendStatsAsBody", 1);
         response.put("model", AdvertisedReceiver.MODEL);
         response.put("name", "Apple TV");

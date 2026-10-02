@@ -27,10 +27,12 @@ public class MdnsAdvertiser {
     private static final String AIRTUNES_SERVICE_TYPE = "._raop._tcp.local";
 
     private final String serverName;
+    private final boolean hlsEnabled;
 
     private final List<JmDNS> jmDNSList = new ArrayList<>();
 
     public void start(int airTunesPort) throws Exception {
+        log.info("HLS {}", hlsEnabled ? "enabled" : "disabled");
         NetworkInterface.networkInterfaces()
                 .filter(networkInterfaceFilter())
                 .flatMap(NetworkInterface::inetAddresses)
@@ -69,7 +71,7 @@ public class MdnsAdvertiser {
         HashMap<String, String> airPlayMDNSProps = new HashMap<>();
         airPlayMDNSProps.put("deviceid", deviceId);
         // Bit 27 off (legacy pairing); LO bits 0/4/8 restored — see AdvertisedReceiver.
-        airPlayMDNSProps.put("features", AdvertisedReceiver.FEATURES_TXT);
+        airPlayMDNSProps.put("features", AdvertisedReceiver.featuresTxt(hlsEnabled));
         airPlayMDNSProps.put("srcvers", AdvertisedReceiver.SOURCE_VERSION);
         airPlayMDNSProps.put("flags", AdvertisedReceiver.MDNS_FLAGS);
         airPlayMDNSProps.put("vv", Integer.toString(AdvertisedReceiver.VV));
@@ -87,7 +89,7 @@ public class MdnsAdvertiser {
         airTunesMDNSProps.put("da", "true");
         airTunesMDNSProps.put("et", "0,3,5");
         airTunesMDNSProps.put("ek", "1");
-        airTunesMDNSProps.put("ft", AdvertisedReceiver.FEATURES_TXT);
+        airTunesMDNSProps.put("ft", AdvertisedReceiver.featuresTxt(hlsEnabled));
         airTunesMDNSProps.put("am", AdvertisedReceiver.MODEL);
         airTunesMDNSProps.put("md", "0,1,2");
         airTunesMDNSProps.put("sr", "44100");

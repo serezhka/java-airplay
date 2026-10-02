@@ -58,6 +58,7 @@ airplay.serverName=srzhka
 airplay.width=1280
 airplay.height=720
 airplay.fps=24
+airplay.hls.enabled=true
 # player (gstreamer, ffmpeg)
 player.implementation=gstreamer
 player.tray.enabled=true
@@ -95,6 +96,10 @@ Set `dump.enabled=true` to record beside the live player under `dumps/<timestamp
 - `protocol/` — RTSP/HTTP captures
 - `media/` — decrypted `.h264` / remuxed `.mp4`, audio `.caf` / `.aac`
 - `extras/` — HLS playlists, artwork, DMAP metadata when present
+
+## Known issues
+
+- YouTube sometimes shows an empty black window on the phone while its interface is drawn on the receiver. That happens when screen mirroring is already on and the receiver advertises video. `airplay.hls.enabled=false` leaves mirroring and audio without that video advertisement.
 
 ## Related projects
 

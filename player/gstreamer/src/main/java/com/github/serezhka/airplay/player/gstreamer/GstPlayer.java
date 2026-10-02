@@ -38,16 +38,33 @@ public class GstPlayer implements Playback {
     }
 
     /**
-     * The device H.264 decoder drops frames and rewinds timestamps when it has no usable
-     * context, which shows up as stutter a short way into playback. Keep it out of autoplug.
+     * Device H.264 decoders drop frames when they have no usable context.
+     * <p>
+     * The adaptive demuxer with a built-in HTTP client completes those requests on
+     * whatever thread stops the pipeline. Stopping it from the control thread
+     * aborts the process ({@code playlistRemove}). The other demuxer closes its
+     * HTTP source on that source's own thread.
      */
     private static void preferSoftwareVideoDecode() {
-        String drop = "nvh264dec:NONE,nvh265dec:NONE,nvvp8dec:NONE,nvvp9dec:NONE,nvav1dec:NONE";
-        String existing = System.getenv("GST_PLUGIN_FEATURE_RANK");
-        String rank = existing == null || existing.isBlank() || existing.contains("nvh264dec:")
-                ? (existing == null || existing.isBlank() ? drop : existing)
-                : existing + "," + drop;
+        String[] demote = {
+                "nvh264dec", "nvh265dec", "nvvp8dec", "nvvp9dec", "nvav1dec",
+                "hlsdemux2"
+        };
+        String rank = System.getenv("GST_PLUGIN_FEATURE_RANK");
+        if (rank == null) {
+            rank = "";
+        }
+        for (String feature : demote) {
+            if (rank.contains(feature + ":")) {
+                continue;
+            }
+            if (!rank.isBlank()) {
+                rank = rank + ",";
+            }
+            rank = rank + feature + ":NONE";
+        }
         GLib.setEnv("GST_PLUGIN_FEATURE_RANK", rank, true);
+        log.info("GStreamer feature rank: {}", rank);
     }
 
     private final Pipeline h264Pipeline;
