@@ -35,6 +35,15 @@ class HlsPlaylistStateTest {
     }
 
     @Test
+    void keepsClientItemUuid() {
+        var hls = new HlsPlaylistState(
+                "mlhls://localhost/master.m3u8",
+                "http://localhost/playlist/master.m3u8?session=x",
+                "65356B1D-FB60-41B8-AF29-5EB862925894");
+        assertEquals("65356B1D-FB60-41B8-AF29-5EB862925894", hls.getItemUuid());
+    }
+
+    @Test
     void storeMasterPlaylistUsesFilteredAvcOnlyUris() throws Exception {
         String mixed = """
                 #EXTM3U
@@ -64,13 +73,26 @@ class HlsPlaylistStateTest {
     }
 
     @Test
-    void scrubLatchIgnoresPauseUntilRateOne() {
+    void secondPlaybackInfoAfterRateZeroCommitsPause() {
         var hls = new HlsPlaylistState("mlhls://localhost/master.m3u8", "http://localhost/playlist/master.m3u8?session=x");
-        assertFalse(hls.shouldIgnorePause());
-        hls.markScrubIgnorePauseUntilPlay();
-        assertTrue(hls.shouldIgnorePause());
-        hls.clearScrubIgnorePause();
-        assertFalse(hls.shouldIgnorePause());
+        hls.armRateZero();
+        assertFalse(hls.notePlaybackInfoForPause());
+        assertTrue(hls.notePlaybackInfoForPause());
+        hls.clearRateZero();
+        assertFalse(hls.notePlaybackInfoForPause());
+    }
+
+    @Test
+    void scrubClearsArmedRateZero() {
+        var hls = new HlsPlaylistState("mlhls://localhost/master.m3u8", "http://localhost/playlist/master.m3u8?session=x");
+        hls.armRateZero();
+        hls.notePlaybackInfoForPause();
+        hls.clearRateZero();
+        hls.beginScrubGesture();
+        assertTrue(hls.isScrubGesture());
+        assertFalse(hls.notePlaybackInfoForPause());
+        hls.endScrubGesture();
+        assertFalse(hls.isScrubGesture());
     }
 
     @Test

@@ -62,19 +62,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         t.setDaemon(true);
         return t;
     });
-    /** YouTube sometimes sends another rate=0 just after the rate=1 that ends a scrub. */
-    private static final long POST_SCRUB_RATE0_GRACE_NS = 2_000_000_000L;
-    /**
-     * rate=0 is also how a scrub starts (finger down). /scrub can follow several
-     * seconds later (seen at 5.4s). Publishing rate=0 or pausing the picture before
-     * that lights the phone pause UI. Wait this long, and cancel if /scrub arrives.
-     */
-    private static final long RATE_ZERO_DELAY_MS = 8_000;
-
     private final ConcurrentHashMap<String, ScheduledFuture<?>> pendingPlaybackStarts = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, ScheduledFuture<?>> pendingRateZeros = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, Long> rateZeroTokens = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, Long> suppressPauseUntilNanos = new ConcurrentHashMap<>();
 
     public ControlHandler(SessionManager sessionManager,
                           HlsFcupService hlsFcupService,
@@ -102,7 +90,6 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
 
     private void stopHlsPlayback(Session session) {
         cancelPlaybackStartFallback(session.getId());
-        cancelReportedPause(session.getId());
         hlsFcupService.cancelAllMasterPolls();
         hlsFcupService.clearReverseQueue(session);
         session.setHlsPlaylistState(null);
@@ -158,6 +145,10 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                     handleRtspTeardown(ctx, request);
                 } else if (HttpMethod.POST.equals(request.method()) && request.uri().equals("/audioMode")) {
                     handleRtspAudioMode(ctx, request);
+                } else if (RtspMethods.OPTIONS.equals(request.method())) {
+                    handleRtspOptions(ctx, request);
+                } else if (RtspMethods.ANNOUNCE.equals(request.method())) {
+                    handleRtspAnnounce(ctx, request);
                 } else {
                     log.error("Unknown control request: {} {} {}", request.protocolVersion(), request.method(), request.uri());
                     var response = createRtspResponse(request);
@@ -277,6 +268,27 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     }
 
     private void handleRtspFeedback(ChannelHandlerContext ctx, FullHttpRequest request) {
+        var response = createRtspResponse(request);
+        sendResponse(ctx, request, response);
+    }
+
+    /**
+     * First probe when the sender treats the receiver as a speaker ({@code OPTIONS *}).
+     * {@code Public} lists the methods this connection accepts.
+     */
+    private void handleRtspOptions(ChannelHandlerContext ctx, FullHttpRequest request) {
+        log.info("RTSP OPTIONS {}", request.uri());
+        var response = createRtspResponse(request);
+        response.headers().add(RtspHeaderNames.PUBLIC,
+                "ANNOUNCE, SETUP, RECORD, FLUSH, TEARDOWN, OPTIONS, GET_PARAMETER, SET_PARAMETER, POST, GET");
+        response.headers().add("Audio-Jack-Status", "connected; type=analog");
+        sendResponse(ctx, request, response);
+    }
+
+    /** Speaker setup follows OPTIONS with an SDP body. Accept it and keep the session open. */
+    private void handleRtspAnnounce(ChannelHandlerContext ctx, FullHttpRequest request) {
+        String body = request.content().toString(StandardCharsets.US_ASCII).replaceAll("\\s+", " ").trim();
+        log.info("RTSP ANNOUNCE {}", body.length() > 400 ? body.substring(0, 400) : body);
         var response = createRtspResponse(request);
         sendResponse(ctx, request, response);
     }
@@ -413,7 +425,8 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         if (playlistUri != null && !playlistUri.isBlank()) {
             var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
             sendResponse(ctx, request, response);
-            startMediaPlaylist(ctx, resolveSession(request), playlistUri, clientProcName, startPositionSeconds);
+            String itemUuid = play.get("uuid") != null ? play.get("uuid").toJavaObject(String.class) : null;
+            startMediaPlaylist(ctx, resolveSession(request), playlistUri, clientProcName, startPositionSeconds, itemUuid);
         } else {
             log.error("Client proc name [{}] has no Content-Location playlist", clientProcName);
             var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.NOT_IMPLEMENTED);
@@ -426,7 +439,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
      * Used by POST /play and by playlistInsert (e.g. quality switch).
      */
     private void startMediaPlaylist(ChannelHandlerContext ctx, Session session, String playlistUri,
-                                    String clientProcName, Double startPositionSeconds) {
+                                    String clientProcName, Double startPositionSeconds, String clientItemUuid) {
         // Clients often keep the mirror stream up when starting YouTube HLS; drop it so we
         // do not keep rendering a stale mirrored UI beside the media player.
         stopMirrorVideoIfRunning(session);
@@ -436,9 +449,10 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
 
         if (remotePlaylistUri.contains("master.m3u8")) {
             hlsFcupService.cancelAllMasterPolls();
-            var hls = new HlsPlaylistState(remotePlaylistUri, playlistUriLocal);
+            var hls = new HlsPlaylistState(remotePlaylistUri, playlistUriLocal, clientItemUuid);
             hls.setPlaybackRate(1);
             session.setHlsPlaylistState(hls);
+            log.info("HLS item uuid={} session={}", hls.getItemUuid(), session.getId());
             if (startPositionSeconds != null && startPositionSeconds > 0) {
                 hls.setPendingSeekSeconds(startPositionSeconds);
             }
@@ -455,12 +469,18 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     }
 
     private void stopMirrorVideoIfRunning(Session session) {
+        log.info("Stopping screen-mirror video before HLS session {}", session.getId());
+        for (Session other : sessionManager.allSessions()) {
+            try {
+                other.getVideoServer().stop();
+            } catch (Exception e) {
+                log.debug("Mirror video stop before HLS ignored: {}", e.toString());
+            }
+        }
         try {
-            log.info("Stopping screen-mirror video before HLS session {}", session.getId());
             airPlayConsumer.onVideoSrcDisconnect();
-            session.getVideoServer().stop();
         } catch (Exception e) {
-            log.debug("Mirror video stop before HLS ignored: {}", e.toString());
+            log.debug("Mirror video source disconnect ignored: {}", e.toString());
         }
     }
 
@@ -510,35 +530,28 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         }
 
         if (value == 0) {
-            Long suppressUntil = suppressPauseUntilNanos.get(session.getId());
-            if (suppressUntil != null && System.nanoTime() < suppressUntil) {
-                log.info("Ignoring rate=0 shortly after scrub resume session={}", session.getId());
-            } else if (hls != null && hls.shouldIgnorePause()) {
-                // /scrub arms a latch: drop rate=0 until the matching rate=1 (no timer).
-                log.info("Ignoring rate=0 until rate=1 after scrub session={}", session.getId());
-            } else {
-                // Keep playing and keep reporting rate=1 until this is clearly a pause
-                // and not the start of a scrub. Do not emit reverse "paused" yet.
-                log.info("Holding rate=1 for rate=0 session={}", session.getId());
-                scheduleReportedPause(session);
+            if (hls != null && hls.isScrubGesture()) {
+                // Tail of the scrub, before the seek-picture callback. The phone applies
+                // this rate=0 locally; playing has to follow it.
+                log.info("rate=0 during scrub gesture session={}", session.getId());
+                reannounceAfterScrubRateZero(session);
+            } else if (hls != null) {
+                hls.armRateZero();
+                log.info("rate=0 armed; pause waits for the following playback-info session={}",
+                        session.getId());
             }
         } else {
-            boolean heldForScrub = cancelReportedPause(session.getId());
-            boolean scrubResume = hls != null && hls.shouldIgnorePause();
-            boolean wasPaused = heldForScrub || (hls != null && hls.getPlaybackRate() <= 0);
+            boolean wasPaused = hls != null && hls.getPlaybackRate() <= 0;
             if (hls != null) {
-                hls.clearScrubIgnorePause();
+                hls.clearRateZero();
+                hls.endScrubGesture();
                 hls.setPlaybackRate(1);
             }
-            if (scrubResume) {
-                suppressPauseUntilNanos.put(session.getId(), System.nanoTime() + POST_SCRUB_RATE0_GRACE_NS);
-            }
-            // Only resume when leaving pause — rate=1 while already playing must not re-seek.
+            // Only resume when leaving a real pause — rate=1 while already playing must not re-seek.
             if (wasPaused) {
                 airPlayConsumer.onResume();
             }
-            // rate=1 arrives before the first frame. Announcing playing here starts the
-            // sender clock while the display is still black (ffplay probe is several seconds).
+            // rate=1 can arrive before the first frame; wait for the picture callback.
             if (hls == null || !hls.isAwaitingPresentation()) {
                 hlsFcupService.sendPlaybackStateEvent(session, "playing");
             } else {
@@ -560,9 +573,8 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 var session = resolveSession(request);
                 var hls = session.getHlsPlaylistState();
                 if (hls != null) {
-                    cancelReportedPause(session.getId());
-                    // Latch: post-scrub rate=0 is bracket noise until rate=1.
-                    hls.markScrubIgnorePauseUntilPlay();
+                    hls.clearRateZero();
+                    hls.beginScrubGesture();
                     hls.setPlaybackRate(1);
                 }
                 if (hls != null && !hls.isPlaybackStarted()) {
@@ -570,8 +582,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                     log.info("Deferring /scrub to pending seek until HLS starts");
                 } else {
                     airPlayConsumer.onSeek(position);
-                    // Seek acknowledgement, then playing with the new position in params.
-                    // A lone playing event left the sender on the pause UI.
+                    // loading then playing (clock under params) unsticks the pause UI.
                     hlsFcupService.sendPlaybackStateEvent(session, "loading");
                     hlsFcupService.sendPlaybackStateEvent(session, "playing");
                 }
@@ -595,6 +606,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
 
     private void handlePlaybackInfo(ChannelHandlerContext ctx, FullHttpRequest request) {
         var session = resolveSession(request);
+        commitPauseOnPlaybackInfo(session);
         var hls = session.getHlsPlaylistState();
         var fromPlayer = airPlayConsumer.info();
         double duration = fromPlayer.duration();
@@ -606,8 +618,6 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             position = 0;
             rate = 0;
         } else if (hls != null) {
-            // Live / sliding windows: duration unknown. Finite ENDLIST VOD is authoritative.
-            // Consumer clocks alone can report multi-hour values for short ads.
             if (hls.isLivePlaylist()) {
                 duration = 0;
             } else {
@@ -615,15 +625,13 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 if (playlistDur > 0) {
                     duration = playlistDur;
                 } else if (duration > 600) {
+                    // Demux sometimes reports multi-hour clocks for short items.
                     duration = 0;
                 }
             }
             if (hls.isWaitingForMasterChange() && duration > 0) {
-                // VOD ad finished: pin clock at end. Keep rate=1 (dump 20260916-164913
-                // advanced with duration>0 rate=1). rate=0 here looks like a user pause and
-                // blocks playlistRemove until Skip. Never emit "paused" / duration=0.
-                // Prefer the player/EOS length when session mediaDuration was inflated by a
-                // later FCUP body (seen: 7.04s ad reported as 15.6 → no playlistRemove).
+                // VOD end pin: stay at D/D/rate=1. Prefer the shorter player length if
+                // a later FCUP body inflated mediaDurationSeconds.
                 double playerDur = fromPlayer.duration();
                 if (playerDur > 0.5 && playerDur + 0.25 < duration) {
                     duration = playerDur;
@@ -634,9 +642,6 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 if (duration > 0) {
                     position = Math.min(position, duration);
                 }
-                // Prefer session rate from POST /rate. Player rate stays 0 while MSE/hls.js
-                // buffers — OR-ing it forced rate=0 with duration=6 at t≈0 (dump
-                // 20260918-080456) → phone pause UI → rate 1/0 fight → debounced "paused".
                 rate = hls.getPlaybackRate() <= 0 ? 0 : 1;
             }
         } else if (duration > 600) {
@@ -680,8 +685,9 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         var clientProcName = item.get("clientProcName") != null
                 ? item.get("clientProcName").toJavaObject(String.class)
                 : "";
+        String itemUuid = item.get("uuid") != null ? item.get("uuid").toJavaObject(String.class) : null;
         log.info("playlistInsert Content-Location={} from [{}]", playlistUri, clientProcName);
-        startMediaPlaylist(ctx, resolveSession(request), playlistUri, clientProcName, null);
+        startMediaPlaylist(ctx, resolveSession(request), playlistUri, clientProcName, null, itemUuid);
     }
 
     private void handleGetProperty(ChannelHandlerContext ctx, FullHttpRequest request) {
@@ -835,47 +841,30 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         pendingPlaybackStarts.put(sessionId, future);
     }
 
-    private void scheduleReportedPause(Session session) {
-        String sessionId = session.getId();
-        long token = System.nanoTime();
-        rateZeroTokens.put(sessionId, token);
-        ScheduledFuture<?> previous = pendingRateZeros.remove(sessionId);
-        if (previous != null) {
-            previous.cancel(false);
-        }
-        ScheduledFuture<?> future = hlsScheduler.schedule(() -> {
-            pendingRateZeros.remove(sessionId);
-            if (!Long.valueOf(token).equals(rateZeroTokens.get(sessionId))) {
-                return;
-            }
-            Session current = sessionManager.getSession(sessionId);
-            if (current == null) {
-                return;
-            }
-            var hls = current.getHlsPlaylistState();
-            if (hls == null || hls.shouldIgnorePause() || hls.isWaitingForMasterChange()) {
-                return;
-            }
-            if (!Long.valueOf(token).equals(rateZeroTokens.get(sessionId))) {
-                return;
-            }
-            hls.setPlaybackRate(0);
-            airPlayConsumer.onPause();
-            hlsFcupService.sendPlaybackStateEvent(current, "paused");
-            log.info("Reporting pause after rate=0 with no scrub session={}", sessionId);
-        }, RATE_ZERO_DELAY_MS, TimeUnit.MILLISECONDS);
-        pendingRateZeros.put(sessionId, future);
+    /** Follow a scrub's trailing {@code rate=0} so the phone does not stay on pause. */
+    private void reannounceAfterScrubRateZero(Session session) {
+        hlsFcupService.sendPlaybackStateEvent(session, "loading");
+        hlsFcupService.sendPlaybackStateEvent(session, "playing");
     }
 
-    /** @return true when a not-yet-published pause was cancelled */
-    private boolean cancelReportedPause(String sessionId) {
-        rateZeroTokens.remove(sessionId);
-        ScheduledFuture<?> future = pendingRateZeros.remove(sessionId);
-        if (future == null) {
-            return false;
+    /**
+     * The playback-info already in flight with {@code rate=0} also arrives before {@code /scrub}.
+     * The following poll is the pause: a scrub would have cleared the flag by then.
+     */
+    private void commitPauseOnPlaybackInfo(Session session) {
+        var hls = session.getHlsPlaylistState();
+        if (hls == null || !hls.notePlaybackInfoForPause()) {
+            return;
         }
-        future.cancel(false);
-        return true;
+        if (hls.isWaitingForMasterChange()) {
+            hls.clearRateZero();
+            return;
+        }
+        hls.clearRateZero();
+        hls.setPlaybackRate(0);
+        airPlayConsumer.onPause();
+        hlsFcupService.sendPlaybackStateEvent(session, "paused");
+        log.info("Pause committed on playback-info session={}", session.getId());
     }
 
     private void cancelPlaybackStartFallback(String sessionId) {

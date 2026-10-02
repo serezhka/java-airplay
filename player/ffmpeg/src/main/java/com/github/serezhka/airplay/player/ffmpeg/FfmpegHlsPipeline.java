@@ -3,6 +3,14 @@ package com.github.serezhka.airplay.player.ffmpeg;
 import com.github.serezhka.airplay.player.support.NativeProcessLog;
 import lombok.extern.slf4j.Slf4j;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -47,7 +55,7 @@ final class FfmpegHlsPipeline {
     private volatile Process ffplayProcess;
     /** Frozen window kept on screen until the seek replacement has a picture. */
     private volatile Process heldFrame;
-    private volatile java.util.concurrent.atomic.AtomicBoolean incomingPicture = new java.util.concurrent.atomic.AtomicBoolean();
+    private volatile AtomicBoolean incomingPicture = new AtomicBoolean();
 
     void start(String playlistUri, double volume) {
         start(playlistUri, volume, 0);
@@ -334,7 +342,7 @@ final class FfmpegHlsPipeline {
                         }
                     }
                 }
-                java.util.concurrent.atomic.AtomicBoolean picture;
+                AtomicBoolean picture;
                 try {
                     process = startFfplay(playlistUri, startAt, volumeLinear);
                     picture = incomingPicture;
@@ -515,7 +523,7 @@ final class FfmpegHlsPipeline {
         }
         pb.redirectErrorStream(true);
         pb.redirectOutput(ProcessBuilder.Redirect.PIPE);
-        java.util.concurrent.atomic.AtomicBoolean picture = new java.util.concurrent.atomic.AtomicBoolean();
+        AtomicBoolean picture = new AtomicBoolean();
         incomingPicture = picture;
         Process process = pb.start();
         Thread pump = new Thread(() -> pumpFfplayLog(process.getInputStream(), picture), "ffmpeg-hls-log");
@@ -575,7 +583,7 @@ final class FfmpegHlsPipeline {
 
     private static final long HELD_FRAME_TIMEOUT_MS = 12_000;
 
-    private boolean waitForPicture(java.util.concurrent.atomic.AtomicBoolean picture, Process process, long myEpoch) {
+    private boolean waitForPicture(AtomicBoolean picture, Process process, long myEpoch) {
         long deadline = System.nanoTime() + HELD_FRAME_TIMEOUT_MS * 1_000_000L;
         while (System.nanoTime() < deadline) {
             if (picture != null && picture.get()) {
@@ -595,29 +603,29 @@ final class FfmpegHlsPipeline {
         return picture != null && picture.get();
     }
 
-    private void pumpFfplayLog(java.io.InputStream in, java.util.concurrent.atomic.AtomicBoolean picture) {
-        java.nio.file.Path logFile = NativeProcessLog.playerLogFile("ffmpeg");
+    private void pumpFfplayLog(InputStream in, AtomicBoolean picture) {
+        Path logFile = NativeProcessLog.playerLogFile("ffmpeg");
         try {
-            java.nio.file.Path parent = logFile.getParent();
+            Path parent = logFile.getParent();
             if (parent != null) {
-                java.nio.file.Files.createDirectories(parent);
+                Files.createDirectories(parent);
             }
-        } catch (java.io.IOException e) {
+        } catch (IOException e) {
             log.debug("HLS log dir: {}", e.toString());
         }
-        try (java.io.InputStream input = in;
-             java.io.OutputStream out = java.nio.file.Files.newOutputStream(
+        try (InputStream input = in;
+             OutputStream out = Files.newOutputStream(
                      logFile,
-                     java.nio.file.StandardOpenOption.CREATE,
-                     java.nio.file.StandardOpenOption.APPEND)) {
+                     StandardOpenOption.CREATE,
+                     StandardOpenOption.APPEND)) {
             byte[] buf = new byte[2048];
-            java.io.ByteArrayOutputStream line = new java.io.ByteArrayOutputStream();
+            ByteArrayOutputStream line = new ByteArrayOutputStream();
             int n;
             while ((n = input.read(buf)) >= 0) {
                 for (int i = 0; i < n; i++) {
                     byte b = buf[i];
                     if (b == '\r' || b == '\n') {
-                        String text = line.toString(java.nio.charset.StandardCharsets.UTF_8).replace("\u001b[2K", "");
+                        String text = line.toString(StandardCharsets.UTF_8).replace("\u001b[2K", "");
                         line.reset();
                         if (text.isBlank()) {
                             continue;
@@ -630,14 +638,14 @@ final class FfmpegHlsPipeline {
                             }
                             continue;
                         }
-                        out.write(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                        out.write(text.getBytes(StandardCharsets.UTF_8));
                         out.write('\n');
                     } else {
                         line.write(b);
                     }
                 }
             }
-        } catch (java.io.IOException e) {
+        } catch (IOException e) {
             log.debug("HLS ffplay log pump ended: {}", e.toString());
         }
     }

@@ -43,6 +43,9 @@ final class GstHlsPipeline {
 
     private volatile Runnable onEnded = () -> {};
     private volatile Runnable onPresented = () -> {};
+    private volatile Runnable onSeekDisplayed = () -> {};
+    /** Set when a user seek is accepted; cleared on the following ASYNC_DONE. */
+    private volatile boolean seekPicturePending;
     private final AtomicBoolean presented = new AtomicBoolean();
     private Pipeline pipeline;
     private Element videoSink;
@@ -129,6 +132,7 @@ final class GstHlsPipeline {
         pipeline.getBus().connect((Bus.ASYNC_DONE) source -> {
             tryPendingSeek("async-done");
             ensurePlaying("async-done");
+            noteSeekPicture();
         });
         pipeline.getBus().connect((Bus.DURATION_CHANGED) source -> tryPendingSeek("duration"));
         pipeline.getBus().connect((Bus.STATE_CHANGED) (source, old, current, pending) -> {
@@ -160,6 +164,7 @@ final class GstHlsPipeline {
         mediaClockTrusted = false;
         scrubClock.clear();
         presented.set(false);
+        seekPicturePending = false;
         uri = null;
         if (pipeline != null) {
             try {
@@ -382,6 +387,10 @@ final class GstHlsPipeline {
         this.onPresented = onPresented == null ? () -> {} : onPresented;
     }
 
+    void setOnSeekDisplayed(Runnable onSeekDisplayed) {
+        this.onSeekDisplayed = onSeekDisplayed == null ? () -> {} : onSeekDisplayed;
+    }
+
     /** First buffer on the sink is the frame that is about to be shown. */
     private void watchFirstPicture(Element sink) {
         if (sink == null) {
@@ -407,6 +416,20 @@ final class GstHlsPipeline {
             onPresented.run();
         } catch (RuntimeException e) {
             log.warn("HLS picture callback failed: {}", e.toString());
+        }
+    }
+
+    /** New picture after a user seek. Sends {@code playing} with the scrub clock. */
+    private void noteSeekPicture() {
+        if (!seekPicturePending || uri == null) {
+            return;
+        }
+        seekPicturePending = false;
+        log.info("HLS seek picture at {}s", currentPositionSeconds());
+        try {
+            onSeekDisplayed.run();
+        } catch (RuntimeException e) {
+            log.warn("HLS seek picture callback failed: {}", e.toString());
         }
     }
 
@@ -459,6 +482,9 @@ final class GstHlsPipeline {
             positionAnchorNanos = System.nanoTime();
             if (!paused) {
                 pipe.play();
+            }
+            if ("request".equals(reason) || reason.startsWith("retry-")) {
+                seekPicturePending = true;
             }
             return;
         }

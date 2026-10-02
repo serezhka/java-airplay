@@ -122,15 +122,7 @@ public class PropertyListUtil {
         loadedTimeRanges.put("start", 0.0);
         response.put("loadedTimeRanges", new NSArray(loadedTimeRanges));
         boolean hasDuration = duration > 0;
-        // Do NOT force rate=0 when position≈duration. That made short VOD ads look like a
-        // user pause; YouTube then stuck until Skip (ControlHandler pins rate=1 while waiting
-        // for playlistRemove — dump 20260916-164913 kept rate=1 through the gap).
-        //
-        // While the clock is moving, the buffer is full. A poll that says empty=true after
-        // the sender's own rate=0 freezes its timeline even when position and rate advance
-        // (session 20260928-135155: position 40→273, rate=1, UI stayed paused).
-        // At the end of the item keep empty=true / full=false: that is the end pin, and
-        // reporting a full buffer there hung VOD ad removal.
+        // Moving clock → full buffer. At end keep empty so VOD ad removal can proceed.
         boolean atEnd = hasDuration && position + 0.25 >= duration;
         if (hasDuration && rate > 0 && !atEnd) {
             response.put("playbackBufferEmpty", false);
@@ -154,7 +146,7 @@ public class PropertyListUtil {
         seekableTimeRanges.put("duration", duration);
         seekableTimeRanges.put("start", 0.0);
         response.put("seekableTimeRanges", new NSArray(seekableTimeRanges));
-        log.debug("Playback info: duration={}, position={}, rate={}", duration, position, rate);
+        log.info("Playback info: duration={} position={} rate={}", duration, position, rate);
         return response.toXMLPropertyList().getBytes(StandardCharsets.UTF_8);
     }
 
@@ -178,13 +170,9 @@ public class PropertyListUtil {
     }
 
     /**
-     * Same as {@link #preparePlaybackStateEvent(String, int, String, String)} plus the
-     * clock fields when {@code playback} has a known duration.
-     *
-     * <p>Those fields belong under {@code params}, next to the item uuid. A bare
-     * {@code state=playing}, or the same keys at the top of the event, leaves the sender
-     * on the pause UI it entered with {@code rate=0}. The reverse playing event reports
-     * the buffer as full; {@code GET /playback-info} keeps its own flag template.
+     * Reverse {@code POST /event} with {@code category=video} and a {@code state}.
+     * When {@code playback} is set for {@code playing}, clock fields go under {@code params}
+     * (top-level copies are ignored by the sender and leave the pause UI stuck).
      */
     public static byte[] preparePlaybackStateEvent(String state, int reverseSessionId,
                                                    String itemUuid, String reason,
@@ -207,7 +195,6 @@ public class PropertyListUtil {
             double position = Math.max(0, Math.min(playback.position(), duration));
             params.put("duration", duration);
             params.put("position", position);
-            // state=playing is the un-pause. rate=0 here keeps the sender paused.
             params.put("rate", 1.0);
             params.put("readyToPlay", true);
             params.put("stallCount", 0);

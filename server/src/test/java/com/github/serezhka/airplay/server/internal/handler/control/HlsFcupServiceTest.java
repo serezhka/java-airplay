@@ -87,6 +87,7 @@ class HlsFcupServiceTest {
     @AfterEach
     void tearDown() {
         service.cancelAllMasterPolls();
+        service.stopStateHeartbeat();
     }
 
     @Test
@@ -179,6 +180,26 @@ class HlsFcupServiceTest {
         assertTrue(xmls.get(3).contains("<string>shape</string>"));
         assertTrue(xmls.get(4).contains("<string>currentItemChanged</string>"));
         recording.cancelAllMasterPolls();
+        recording.stopStateHeartbeat();
+    }
+
+    @Test
+    void heartbeatAnnouncesPlayingAndPausedButNotTheEndPin() {
+        var session = sessions.getSession("beat");
+        var hls = new HlsPlaylistState(
+                "mlhls://localhost/master.m3u8",
+                "http://127.0.0.1/playlist/master.m3u8?session=beat");
+        hls.markPlaybackStarted();
+        session.setHlsPlaylistState(hls);
+
+        assertEquals("playing", service.playbackStateToAnnounce(session));
+
+        hls.setPlaybackRate(0);
+        assertEquals("paused", service.playbackStateToAnnounce(session));
+
+        hls.setPlaybackRate(1);
+        hls.setWaitingForMasterChange(true);
+        assertEquals(null, service.playbackStateToAnnounce(session));
     }
 
     @Test

@@ -87,7 +87,7 @@ public class ControlServer implements Runnable {
             serverBootstrap
                     .group(bossGroup, workerGroup)
                     .channel(serverSocketChannelClass())
-                    .localAddress(new InetSocketAddress(0)) // bind random port
+                    .localAddress(new InetSocketAddress(0))
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         public void initChannel(final SocketChannel ch) {

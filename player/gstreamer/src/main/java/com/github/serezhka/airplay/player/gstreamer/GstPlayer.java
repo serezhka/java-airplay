@@ -78,6 +78,7 @@ public class GstPlayer implements Playback {
         log.info("GStreamer debug log: {}", NativeProcessLog.playerLogFile("gstreamer"));
         hls.setOnEnded(() -> observer.onEnded());
         hls.setOnPresented(() -> observer.onPresented());
+        hls.setOnSeekDisplayed(() -> observer.onSeekDisplayed());
         int framerate = Math.max(1, fps);
         useD3d11 = GstVideoSinkFactory.hasD3d11();
         boolean useXimage = GstVideoSinkFactory.hasXimage();

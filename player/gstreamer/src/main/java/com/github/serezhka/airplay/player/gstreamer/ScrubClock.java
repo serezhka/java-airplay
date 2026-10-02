@@ -1,14 +1,8 @@
 package com.github.serezhka.airplay.player.gstreamer;
 
 /**
- * After a seek the demux clock can snap to an earlier keyframe. Publishing that
- * walks /playback-info backward, and the sender freezes its timeline.
- *
- * <p>The first sample after a seek often equals the scrub target (the wall clock
- * we already know). That must not drop the guard: the next sample is the keyframe
- * a couple of seconds earlier. While the guard is up the reported position stays
- * on the scrub clock and keeps advancing. A new {@link #arm(double)} allows a
- * backward scrub.
+ * After a seek the demux clock can snap to an earlier keyframe. Hold the scrub
+ * target (and keep advancing) until the demux clock catches up beside it.
  */
 final class ScrubClock {
 
@@ -28,13 +22,8 @@ final class ScrubClock {
         armedAt = 0;
     }
 
-    /**
-     * @param clockSeconds demux position, which right after a seek may still be the wall clock
-     * @param wallSeconds  scrub target plus time since the seek
-     */
     double report(double clockSeconds, double wallSeconds) {
         if (hold) {
-            // Demux has moved past the scrub point and sits beside the scrub clock.
             boolean caughtUp = clockSeconds >= armedAt + 0.5
                     && Math.abs(clockSeconds - wallSeconds) <= 0.25;
             if (caughtUp) {
