@@ -28,11 +28,13 @@ public class MdnsAdvertiser {
 
     private final String serverName;
     private final boolean hlsEnabled;
+    private final String pairingPublicKey;
 
     private final List<JmDNS> jmDNSList = new ArrayList<>();
 
     public void start(int airTunesPort) throws Exception {
-        log.info("HLS {}", hlsEnabled ? "enabled" : "disabled");
+        log.info("HLS {} features {} pk {}", hlsEnabled ? "enabled" : "disabled",
+                AdvertisedReceiver.featuresTxt(hlsEnabled), pairingPublicKey);
         NetworkInterface.networkInterfaces()
                 .filter(networkInterfaceFilter())
                 .flatMap(NetworkInterface::inetAddresses)
@@ -70,7 +72,6 @@ public class MdnsAdvertiser {
     private Map<String, String> airPlayMDNSProps(String deviceId) {
         HashMap<String, String> airPlayMDNSProps = new HashMap<>();
         airPlayMDNSProps.put("deviceid", deviceId);
-        // Bit 27 off (legacy pairing); LO bits 0/4/8 restored — see AdvertisedReceiver.
         airPlayMDNSProps.put("features", AdvertisedReceiver.featuresTxt(hlsEnabled));
         airPlayMDNSProps.put("srcvers", AdvertisedReceiver.SOURCE_VERSION);
         airPlayMDNSProps.put("flags", AdvertisedReceiver.MDNS_FLAGS);
@@ -78,7 +79,7 @@ public class MdnsAdvertiser {
         airPlayMDNSProps.put("model", AdvertisedReceiver.MODEL);
         airPlayMDNSProps.put("rhd", "5.6.0.0");
         airPlayMDNSProps.put("pw", "false");
-        airPlayMDNSProps.put("pk", "f3769a660475d27b4f6040381d784645e13e21c53e6d2da6a8c3d757086fc336");
+        airPlayMDNSProps.put("pk", pairingPublicKey);
         return airPlayMDNSProps;
     }
 
@@ -101,7 +102,7 @@ public class MdnsAdvertiser {
         airTunesMDNSProps.put("sf", AdvertisedReceiver.MDNS_FLAGS);
         airTunesMDNSProps.put("vs", AdvertisedReceiver.SOURCE_VERSION);
         airTunesMDNSProps.put("vn", "65537");
-        airTunesMDNSProps.put("pk", "f3769a660475d27b4f6040381d784645e13e21c53e6d2da6a8c3d757086fc336");
+        airTunesMDNSProps.put("pk", pairingPublicKey);
         return airTunesMDNSProps;
     }
 

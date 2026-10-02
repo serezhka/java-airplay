@@ -207,7 +207,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     }
 
     private void handleGetInfo(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
-        var info = PropertyListUtil.prepareInfoResponse(airPlayConfig);
+        var info = PropertyListUtil.prepareInfoResponse(airPlayConfig, sessionManager.pairingPublicKey());
         var response = createRtspResponse(request);
         response.content().writeBytes(info);
         sendResponse(ctx, request, response);

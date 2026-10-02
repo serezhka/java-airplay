@@ -1,6 +1,7 @@
 package com.github.serezhka.airplay.server.internal.handler.session;
 
 import com.github.serezhka.airplay.protocol.FairPlaySession;
+import com.github.serezhka.airplay.protocol.pairing.PairingIdentity;
 import com.github.serezhka.airplay.server.internal.AudioControlServer;
 import com.github.serezhka.airplay.server.internal.AudioServer;
 import com.github.serezhka.airplay.server.internal.VideoServer;
@@ -25,9 +26,9 @@ public class Session {
     private final Map<String, Queue<PlaylistRequest>> playlistRequests;
     private volatile HlsPlaylistState hlsPlaylistState;
 
-    Session(String id) {
+    Session(String id, PairingIdentity identity) {
         this.id = id;
-        airPlay = new FairPlaySession();
+        airPlay = new FairPlaySession(identity);
         videoServer = new VideoServer(airPlay);
         audioServer = new AudioServer(airPlay);
         audioControlServer = new AudioControlServer();

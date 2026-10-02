@@ -21,8 +21,10 @@ public class PlayerConfig {
 
     @Bean
     @ConfigurationProperties(prefix = "airplay")
-    public AirPlayConfig airPlayConfig() {
-        return new AirPlayConfig();
+    public AirPlayConfig airPlayConfig(@Value("${airplay.hls.enabled:true}") boolean hlsEnabled) {
+        AirPlayConfig config = new AirPlayConfig();
+        config.setHlsEnabled(hlsEnabled);
+        return config;
     }
 
     @Bean

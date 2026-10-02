@@ -2,6 +2,7 @@ package com.github.serezhka.airplay.server.internal.handler.util;
 
 import com.dd.plist.BinaryPropertyListWriter;
 import com.dd.plist.NSArray;
+import com.dd.plist.NSData;
 import com.dd.plist.NSDictionary;
 import com.github.serezhka.airplay.server.discovery.AdvertisedReceiver;
 import com.github.serezhka.airplay.server.AirPlayConfig;
@@ -13,7 +14,7 @@ import java.nio.charset.StandardCharsets;
 @Slf4j
 public class PropertyListUtil {
 
-    public static byte[] prepareInfoResponse(AirPlayConfig airPlayConfig) throws Exception {
+    public static byte[] prepareInfoResponse(AirPlayConfig airPlayConfig, byte[] pairingPublicKey) throws Exception {
         NSDictionary audioFormat100 = new NSDictionary();
         audioFormat100.put("audioInputFormats", 67108860);
         audioFormat100.put("audioOutputFormats", 67108860);
@@ -66,7 +67,7 @@ public class PropertyListUtil {
         response.put("sourceVersion", AdvertisedReceiver.SOURCE_VERSION);
         response.put("statusFlags", AdvertisedReceiver.STATUS_FLAGS);
         response.put("vv", AdvertisedReceiver.VV);
-        // response.put("pk", new NSData("XYMxJlYMsZoUGTcneJbw/UN7poAeshCsTDnZAHLXDag="));
+        response.put("pk", new NSData(pairingPublicKey));
 
         return BinaryPropertyListWriter.writeToArray(response);
     }
