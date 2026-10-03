@@ -24,7 +24,7 @@
 - AirPlay audio + screen mirroring
 - FairPlay decryption for mirrored streams
 - Volume control
-- YouTube HLS playback (AirPlay video from the YouTube app)
+- YouTube HLS playback (not stable, disabled by default `airplay.hls.enabled=false`)
 - Playbacks: GStreamer, FFmpeg (`ffplay`)
 - Optional session dump (protocol + decrypted media) for debugging
 
@@ -55,10 +55,10 @@ Create `application.properties` in the working directory:
 ```properties
 # airplay
 airplay.serverName=srzhka
-airplay.width=1280
-airplay.height=720
-airplay.fps=24
-airplay.hls.enabled=true
+airplay.width=1920
+airplay.height=1080
+airplay.fps=60
+airplay.hls.enabled=false
 # player (gstreamer, ffmpeg)
 player.implementation=gstreamer
 player.tray.enabled=true
