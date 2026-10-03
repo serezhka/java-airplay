@@ -37,7 +37,14 @@ public class VideoHandler extends ChannelInboundHandlerAdapter {
                 dataConsumer.onVideo(spsPps);
             }
         } catch (Exception e) {
-            log.error(e.getMessage(), e);
+            // Mirror NALs still arrive for a moment after HLS tears the video process down.
+            // A stack trace per packet stalls the event loop and delays /play.
+            if (e instanceof IllegalStateException && e.getMessage() != null
+                    && e.getMessage().contains("not running")) {
+                log.debug("Dropping video packet: {}", e.getMessage());
+            } else {
+                log.error(e.getMessage(), e);
+            }
         }
     }
 

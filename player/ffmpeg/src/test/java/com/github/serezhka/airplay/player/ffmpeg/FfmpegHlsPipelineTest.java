@@ -19,6 +19,16 @@ class FfmpegHlsPipelineTest {
     }
 
     @Test
+    void statusLineWithClockCountsAsPicture() {
+        assertFalse(FfmpegHlsPipeline.ffplayStatusShowsPicture("    nan M-V:    nan fd=   0 aq=    0KB vq=   28KB"));
+        assertFalse(FfmpegHlsPipeline.ffplayStatusShowsPicture("    nan    :  0.000 fd=   0 aq=    0KB vq=    0KB"));
+        assertTrue(FfmpegHlsPipeline.ffplayStatusShowsPicture("   1.56 M-A: -0.000 fd=   0 aq=    9KB vq=    0KB"));
+        assertEquals(1.56, FfmpegHlsPipeline.statusClockSeconds("   1.56 M-A: -0.000 fd=   0 aq=    9KB vq=    0KB"), 0.001);
+        assertEquals(null, FfmpegHlsPipeline.statusClockSeconds("    nan M-V:    nan fd=   0 aq=    0KB vq=   28KB"));
+        assertTrue(FfmpegHlsPipeline.ffplayStatusShowsPicture("   0.40 M-V:  0.000 fd=   0 aq=    0KB vq=   12KB"));
+    }
+
+    @Test
     void notesEndListDuration() {
         hls.noteMediaDuration(6.0);
         hls.noteMediaDuration(13.6);
@@ -64,14 +74,11 @@ class FfmpegHlsPipelineTest {
             hls.start("http://127.0.0.1:9/missing.m3u8", 1.0);
             hls.noteMediaDuration(60);
             hls.seek(5.0);
-            // Position is frozen while ffplay is down; seek still updates the base.
-            assertEquals(5.0, hls.currentPositionSeconds(), 0.1);
-
-            // Simulate HLS/TS segment PTS restart near zero (the phone scrubber bug).
-            hls.noteDemuxTimestampMicros(64_944L);
+            assertEquals(5.0, hls.currentPositionSeconds(), 0.15);
+            Thread.sleep(250);
             double after = hls.currentPositionSeconds();
-            assertEquals(5.0, after, 0.1,
-                    "reported position must not jump on demux PTS reset: " + after);
+            assertTrue(after > 5.05, "scrub clock must keep moving while ffplay is down: " + after);
+            assertTrue(after < 5.8, "scrub clock ran away: " + after);
         } finally {
             System.clearProperty("airplay.ffmpeg.hls.headless");
         }
@@ -99,6 +106,9 @@ class FfmpegHlsPipelineTest {
             hls.start("http://127.0.0.1:9/missing.m3u8", 1.0, 42.5);
             hls.noteMediaDuration(120);
             assertEquals(42.5, hls.currentPositionSeconds(), 0.2);
+            Thread.sleep(200);
+            assertEquals(42.5, hls.currentPositionSeconds(), 0.05,
+                    "clock must stay put until ffplay reports a timestamp");
         } finally {
             System.clearProperty("airplay.ffmpeg.hls.headless");
         }

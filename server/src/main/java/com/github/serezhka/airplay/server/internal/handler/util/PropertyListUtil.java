@@ -2,6 +2,7 @@ package com.github.serezhka.airplay.server.internal.handler.util;
 
 import com.dd.plist.BinaryPropertyListWriter;
 import com.dd.plist.NSArray;
+import com.dd.plist.NSData;
 import com.dd.plist.NSDictionary;
 import com.github.serezhka.airplay.server.discovery.AdvertisedReceiver;
 import com.github.serezhka.airplay.server.AirPlayConfig;
@@ -13,7 +14,7 @@ import java.nio.charset.StandardCharsets;
 @Slf4j
 public class PropertyListUtil {
 
-    public static byte[] prepareInfoResponse(AirPlayConfig airPlayConfig) throws Exception {
+    public static byte[] prepareInfoResponse(AirPlayConfig airPlayConfig, byte[] pairingPublicKey) throws Exception {
         NSDictionary audioFormat100 = new NSDictionary();
         audioFormat100.put("audioInputFormats", 67108860);
         audioFormat100.put("audioOutputFormats", 67108860);
@@ -58,7 +59,7 @@ public class PropertyListUtil {
         response.put("audioFormats", audioFormats);
         response.put("audioLatencies", audioLatencies);
         response.put("displays", displays);
-        response.put("features", AdvertisedReceiver.FEATURES);
+        response.put("features", AdvertisedReceiver.features(airPlayConfig.isHlsEnabled()));
         response.put("keepAliveSendStatsAsBody", 1);
         response.put("model", AdvertisedReceiver.MODEL);
         response.put("name", "Apple TV");
@@ -66,7 +67,7 @@ public class PropertyListUtil {
         response.put("sourceVersion", AdvertisedReceiver.SOURCE_VERSION);
         response.put("statusFlags", AdvertisedReceiver.STATUS_FLAGS);
         response.put("vv", AdvertisedReceiver.VV);
-        // response.put("pk", new NSData("XYMxJlYMsZoUGTcneJbw/UN7poAeshCsTDnZAHLXDag="));
+        response.put("pk", new NSData(pairingPublicKey));
 
         return BinaryPropertyListWriter.writeToArray(response);
     }
@@ -122,15 +123,14 @@ public class PropertyListUtil {
         loadedTimeRanges.put("start", 0.0);
         response.put("loadedTimeRanges", new NSArray(loadedTimeRanges));
         boolean hasDuration = duration > 0;
-        // Do NOT force rate=0 when position≈duration. That made short VOD ads look like a
-        // user pause; YouTube then stuck until Skip (ControlHandler pins rate=1 while waiting
-        // for playlistRemove — dump 20260916-164913 kept rate=1 through the gap).
-        //
-        // Buffer flags match known receiver /playback-info templates (and
-        // reverse_engineering/get_playback_info_response.txt): empty=true, full=false,
-        // keepUp=true while readyToPlay. Flipping empty/full with hasDuration diverged from
-        // that and is a candidate cause of VOD ad EOS hangs.
-        if (hasDuration) {
+        // Moving clock → full buffer. At end keep empty so VOD ad removal can proceed.
+        boolean atEnd = hasDuration && position + 0.25 >= duration;
+        if (hasDuration && rate > 0 && !atEnd) {
+            response.put("playbackBufferEmpty", false);
+            response.put("playbackBufferFull", true);
+            response.put("playbackLikelyToKeepUp", true);
+            response.put("readyToPlay", true);
+        } else if (hasDuration) {
             response.put("playbackBufferEmpty", true);
             response.put("playbackBufferFull", false);
             response.put("playbackLikelyToKeepUp", true);
@@ -147,7 +147,7 @@ public class PropertyListUtil {
         seekableTimeRanges.put("duration", duration);
         seekableTimeRanges.put("start", 0.0);
         response.put("seekableTimeRanges", new NSArray(seekableTimeRanges));
-        log.debug("Playback info: duration={}, position={}, rate={}", duration, position, rate);
+        log.info("Playback info: duration={} position={} rate={}", duration, position, rate);
         return response.toXMLPropertyList().getBytes(StandardCharsets.UTF_8);
     }
 
@@ -167,6 +167,17 @@ public class PropertyListUtil {
      */
     public static byte[] preparePlaybackStateEvent(String state, int reverseSessionId,
                                                    String itemUuid, String reason) {
+        return preparePlaybackStateEvent(state, reverseSessionId, itemUuid, reason, null);
+    }
+
+    /**
+     * Reverse {@code POST /event} with {@code category=video} and a {@code state}.
+     * When {@code playback} is set for {@code playing}, clock fields go under {@code params}
+     * (top-level copies are ignored by the sender and leave the pause UI stuck).
+     */
+    public static byte[] preparePlaybackStateEvent(String state, int reverseSessionId,
+                                                   String itemUuid, String reason,
+                                                   Playback.Info playback) {
         NSDictionary event = new NSDictionary();
         event.put("category", "video");
         event.put("sessionID", reverseSessionId);
@@ -174,12 +185,38 @@ public class PropertyListUtil {
         if (reason != null) {
             event.put("reason", reason);
         }
+        NSDictionary params = new NSDictionary();
+        boolean hasParams = false;
         if (itemUuid != null) {
-            NSDictionary params = new NSDictionary();
             params.put("uuid", itemUuid);
+            hasParams = true;
+        }
+        if (playback != null && playback.duration() > 0 && "playing".equals(state)) {
+            double duration = playback.duration();
+            double position = Math.max(0, Math.min(playback.position(), duration));
+            params.put("duration", duration);
+            params.put("position", position);
+            params.put("rate", 1.0);
+            params.put("readyToPlay", true);
+            params.put("stallCount", 0);
+            params.put("playbackBufferEmpty", false);
+            params.put("playbackBufferFull", true);
+            params.put("playbackLikelyToKeepUp", true);
+            params.put("loadedTimeRanges", new NSArray(timeRange(duration, 0)));
+            params.put("seekableTimeRanges", new NSArray(timeRange(duration, 0)));
+            hasParams = true;
+        }
+        if (hasParams) {
             event.put("params", params);
         }
         return event.toXMLPropertyList().getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static NSDictionary timeRange(double duration, double start) {
+        NSDictionary range = new NSDictionary();
+        range.put("duration", duration);
+        range.put("start", start);
+        return range;
     }
 
     /**

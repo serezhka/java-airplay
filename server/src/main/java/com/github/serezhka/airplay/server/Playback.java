@@ -57,7 +57,19 @@ public interface Playback {
     interface Observer {
         void onEnded();
 
-        Observer NONE = () -> {};
+        /** First picture is on the display. Until then the sender stays on {@code loading}. */
+        default void onPresented() {
+        }
+
+        /** A seek has a picture. Tell the sender {@code playing} at the real position. */
+        default void onSeekDisplayed() {
+        }
+
+        Observer NONE = new Observer() {
+            @Override
+            public void onEnded() {
+            }
+        };
     }
 
     /** {@code rate}: {@code 0} paused, {@code 1} playing ({@code /playback-info}, {@code /rate}). */

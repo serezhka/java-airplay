@@ -33,7 +33,38 @@ public class GstPlayer implements Playback {
         GLib.setEnv("GST_DEBUG_NO_COLOR", "1", true);
         GLib.setEnv("GST_DEBUG_FILE", NativeProcessLog.playerLogFile("gstreamer").toString(), true);
         GLib.setEnv("GST_DEBUG", System.getProperty("airplay.gst.debug", "3"), true);
+        preferSoftwareVideoDecode();
         Gst.init(Version.of(1, 10), "BasicPipeline");
+    }
+
+    /**
+     * Device H.264 decoders drop frames when they have no usable context.
+     * <p>
+     * The adaptive demuxer with a built-in HTTP client completes those requests on
+     * whatever thread stops the pipeline. Stopping it from the control thread
+     * aborts the process ({@code playlistRemove}). The other demuxer closes its
+     * HTTP source on that source's own thread.
+     */
+    private static void preferSoftwareVideoDecode() {
+        String[] demote = {
+                "nvh264dec", "nvh265dec", "nvvp8dec", "nvvp9dec", "nvav1dec",
+                "hlsdemux2"
+        };
+        String rank = System.getenv("GST_PLUGIN_FEATURE_RANK");
+        if (rank == null) {
+            rank = "";
+        }
+        for (String feature : demote) {
+            if (rank.contains(feature + ":")) {
+                continue;
+            }
+            if (!rank.isBlank()) {
+                rank = rank + ",";
+            }
+            rank = rank + feature + ":NONE";
+        }
+        GLib.setEnv("GST_PLUGIN_FEATURE_RANK", rank, true);
+        log.info("GStreamer feature rank: {}", rank);
     }
 
     private final Pipeline h264Pipeline;
@@ -63,6 +94,8 @@ public class GstPlayer implements Playback {
     public GstPlayer(int fps) {
         log.info("GStreamer debug log: {}", NativeProcessLog.playerLogFile("gstreamer"));
         hls.setOnEnded(() -> observer.onEnded());
+        hls.setOnPresented(() -> observer.onPresented());
+        hls.setOnSeekDisplayed(() -> observer.onSeekDisplayed());
         int framerate = Math.max(1, fps);
         useD3d11 = GstVideoSinkFactory.hasD3d11();
         boolean useXimage = GstVideoSinkFactory.hasXimage();

@@ -11,6 +11,7 @@ import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpVersion;
 import lombok.extern.slf4j.Slf4j;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Map;
@@ -31,6 +32,14 @@ public class HlsFcupService {
      * N=3 (~6s) balances freshness vs reverse /event channel load (playlistRemove / next /play).
      */
     private static final int MEDIA_RESWEEP_EVERY_MASTER_POLLS = 3;
+    /** If no frame arrives, announce anyway so the sender is not stuck on loading. */
+    private static final long PRESENTATION_FALLBACK_MS = 8_000;
+    /**
+     * Re-assert {@code playing} or {@code paused} on the reverse channel. The sender's
+     * play/pause icon follows these events; {@code /playback-info} only moves the timeline.
+     * Skipped while the channel is busy so FCUP and the VOD end burst are not queued behind it.
+     */
+    private static final long STATE_HEARTBEAT_MS = 2_000;
 
     private final SessionManager sessionManager;
     private final Playback airPlayConsumer;
@@ -40,13 +49,21 @@ public class HlsFcupService {
         return thread;
     });
     private final Map<String, ScheduledFuture<?>> masterPollTasks = new ConcurrentHashMap<>();
+    private final Map<String, ScheduledFuture<?>> presentationFallbacks = new ConcurrentHashMap<>();
     /** One in-flight reverse {@code POST /event} per session (no HTTP pipelining). */
     private final Map<String, ReverseQueue> reverseQueues = new ConcurrentHashMap<>();
+    private final ScheduledFuture<?> stateHeartbeat;
 
     public HlsFcupService(SessionManager sessionManager, Playback airPlayConsumer) {
         this.sessionManager = sessionManager;
         this.airPlayConsumer = airPlayConsumer;
-        startSignalFileWatcher();
+        this.stateHeartbeat = scheduler.scheduleAtFixedRate(
+                this::pushPlaybackStates, STATE_HEARTBEAT_MS, STATE_HEARTBEAT_MS, TimeUnit.MILLISECONDS);
+    }
+
+    /** Stop the state re-assert. Master polls use the same executor and keep running. */
+    public void stopStateHeartbeat() {
+        stateHeartbeat.cancel(false);
     }
 
     public void refreshActivePlaylists() {
@@ -75,72 +92,7 @@ public class HlsFcupService {
                 log.info("HLS ended (VOD actionAtItemEnd={}), emit EOS reverse-event burst session={}",
                         hls.getActionAtItemEnd(), session.getId());
                 hls.setPlaybackRate(1);
-                PlaybackInfoOverride.clear();
                 sendVodEosEventBurst(session);
-            }
-        }
-    }
-
-    /** Poll {@code /tmp/airplay-hls-signal} for manual reverse/FCUP/playback-info experiments. */
-    private void startSignalFileWatcher() {
-        scheduler.scheduleAtFixedRate(this::drainSignalFile, 500, 250, TimeUnit.MILLISECONDS);
-    }
-
-    private void drainSignalFile() {
-        java.nio.file.Path path = java.nio.file.Path.of("/tmp/airplay-hls-signal");
-        if (!java.nio.file.Files.isRegularFile(path)) {
-            return;
-        }
-        try {
-            String raw = java.nio.file.Files.readString(path).trim();
-            java.nio.file.Files.deleteIfExists(path);
-            if (raw.isEmpty()) {
-                return;
-            }
-            for (String line : raw.split("\\R")) {
-                applySignal(line.trim());
-            }
-        } catch (Exception e) {
-            log.warn("airplay-hls-signal: {}", e.toString());
-        }
-    }
-
-    private void applySignal(String line) {
-        if (line.isEmpty() || line.startsWith("#")) {
-            return;
-        }
-        log.warn("HLS debug signal: {}", line);
-        for (Session session : sessionManager.allSessions()) {
-            var hls = session.getHlsPlaylistState();
-            if (hls == null || !hls.isPlaybackStarted()) {
-                continue;
-            }
-            switch (line) {
-                case "loading", "playing", "paused", "stopped" -> sendPlaybackStateEvent(session, line);
-                case "fcup-master" -> {
-                    requestMasterRefresh(session);
-                    scheduleMasterPoll(session);
-                }
-                case "rate0" -> hls.setPlaybackRate(0);
-                case "rate1" -> hls.setPlaybackRate(1);
-                case "clear-wait" -> {
-                    hls.setWaitingForMasterChange(false);
-                    PlaybackInfoOverride.clear();
-                }
-                case "clear-override" -> PlaybackInfoOverride.clear();
-                default -> {
-                    if (line.startsWith("info:")) {
-                        String[] p = line.substring(5).split(",");
-                        if (p.length >= 3) {
-                            PlaybackInfoOverride.set(
-                                    Double.parseDouble(p[0].trim()),
-                                    Double.parseDouble(p[1].trim()),
-                                    Double.parseDouble(p[2].trim()));
-                        }
-                    } else {
-                        log.warn("Unknown HLS debug signal: {}", line);
-                    }
-                }
             }
         }
     }
@@ -170,8 +122,7 @@ public class HlsFcupService {
             } else {
                 hls.updateMasterPlaylist(rewrittenBody);
             }
-            airPlayConsumer.onPlaylist(hls.getPlaylistUriLocal());
-            sendPlaybackStateEvent(session, "playing");
+            beginDisplayedPlayback(session);
             Double seek = hls.takePendingSeekSeconds();
             if (seek != null && seek > 0) {
                 airPlayConsumer.onSeek(seek);
@@ -219,8 +170,7 @@ public class HlsFcupService {
             cancelMasterPoll(session.getId());
             hls.setWaitingForMasterChange(false);
             hls.setPlaybackRate(1);
-            airPlayConsumer.onPlaylist(hls.getPlaylistUriLocal());
-            sendPlaybackStateEvent(session, "playing");
+            beginDisplayedPlayback(session);
         } else {
             log.info("HLS media unchanged after EOS, polling master session {}", session.getId());
             scheduleMasterPoll(session);
@@ -230,6 +180,7 @@ public class HlsFcupService {
     public void cancelAllMasterPolls() {
         for (Session session : sessionManager.allSessions()) {
             cancelMasterPoll(session.getId());
+            cancelPresentationFallback(session.getId());
             var hls = session.getHlsPlaylistState();
             if (hls != null) {
                 hls.setWaitingForMasterChange(false);
@@ -238,6 +189,7 @@ public class HlsFcupService {
     }
 
     public void clearReverseQueue(Session session) {
+        cancelPresentationFallback(session.getId());
         ReverseQueue queue = reverseQueues.remove(session.getId());
         if (queue != null) {
             synchronized (queue) {
@@ -257,6 +209,8 @@ public class HlsFcupService {
                 }
                 synchronized (queue) {
                     queue.inFlight = false;
+                    log.info("Reverse /event accepted, {} still queued session={}",
+                            queue.pending.size(), session.getId());
                     flushReverseQueue(session, queue);
                 }
                 return;
@@ -291,17 +245,167 @@ public class HlsFcupService {
         }
     }
 
-    public void sendPlaybackStateEvent(Session session, String state) {
+    /**
+     * Start the player but keep the sender on {@code loading} until a frame is visible.
+     * Announcing {@code playing} at {@code pipeline.play()} makes the phone run ahead of the display.
+     */
+    public void beginDisplayedPlayback(Session session) {
         var hls = session.getHlsPlaylistState();
+        if (hls == null) {
+            return;
+        }
+        hls.awaitPresentation();
+        airPlayConsumer.onPlaylist(hls.getPlaylistUriLocal());
+        schedulePresentationFallback(session);
+    }
+
+    /** Replacement picture after a seek — refresh {@code playing} with the real clock. */
+    public void onSeekDisplayed() {
+        for (Session session : sessionManager.allSessions()) {
+            var hls = session.getHlsPlaylistState();
+            if (hls == null) {
+                continue;
+            }
+            hls.endScrubGesture();
+            log.info("Announcing playing (seek picture) session={}", session.getId());
+            sendPlaybackStateEvent(session, "playing");
+        }
+    }
+
+    /** First picture is on the display. Announce {@code playing} once. */
+    public void onPlaybackPresented() {
+        for (Session session : sessionManager.allSessions()) {
+            announcePlayingIfPending(session, "picture");
+        }
+    }
+
+    private void schedulePresentationFallback(Session session) {
+        cancelPresentationFallback(session.getId());
+        String sessionId = session.getId();
+        ScheduledFuture<?> future = scheduler.schedule(() -> {
+            presentationFallbacks.remove(sessionId);
+            Session current = sessionManager.getSession(sessionId);
+            if (current == null) {
+                return;
+            }
+            announcePlayingIfPending(current, "fallback");
+        }, PRESENTATION_FALLBACK_MS, TimeUnit.MILLISECONDS);
+        presentationFallbacks.put(sessionId, future);
+    }
+
+    private void announcePlayingIfPending(Session session, String reason) {
+        var hls = session.getHlsPlaylistState();
+        if (hls == null || !hls.claimPresentation()) {
+            return;
+        }
+        cancelPresentationFallback(session.getId());
+        log.info("Announcing playing ({}) session={}", reason, session.getId());
+        sendPlaybackStateEvent(session, "playing");
+    }
+
+    private void cancelPresentationFallback(String sessionId) {
+        ScheduledFuture<?> future = presentationFallbacks.remove(sessionId);
+        if (future != null) {
+            future.cancel(false);
+        }
+    }
+
+    /**
+     * State to re-assert, or {@code null} when the sender must not hear one
+     * (still loading the first frame, waiting for the next item, or at VOD end).
+     */
+    String playbackStateToAnnounce(Session session) {
+        var hls = session.getHlsPlaylistState();
+        if (hls == null || !hls.isPlaybackStarted() || hls.isAwaitingPresentation()
+                || hls.isWaitingForMasterChange()) {
+            return null;
+        }
+        if (hls.getPlaybackRate() <= 0) {
+            return "paused";
+        }
+        if (!hls.isLivePlaylist()) {
+            Playback.Info info = airPlayConsumer.info();
+            double duration = hls.getMediaDurationSeconds() > 0
+                    ? hls.getMediaDurationSeconds()
+                    : info.duration();
+            if (duration > 0 && info.position() + 0.25 >= duration) {
+                return null;
+            }
+        }
+        return "playing";
+    }
+
+    private void pushPlaybackStates() {
+        for (Session session : sessionManager.allSessions()) {
+            try {
+                String state = playbackStateToAnnounce(session);
+                if (state == null) {
+                    continue;
+                }
+                offerPlaybackState(session, state);
+            } catch (RuntimeException e) {
+                log.debug("Playback state heartbeat failed session={}: {}", session.getId(), e.toString());
+            }
+        }
+    }
+
+    /**
+     * Enqueue only when the reverse channel is idle. Checked under the queue lock so a
+     * pause or end burst that arrived in the same moment is not followed by a stale
+     * {@code playing}.
+     */
+    private void offerPlaybackState(Session session, String state) {
+        var eventContext = session.getReverseContexts().get("event");
+        if (eventContext == null || !eventContext.channel().isActive()) {
+            return;
+        }
+        byte[] body = playbackStateBody(session, state);
+        ReverseQueue queue = reverseQueues.computeIfAbsent(session.getId(), id -> new ReverseQueue());
+        synchronized (queue) {
+            if (queue.inFlight || !queue.pending.isEmpty()) {
+                return;
+            }
+            queue.pending.add(body);
+            flushReverseQueue(session, queue);
+        }
+    }
+
+    public void sendPlaybackStateEvent(Session session, String state) {
+        enqueueReverseEvent(session, playbackStateBody(session, state));
+    }
+
+    private byte[] playbackStateBody(Session session, String state) {
+        var hls = session.getHlsPlaylistState();
+        Playback.Info playback = null;
+        if ("playing".equals(state)) {
+            Playback.Info info = airPlayConsumer.info();
+            double duration = info.duration();
+            double position = info.position();
+            if (hls != null && hls.getMediaDurationSeconds() > 0) {
+                duration = hls.getMediaDurationSeconds();
+            }
+            if (duration > 0) {
+                position = Math.min(Math.max(0, position), duration);
+                // The event says playing, so the clock rate is 1 even if the player
+                // was still paused when this sample was taken.
+                playback = new Playback.Info(duration, position, 1);
+            }
+        }
         byte[] body;
         if (hls != null) {
             body = PropertyListUtil.preparePlaybackStateEvent(
-                    state, hls.getReverseEventSessionId(), hls.getItemUuid(), null);
+                    state, hls.getReverseEventSessionId(), hls.getItemUuid(), null, playback);
         } else {
             body = PropertyListUtil.preparePlaybackStateEvent(state);
         }
-        log.info("Playback state event: {} session={}", state, session.getId());
-        enqueueReverseEvent(session, body);
+        String xml = new String(body, StandardCharsets.UTF_8).replaceAll("\\s+", " ").trim();
+        if (playback != null) {
+            log.info("Playback state event: {} position={} rate={} session={} xml={}",
+                    state, playback.position(), playback.rate(), session.getId(), xml);
+        } else {
+            log.info("Playback state event: {} session={} xml={}", state, session.getId(), xml);
+        }
+        return body;
     }
 
     /**

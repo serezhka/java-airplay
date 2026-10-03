@@ -8,6 +8,9 @@ import org.freedesktop.gstreamer.Element;
 import org.freedesktop.gstreamer.ElementFactory;
 import org.freedesktop.gstreamer.Format;
 import org.freedesktop.gstreamer.Gst;
+import org.freedesktop.gstreamer.Pad;
+import org.freedesktop.gstreamer.PadProbeReturn;
+import org.freedesktop.gstreamer.PadProbeType;
 import org.freedesktop.gstreamer.Pipeline;
 import org.freedesktop.gstreamer.State;
 import org.freedesktop.gstreamer.event.SeekFlags;
@@ -20,6 +23,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -38,6 +42,11 @@ final class GstHlsPipeline {
     });
 
     private volatile Runnable onEnded = () -> {};
+    private volatile Runnable onPresented = () -> {};
+    private volatile Runnable onSeekDisplayed = () -> {};
+    /** Set when a user seek is accepted; cleared on the following ASYNC_DONE. */
+    private volatile boolean seekPicturePending;
+    private final AtomicBoolean presented = new AtomicBoolean();
     private Pipeline pipeline;
     private Element videoSink;
     private JFrame window;
@@ -55,18 +64,35 @@ final class GstHlsPipeline {
     private volatile long startedAtNanos;
     /** Wall-clock position must not run until GST reports a real media clock (avoids black-screen EOS). */
     private volatile boolean mediaClockTrusted;
+    private final ScrubClock scrubClock = new ScrubClock();
+    private volatile double volumeLinear = 1.0;
+    /** First open uses playbin3. A slot failure rebuilds once with playbin. */
+    private volatile boolean usePlaybin3 = true;
+    private volatile int recoveries;
+    private volatile int pipelineGeneration;
+    private final AtomicBoolean recovering = new AtomicBoolean();
+    private final AtomicBoolean gaveUp = new AtomicBoolean();
+    private final Object pipelineLock = new Object();
 
     void start(String playlistUri, double volumeLinear) {
-        stop();
-        uri = playlistUri;
-        paused = false;
-        ended = false;
-        positionBaseSeconds = 0;
-        positionAnchorNanos = System.nanoTime();
-        startedAtNanos = System.nanoTime();
-        lastEndedNotifyNanos = 0;
-        mediaClockTrusted = false;
+        synchronized (pipelineLock) {
+            stop();
+            uri = playlistUri;
+            paused = false;
+            ended = false;
+            positionBaseSeconds = 0;
+            positionAnchorNanos = System.nanoTime();
+            startedAtNanos = System.nanoTime();
+            lastEndedNotifyNanos = 0;
+            mediaClockTrusted = false;
+            this.volumeLinear = clampVolume(volumeLinear);
+            usePlaybin3 = ElementFactory.find("playbin3") != null;
+            recoveries = 0;
+            buildPipeline();
+        }
+    }
 
+    private void buildPipeline() {
         boolean headless = Boolean.parseBoolean(System.getProperty("airplay.gst.hls.headless", "false"));
         GstVideoSinkFactory.Result display = null;
         if (headless) {
@@ -80,11 +106,13 @@ final class GstHlsPipeline {
             videoSink = display.sink();
         }
 
-        String launch = ElementFactory.find("playbin3") != null ? "playbin3 name=hls" : "playbin name=hls";
+        String launch = usePlaybin3 ? "playbin3 name=hls" : "playbin name=hls";
+        final int generation = ++pipelineGeneration;
         pipeline = (Pipeline) Gst.parseLaunch(launch);
-        pipeline.set("uri", playlistUri);
-        pipeline.set("volume", clampVolume(volumeLinear));
+        pipeline.set("uri", uri);
+        pipeline.set("volume", volumeLinear);
         pipeline.set("video-sink", videoSink);
+        watchFirstPicture(videoSink);
         log.info("HLS pipeline using {} headless={}", launch.split(" ")[0], headless);
 
         if (!headless && display != null && display.overlay() && display.canvas() != null) {
@@ -104,26 +132,47 @@ final class GstHlsPipeline {
         }
 
         pipeline.getBus().connect((Bus.EOS) source -> {
-            if (uri == null) {
+            if (generation != pipelineGeneration || uri == null) {
                 return;
             }
             markEndedAndRefresh("EOS");
         });
         pipeline.getBus().connect((Bus.ERROR) (source, code, message) -> {
+            if (generation != pipelineGeneration || uri == null || ended) {
+                return;
+            }
             log.error("HLS pipeline error: code={} message={}", code, message);
             // hlsdemux2 "Invalid manifest" after ad often never delivers bus EOS — treat as end.
-            if (uri != null && message != null && message.toLowerCase().contains("manifest")) {
+            if (message != null && message.toLowerCase().contains("manifest")) {
                 markEndedAndRefresh("ERROR " + message);
+                return;
             }
+            scheduleRebuild(code, message);
         });
-        pipeline.getBus().connect((Bus.WARNING) (source, code, message) ->
-                log.warn("HLS pipeline warning: code={} message={}", code, message));
+        pipeline.getBus().connect((Bus.WARNING) (source, code, message) -> {
+            if (generation != pipelineGeneration) {
+                return;
+            }
+            log.warn("HLS pipeline warning: code={} message={}", code, message);
+        });
         pipeline.getBus().connect((Bus.ASYNC_DONE) source -> {
+            if (generation != pipelineGeneration) {
+                return;
+            }
             tryPendingSeek("async-done");
             ensurePlaying("async-done");
+            noteSeekPicture();
         });
-        pipeline.getBus().connect((Bus.DURATION_CHANGED) source -> tryPendingSeek("duration"));
+        pipeline.getBus().connect((Bus.DURATION_CHANGED) source -> {
+            if (generation != pipelineGeneration) {
+                return;
+            }
+            tryPendingSeek("duration");
+        });
         pipeline.getBus().connect((Bus.STATE_CHANGED) (source, old, current, pending) -> {
+            if (generation != pipelineGeneration) {
+                return;
+            }
             if (source == pipeline && current == State.PLAYING) {
                 tryPendingSeek("playing");
             }
@@ -134,23 +183,66 @@ final class GstHlsPipeline {
         // playbin3 + hlsdemux2 often never posts bus EOS for short VOD ENDLIST ads;
         // poll playlist duration vs position (same idea as the FFmpeg player ENDLIST path).
         endWatch = seekScheduler.scheduleAtFixedRate(this::checkPositionAtEnd, 400, 200, TimeUnit.MILLISECONDS);
-        log.info("HLS pipeline started uri={}", playlistUri);
+        log.info("HLS pipeline started uri={}", uri);
     }
 
-    void stop() {
+    /**
+     * playbin3 drops the picture when decodebin3 cannot take another stream
+     * (logged as a missing plug-in) and then leaves the last frame on screen.
+     * Rebuild once with playbin, which keeps decoding the streams it can show.
+     */
+    private void scheduleRebuild(int code, String message) {
+        if (recoveries >= 1) {
+            if (!recovering.get() && gaveUp.compareAndSet(false, true)) {
+                log.warn("HLS pipeline error after restart, leaving it: code={} message={}", code, message);
+            }
+            return;
+        }
+        if (!recovering.compareAndSet(false, true)) {
+            return;
+        }
+        recoveries++;
+        usePlaybin3 = false;
+        Double pending = pendingSeekSeconds;
+        double resumeAt = pending != null ? pending : (mediaClockTrusted ? wallClockSeconds() : positionBaseSeconds);
+        final int token = pipelineGeneration;
+        final String keepUri = uri;
+        log.info("HLS playbin3 failed (code={} {}), restarting with playbin at {}s", code, message, resumeAt);
+        seekScheduler.execute(() -> {
+            try {
+                synchronized (pipelineLock) {
+                    if (token != pipelineGeneration || keepUri == null || !keepUri.equals(uri) || ended) {
+                        return;
+                    }
+                    boolean wasPaused = paused;
+                    disposePipeline();
+                    if (!keepUri.equals(uri) || ended) {
+                        return;
+                    }
+                    buildPipeline();
+                    if (resumeAt > 0.5) {
+                        pendingSeekSeconds = resumeAt;
+                        seekAttempts.set(0);
+                        tryPendingSeek("restart");
+                    }
+                    if (wasPaused && pipeline != null) {
+                        pipeline.pause();
+                        paused = true;
+                    }
+                }
+            } catch (RuntimeException e) {
+                log.warn("HLS pipeline restart failed: {}", e.toString());
+            } finally {
+                recovering.set(false);
+            }
+        });
+    }
+
+    /** Drop the current pipeline without forgetting the playlist or the clock. */
+    private void disposePipeline() {
+        pipelineGeneration++;
         cancelSeekRetry();
         cancelEndWatch();
-        pendingSeekSeconds = null;
-        seekAttempts.set(0);
-        paused = false;
-        ended = false;
-        positionBaseSeconds = 0;
-        positionAnchorNanos = 0;
-        playlistDurationSeconds = 0;
-        lastEndedNotifyNanos = 0;
-        startedAtNanos = 0;
-        mediaClockTrusted = false;
-        uri = null;
         if (pipeline != null) {
             try {
                 pipeline.setState(State.NULL);
@@ -171,12 +263,37 @@ final class GstHlsPipeline {
         }
     }
 
+    void stop() {
+        synchronized (pipelineLock) {
+            cancelSeekRetry();
+            cancelEndWatch();
+            pendingSeekSeconds = null;
+            seekAttempts.set(0);
+            paused = false;
+            ended = false;
+            positionBaseSeconds = 0;
+            positionAnchorNanos = 0;
+            playlistDurationSeconds = 0;
+            lastEndedNotifyNanos = 0;
+            startedAtNanos = 0;
+            mediaClockTrusted = false;
+            scrubClock.clear();
+            presented.set(false);
+            seekPicturePending = false;
+            gaveUp.set(false);
+            uri = null;
+            disposePipeline();
+        }
+    }
+
     void pause() {
         if (pipeline == null || ended) {
             return;
         }
-        double gstPos = querySeconds(false);
-        positionBaseSeconds = gstPos > 0 ? gstPos : currentPositionSeconds();
+        // Anchor on the position we already told the sender. A raw demux query
+        // here is the earlier keyframe and would walk the timeline backward.
+        double reported = currentPositionSeconds();
+        positionBaseSeconds = reported > 0 ? reported : positionBaseSeconds;
         paused = true;
         pipeline.pause();
         log.info("HLS paused at {}s", positionBaseSeconds);
@@ -214,6 +331,9 @@ final class GstHlsPipeline {
         ended = false;
         positionBaseSeconds = positionSeconds;
         positionAnchorNanos = System.nanoTime();
+        // Demux often answers with the previous picture or an earlier keyframe.
+        // Hold the scrub clock so /playback-info does not step backward.
+        scrubClock.arm(positionSeconds);
         paused = false;
         if (pipeline != null) {
             pipeline.play();
@@ -230,8 +350,9 @@ final class GstHlsPipeline {
     }
 
     void setVolume(double volumeLinear) {
+        this.volumeLinear = clampVolume(volumeLinear);
         if (pipeline != null) {
-            pipeline.set("volume", clampVolume(volumeLinear));
+            pipeline.set("volume", this.volumeLinear);
         }
     }
 
@@ -244,7 +365,7 @@ final class GstHlsPipeline {
             double dur = durationSeconds();
             return dur > 0 ? dur : positionBaseSeconds;
         }
-        double pos = rawPositionSeconds();
+        double pos = scrubClock.report(rawPositionSeconds(), wallClockSeconds());
         checkPositionAtEnd(pos);
         return ended ? durationSeconds() : pos;
     }
@@ -300,6 +421,16 @@ final class GstHlsPipeline {
         }
     }
 
+    private double wallClockSeconds() {
+        if (paused || positionAnchorNanos == 0) {
+            return positionBaseSeconds;
+        }
+        double elapsed = (System.nanoTime() - positionAnchorNanos) / 1_000_000_000.0;
+        double wall = Math.max(0, positionBaseSeconds + elapsed);
+        double playlist = playlistDurationSeconds;
+        return playlist > 0 ? Math.min(wall, playlist) : wall;
+    }
+
     private double rawPositionSeconds() {
         double playlist = playlistDurationSeconds;
         double gst = querySeconds(false);
@@ -353,6 +484,56 @@ final class GstHlsPipeline {
         this.onEnded = onEnded == null ? () -> {} : onEnded;
     }
 
+    void setOnPresented(Runnable onPresented) {
+        this.onPresented = onPresented == null ? () -> {} : onPresented;
+    }
+
+    void setOnSeekDisplayed(Runnable onSeekDisplayed) {
+        this.onSeekDisplayed = onSeekDisplayed == null ? () -> {} : onSeekDisplayed;
+    }
+
+    /** First buffer on the sink is the frame that is about to be shown. */
+    private void watchFirstPicture(Element sink) {
+        if (sink == null) {
+            return;
+        }
+        Pad pad = sink.getStaticPad("sink");
+        if (pad == null) {
+            log.warn("HLS sink has no sink pad; picture announcement will use the fallback");
+            return;
+        }
+        pad.addProbe(PadProbeType.BUFFER, (probed, info) -> {
+            notePresented();
+            return PadProbeReturn.REMOVE;
+        });
+    }
+
+    private void notePresented() {
+        if (uri == null || !presented.compareAndSet(false, true)) {
+            return;
+        }
+        log.info("HLS first picture");
+        try {
+            onPresented.run();
+        } catch (RuntimeException e) {
+            log.warn("HLS picture callback failed: {}", e.toString());
+        }
+    }
+
+    /** New picture after a user seek. Sends {@code playing} with the scrub clock. */
+    private void noteSeekPicture() {
+        if (!seekPicturePending || uri == null) {
+            return;
+        }
+        seekPicturePending = false;
+        log.info("HLS seek picture at {}s", currentPositionSeconds());
+        try {
+            onSeekDisplayed.run();
+        } catch (RuntimeException e) {
+            log.warn("HLS seek picture callback failed: {}", e.toString());
+        }
+    }
+
     private void cancelEndWatch() {
         ScheduledFuture<?> future = endWatch;
         endWatch = null;
@@ -402,6 +583,9 @@ final class GstHlsPipeline {
             positionAnchorNanos = System.nanoTime();
             if (!paused) {
                 pipe.play();
+            }
+            if ("request".equals(reason) || reason.startsWith("retry-")) {
+                seekPicturePending = true;
             }
             return;
         }
