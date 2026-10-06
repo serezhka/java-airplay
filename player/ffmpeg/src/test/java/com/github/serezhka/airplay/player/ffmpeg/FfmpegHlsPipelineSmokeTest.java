@@ -91,7 +91,7 @@ class FfmpegHlsPipelineSmokeTest {
             hls.noteMediaDuration(12);
             awaitPosition(hls, 0.4, 12_000);
             long pid = hls.playerPid();
-            assertTrue(pid > 0);
+            assertTrue(pid > 0, "ffplay should be alive once the clock has latched, pid=" + pid);
 
             hls.pause();
             Thread.sleep(2_000);

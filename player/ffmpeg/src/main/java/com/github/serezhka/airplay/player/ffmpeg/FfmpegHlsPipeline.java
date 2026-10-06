@@ -356,11 +356,28 @@ final class FfmpegHlsPipeline {
                     continue;
                 }
                 synchronized (processLock) {
-                    if (epoch.get() != myEpoch || stopRequested.get() || userStopped.get() || paused.get()) {
+                    if (epoch.get() != myEpoch || stopRequested.get() || userStopped.get()) {
                         process.destroyForcibly();
                         continue;
                     }
+                    // Publish pid before the first-picture wait. MPEG-TS clocks often
+                    // latch at the container start PTS (~1.4s) during that window.
                     ffplayProcess = process;
+                }
+                sleepQuiet(150);
+                if (!process.isAlive()) {
+                    synchronized (processLock) {
+                        if (ffplayProcess == process) {
+                            ffplayProcess = null;
+                        }
+                    }
+                    process.destroyForcibly();
+                    log.warn("HLS ffplay exited immediately for {}", playlistUri);
+                    if (seek != null && seek > 0.05) {
+                        pendingSeekSeconds.compareAndSet(null, seek);
+                    }
+                    sleepQuiet(300);
+                    continue;
                 }
                 log.info("HLS ffplay started pid={} ss={} volume={}", process.pid(),
                         startAt > 0.05 ? String.format(Locale.US, "%.3f", startAt) : "0",
@@ -526,15 +543,12 @@ final class FfmpegHlsPipeline {
         AtomicBoolean picture = new AtomicBoolean();
         incomingPicture = picture;
         Process process = pb.start();
+        synchronized (processLock) {
+            ffplayProcess = process;
+        }
         Thread pump = new Thread(() -> pumpFfplayLog(process.getInputStream(), picture), "ffmpeg-hls-log");
         pump.setDaemon(true);
         pump.start();
-        // Give SDL a moment; if it dies immediately the URL/env is wrong.
-        sleepQuiet(150);
-        if (!process.isAlive()) {
-            process.destroyForcibly();
-            throw new IllegalStateException("ffplay exited immediately for " + playlistUri);
-        }
         return process;
     }
 

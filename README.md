@@ -35,15 +35,18 @@
 ```shell
 git clone https://github.com/serezhka/java-airplay.git
 cd java-airplay
-./gradlew bootRun
+./gradlew :player:gstreamer:bootRun
 ```
+
+FFmpeg receiver: `./gradlew :player:ffmpeg:bootRun`. `./gradlew bootJar` builds both jars.
 
 ### Pre-built jar
 
-Download the [latest release](https://github.com/serezhka/java-airplay/releases/latest), then:
+Download the [latest release](https://github.com/serezhka/java-airplay/releases/latest), then run one receiver:
 
 ```shell
-java -jar java-airplay-server-{version}.jar
+java -jar java-airplay-gstreamer-{version}.jar
+java -jar java-airplay-ffmpeg-{version}.jar
 ```
 
 Open **Screen Mirroring** on the iPhone / iPad / Mac and pick the receiver name (default from config, e.g. `srzhka`).
@@ -59,8 +62,6 @@ airplay.width=1920
 airplay.height=1080
 airplay.fps=60
 airplay.hls.enabled=false
-# player (gstreamer, ffmpeg)
-player.implementation=gstreamer
 player.tray.enabled=true
 # dump (optional sidecar)
 dump.enabled=false
@@ -75,7 +76,7 @@ dump.videoFps=60
 
 ## Playback
 
-Pick a backend with `player.implementation` (`gstreamer` or `ffmpeg`). Install the matching native player first.
+GStreamer and FFmpeg are separate receivers. Install the native player that matches the jar or `bootRun` task you start.
 
 ### GStreamer (recommended)
 

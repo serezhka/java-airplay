@@ -1,19 +1,30 @@
 plugins {
-    id("airplay.java-library")
+    id("airplay.spring-boot")
+    id("airplay.integration-test")
 }
 
 dependencies {
-    implementation(projects.protocol)
-    implementation(projects.player.support)
-    implementation(projects.server)
-    implementation(libs.slf4j.api)
-    implementation(libs.dd.plist)
+    implementation(projects.player.common)
     implementation(libs.bundles.jna.full)
     implementation(libs.bundles.gstreamer)
 
     testImplementation(libs.archunit.junit5)
+    "integrationTestImplementation"(testFixtures(projects.player.common))
 }
 
-tasks.named<Test>("test") {
+tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
+    archiveBaseName.set("java-airplay-gstreamer")
+}
+
+tasks.named("bootRun") {
+    description = "Run the GStreamer AirPlay receiver."
+}
+
+tasks.named<org.gradle.api.tasks.testing.Test>("test") {
     failOnNoDiscoveredTests = false
 }
+
+extra["integrationTestTags"] = mapOf(
+    "gstreamer" to "Runs the GStreamer playback smoke test.",
+    "bench" to "Runs the GStreamer playback benchmark."
+)
