@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -40,8 +41,12 @@ class FfmpegHlsPipelineSmokeTest {
             assertTrue(hls.audioSinkAlive(), "ffplay PCM sink died early (check -ch_layout / FFmpeg 8)");
 
             double beforePause = hls.currentPositionSeconds();
+            long pid = hls.playerPid();
             hls.pause();
             Thread.sleep(800);
+            if (!System.getProperty("os.name", "").toLowerCase().contains("win")) {
+                assertEquals(pid, hls.playerPid(), "pause must freeze ffplay, not close the window");
+            }
             double duringPause = hls.currentPositionSeconds();
             assertTrue(Math.abs(duringPause - beforePause) < 0.5,
                     "position should stay put while paused: " + beforePause + " -> " + duringPause);
@@ -57,6 +62,66 @@ class FfmpegHlsPipelineSmokeTest {
             awaitAdvance(hls, target + 0.15, 12_000);
             awaitAudioAlive(hls, 8_000);
             assertTrue(hls.audioSinkAlive(), "ffplay PCM sink died after seek");
+        } finally {
+            hls.stop();
+            System.clearProperty("airplay.ffmpeg.hls.headless");
+        }
+    }
+
+    /**
+     * YouTube scrub (session 20260926-144311): {@code rate=0} then {@code /scrub} 1.84s later.
+     * The hold must keep the same ffplay pid; the seek then reopens at the new position.
+     */
+    @Test
+    @Timeout(90)
+    void scrubAfterLongHoldKeepsPictureThenSeeks() throws Exception {
+        Assumptions.assumeTrue(ffmpegAvailable(), "ffmpeg not available");
+        Assumptions.assumeTrue(ffplayAvailable(), "ffplay not available");
+        Assumptions.assumeFalse(System.getProperty("os.name", "").toLowerCase().contains("win"),
+                "SIGSTOP hold is Unix-only");
+
+        Path media = temp.resolve("scrub.ts");
+        generateSmokeTs(media, 12);
+        Assumptions.assumeTrue(Files.size(media) > 1000, "failed to generate scrub.ts");
+
+        System.setProperty("airplay.ffmpeg.hls.headless", "true");
+        FfmpegHlsPipeline hls = new FfmpegHlsPipeline();
+        try {
+            hls.start(media.toUri().toString(), 1.0);
+            hls.noteMediaDuration(12);
+            awaitPosition(hls, 0.4, 12_000);
+            long pid = hls.playerPid();
+            assertTrue(pid > 0, "ffplay should be alive once the clock has latched, pid=" + pid);
+
+            hls.pause();
+            Thread.sleep(2_000);
+            assertEquals(pid, hls.playerPid(), "ffplay window closed during the scrub hold");
+            double held = hls.currentPositionSeconds();
+            assertTrue(held < 3.0, "position ran during hold: " + held);
+
+            java.util.concurrent.atomic.AtomicBoolean sawHeldFrame = new java.util.concurrent.atomic.AtomicBoolean();
+            Thread watch = new Thread(() -> {
+                long end = System.currentTimeMillis() + 4_000;
+                while (System.currentTimeMillis() < end) {
+                    if (hls.heldFramePid() > 0) {
+                        sawHeldFrame.set(true);
+                        return;
+                    }
+                    try {
+                        Thread.sleep(5);
+                    } catch (InterruptedException e) {
+                        return;
+                    }
+                }
+            });
+            watch.start();
+            hls.seek(8.0);
+            watch.join(4_000);
+            assertTrue(sawHeldFrame.get(), "seek closed the previous ffplay before the replacement had a picture");
+            awaitNear(hls, 8.0, 1.5, 12_000);
+            awaitAudioAlive(hls, 8_000);
+            assertTrue(hls.audioSinkAlive(), "ffplay died after seek");
+            awaitAdvance(hls, 8.2, 8_000);
         } finally {
             hls.stop();
             System.clearProperty("airplay.ffmpeg.hls.headless");
@@ -114,10 +179,14 @@ class FfmpegHlsPipelineSmokeTest {
     }
 
     private static void generateSmokeTs(Path out) throws Exception {
+        generateSmokeTs(out, 6);
+    }
+
+    private static void generateSmokeTs(Path out, int seconds) throws Exception {
         Process p = new ProcessBuilder(
                 "ffmpeg", "-y",
-                "-f", "lavfi", "-i", "testsrc=duration=6:size=320x240:rate=30",
-                "-f", "lavfi", "-i", "sine=frequency=440:duration=6",
+                "-f", "lavfi", "-i", "testsrc=duration=" + seconds + ":size=320x240:rate=30",
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=" + seconds,
                 "-c:v", "libx264", "-pix_fmt", "yuv420p", "-tune", "zerolatency",
                 "-c:a", "aac", "-ac", "2", "-ar", "44100",
                 "-shortest", "-f", "mpegts", out.toAbsolutePath().toString()

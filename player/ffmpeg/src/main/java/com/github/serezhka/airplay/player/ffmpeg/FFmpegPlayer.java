@@ -28,8 +28,10 @@ public class FFmpegPlayer implements Playback {
     }
 
     public FFmpegPlayer(int fps) {
-        this.fps = Math.max(1, fps);
+        this.fps = fps;
         hls.setOnEnded(() -> observer.onEnded());
+        hls.setOnPresented(() -> observer.onPresented());
+        hls.setOnSeekDisplayed(() -> observer.onSeekDisplayed());
         log.info("FFmpeg debug log: {}", NativeProcessLog.playerLogFile("ffmpeg"));
     }
 
@@ -47,18 +49,12 @@ public class FFmpegPlayer implements Playback {
             FfplayPcmSink.applyDisplayEnv(pb);
             NativeProcessLog.configureProcessLogging(pb, "ffmpeg");
             h264Process = pb.start();
-            // SDL may abort after start if the display/audio driver is wrong.
-            Thread.sleep(150);
             if (!h264Process.isAlive()) {
                 h264Process = null;
                 throw new IllegalStateException("ffplay exited immediately after start");
             }
         } catch (IOException e) {
             throw new IllegalStateException("Failed to start ffplay. Make sure it is available on PATH.", e);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            stopVideoProcess();
-            throw new IllegalStateException("Interrupted while starting ffplay", e);
         }
     }
 
@@ -163,8 +159,11 @@ public class FFmpegPlayer implements Playback {
     }
 
     @Override
-    public void onVolume(double volumeLinear) {
+    public synchronized void onVolume(double volumeLinear) {
         this.volumeLinear = Math.max(0.0, Math.min(1.0, volumeLinear));
+        if (pcmSink != null) {
+            pcmSink.setVolume(this.volumeLinear);
+        }
         hls.setVolume(this.volumeLinear);
         log.info("Volume set to {}", this.volumeLinear);
     }
@@ -206,6 +205,7 @@ public class FFmpegPlayer implements Playback {
         try {
             alacDecoder = new LibavAlacDecoder(audioStreamInfo);
             pcmSink = FfplayPcmSink.start(alacDecoder.sampleRate(), alacDecoder.channels());
+            pcmSink.setVolume(volumeLinear);
         } catch (Exception e) {
             closeAudioDecoders();
             throw new IllegalStateException("Failed to start libav ALAC → ffplay PCM sink", e);
@@ -216,6 +216,7 @@ public class FFmpegPlayer implements Playback {
         try {
             aacDecoder = new LibavAacDecoder(audioStreamInfo);
             pcmSink = FfplayPcmSink.start(aacDecoder.sampleRate(), aacDecoder.channels());
+            pcmSink.setVolume(volumeLinear);
             log.info("AAC-LC: using libav → ffplay PCM sink");
         } catch (Exception e) {
             closeAudioDecoders();
@@ -227,6 +228,7 @@ public class FFmpegPlayer implements Playback {
         try {
             aacDecoder = new LibavAacDecoder(audioStreamInfo);
             pcmSink = FfplayPcmSink.start(aacDecoder.sampleRate(), aacDecoder.channels());
+            pcmSink.setVolume(volumeLinear);
             log.info("AAC-ELD: using libav → ffplay PCM sink");
         } catch (Exception e) {
             closeAudioDecoders();

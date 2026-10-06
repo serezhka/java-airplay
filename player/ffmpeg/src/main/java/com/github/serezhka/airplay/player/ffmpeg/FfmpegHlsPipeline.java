@@ -3,9 +3,18 @@ package com.github.serezhka.airplay.player.ffmpeg;
 import com.github.serezhka.airplay.player.support.NativeProcessLog;
 import lombok.extern.slf4j.Slf4j;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -30,6 +39,10 @@ final class FfmpegHlsPipeline {
     private final AtomicLong epoch = new AtomicLong();
     private final AtomicReference<Double> pendingSeekSeconds = new AtomicReference<>();
     private volatile Runnable onEnded = () -> {};
+    private volatile Runnable onPresented = () -> {};
+    private volatile Runnable onSeekDisplayed = () -> {};
+    private volatile boolean replacementClockPending;
+    private volatile boolean pictureAnnounced;
     private final Object processLock = new Object();
 
     private volatile String uri;
@@ -40,6 +53,9 @@ final class FfmpegHlsPipeline {
     private volatile long lastEndedNotifyNanos;
     private volatile Thread playbackThread;
     private volatile Process ffplayProcess;
+    /** Frozen window kept on screen until the seek replacement has a picture. */
+    private volatile Process heldFrame;
+    private volatile AtomicBoolean incomingPicture = new AtomicBoolean();
 
     void start(String playlistUri, double volume) {
         start(playlistUri, volume, 0);
@@ -59,8 +75,12 @@ final class FfmpegHlsPipeline {
         double seek = initialSeekSeconds > 0.05 && initialSeekSeconds < ABSURD_SEEK_SECONDS
                 ? initialSeekSeconds : 0;
         positionBaseSeconds = seek;
-        positionAnchorNanos = System.nanoTime();
+        // Do not run the sender clock until ffplay prints a real timestamp.
+        // Starting it here put the phone several seconds ahead of the first frame.
+        positionAnchorNanos = 0;
         lastEndedNotifyNanos = 0;
+        pictureAnnounced = false;
+        replacementClockPending = false;
         pendingSeekSeconds.set(seek > 0.05 ? seek : null);
 
         long myEpoch = epoch.get();
@@ -83,6 +103,8 @@ final class FfmpegHlsPipeline {
         ended.set(false);
         pendingSeekSeconds.set(null);
         destroyFfplay();
+        destroyLoose(heldFrame);
+        heldFrame = null;
         Thread thread = playbackThread;
         playbackThread = null;
         uri = null;
@@ -108,8 +130,12 @@ final class FfmpegHlsPipeline {
         }
         positionBaseSeconds = currentPositionSeconds();
         paused.set(true);
-        // Stop ffplay so Pulse does not keep playing; resume reopens with -ss.
-        destroyFfplay();
+        // Freeze ffplay in place. Destroying it closes the SDL window (desktop shows through)
+        // and a following /scrub has to reopen from scratch. SIGSTOP keeps the last frame and
+        // stops Pulse. Windows has no SIGSTOP, so fall back to closing the process there.
+        if (!signalFfplay("STOP")) {
+            destroyFfplay();
+        }
         log.info("HLS paused at {}s", positionBaseSeconds);
     }
 
@@ -123,9 +149,12 @@ final class FfmpegHlsPipeline {
         }
         paused.set(false);
         positionAnchorNanos = System.nanoTime();
-        // Reopen at the frozen position.
-        pendingSeekSeconds.set(positionBaseSeconds);
-        log.info("HLS resumed from {}s", positionBaseSeconds);
+        if (!signalFfplay("CONT")) {
+            pendingSeekSeconds.set(positionBaseSeconds);
+            log.info("HLS resume reopening from {}s", positionBaseSeconds);
+        } else {
+            log.info("HLS resumed from {}s", positionBaseSeconds);
+        }
     }
 
     void seek(double positionSeconds) {
@@ -140,18 +169,20 @@ final class FfmpegHlsPipeline {
         paused.set(false);
         positionBaseSeconds = positionSeconds;
         positionAnchorNanos = System.nanoTime();
+        replacementClockPending = true;
         pendingSeekSeconds.set(positionSeconds);
+        // Leave the current ffplay stopped so its window stays up. The playback thread
+        // opens the replacement and closes this one only after the new picture is up.
+        signalFfplay("STOP");
         Process running;
         synchronized (processLock) {
             running = ffplayProcess;
         }
-        if (running == null || !running.isAlive()) {
-            // First open (or between destroy and reopen) — runPlayback picks up pendingSeek.
+        if ((running == null || !running.isAlive()) && (heldFrame == null || !heldFrame.isAlive())) {
             log.info("HLS seek queued to {}s", positionSeconds);
             return;
         }
-        destroyFfplay(); // wake waitFor so the loop reopens with -ss
-        log.info("HLS seek requested to {}s", positionSeconds);
+        log.info("HLS seek requested to {}s, holding the current frame", positionSeconds);
     }
 
     void noteMediaDuration(double seconds) {
@@ -193,11 +224,8 @@ final class FfmpegHlsPipeline {
         if (paused.get() || positionAnchorNanos == 0) {
             return positionBaseSeconds;
         }
-        Process p = ffplayProcess;
-        if (p == null || !p.isAlive()) {
-            // Freeze while ffplay is down (seek/reopen/retry) — do not free-run the scrubber.
-            return positionBaseSeconds;
-        }
+        // Keep the scrub clock moving while ffplay is stopped or reopening. Freezing
+        // here left /playback-info stuck and the sender showed pause.
         double elapsed = (System.nanoTime() - positionAnchorNanos) / 1_000_000_000.0;
         double wall = Math.max(0, positionBaseSeconds + elapsed);
         double playlist = playlistDurationSeconds;
@@ -213,19 +241,64 @@ final class FfmpegHlsPipeline {
 
     /** Smoke tests: ffplay child still alive (A/V in one process). */
     boolean audioSinkAlive() {
-        Process p = ffplayProcess;
-        return p != null && p.isAlive();
+        return playerPid() > 0;
     }
 
-    /** Kept for unit tests that simulate demux PTS resets — reported position is wall-clock only. */
-    void noteDemuxTimestampMicros(long timestampMicros) {
-        // no-op
+    /** Smoke tests: same pid across a hold means the window was not closed. */
+    long playerPid() {
+        Process p = ffplayProcess;
+        return p != null && p.isAlive() ? p.pid() : -1;
+    }
+
+    /** Smoke tests: pid of the frozen window kept across a seek, or -1. */
+    long heldFramePid() {
+        Process p = heldFrame;
+        return p != null && p.isAlive() ? p.pid() : -1;
+    }
+
+    /** ffplay prints {@code M-A:} / {@code M-V:} once a clock is running. {@code nan} is not a picture. */
+    static boolean ffplayStatusShowsPicture(String statusLine) {
+        return statusClockSeconds(statusLine) != null;
+    }
+
+    /** Leading clock on an ffplay status line, or null when it is missing or {@code nan}. */
+    static Double statusClockSeconds(String statusLine) {
+        if (statusLine == null) {
+            return null;
+        }
+        int mark = markerIndex(statusLine);
+        if (mark <= 0) {
+            return null;
+        }
+        String head = statusLine.substring(0, mark).trim();
+        if (head.isEmpty() || head.equalsIgnoreCase("nan")) {
+            return null;
+        }
+        try {
+            double value = Double.parseDouble(head);
+            if (Double.isNaN(value) || value < 0 || value > ABSURD_SEEK_SECONDS) {
+                return null;
+            }
+            return value;
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private static int markerIndex(String statusLine) {
+        for (String marker : new String[]{" M-A:", " M-V:", " A-V:"}) {
+            int at = statusLine.indexOf(marker);
+            if (at >= 0) {
+                return at;
+            }
+        }
+        return -1;
     }
 
     private void runPlayback(long myEpoch) {
         int earlyExitRetries = 0;
         while (epoch.get() == myEpoch && !stopRequested.get() && !userStopped.get()) {
-            if (paused.get()) {
+            if (paused.get() && pendingSeekSeconds.get() == null) {
                 sleepQuiet(40);
                 continue;
             }
@@ -233,36 +306,116 @@ final class FfmpegHlsPipeline {
             if (playlistUri == null) {
                 break;
             }
-            Double seek = pendingSeekSeconds.getAndSet(null);
-            double startAt = seek != null && seek > 0.05 ? seek : positionBaseSeconds;
-            if (startAt > 0.05) {
-                positionBaseSeconds = startAt;
-                positionAnchorNanos = System.nanoTime();
-            } else {
-                positionBaseSeconds = 0;
-                positionAnchorNanos = System.nanoTime();
-            }
 
+            Process existing;
+            synchronized (processLock) {
+                existing = ffplayProcess;
+            }
+            boolean reuseFrozen = existing != null && existing.isAlive() && pendingSeekSeconds.get() == null;
             Process process;
             long startedAtNanos;
-            try {
-                process = startFfplay(playlistUri, startAt, volumeLinear);
+            double startAt;
+            if (reuseFrozen) {
+                process = existing;
+                startAt = positionBaseSeconds;
                 startedAtNanos = System.nanoTime();
-            } catch (Exception e) {
-                log.warn("HLS ffplay start failed, retrying: {}", e.toString());
-                sleepQuiet(300);
-                continue;
-            }
-            synchronized (processLock) {
-                if (epoch.get() != myEpoch || stopRequested.get() || userStopped.get() || paused.get()) {
-                    process.destroyForcibly();
+                positionAnchorNanos = startedAtNanos;
+            } else {
+                Double seek = pendingSeekSeconds.getAndSet(null);
+                startAt = seek != null && seek > 0.05 ? seek : positionBaseSeconds;
+                if (startAt > 0.05) {
+                    positionBaseSeconds = startAt;
+                } else if (positionAnchorNanos == 0) {
+                    positionBaseSeconds = 0;
+                }
+                if (existing != null && existing.isAlive()) {
+                    Process alreadyHeld = heldFrame;
+                    if (alreadyHeld != null && alreadyHeld.isAlive() && alreadyHeld != existing) {
+                        // A newer seek arrived before the previous replacement had a picture.
+                        destroyLoose(existing);
+                    } else {
+                        heldFrame = existing;
+                        synchronized (processLock) {
+                            if (ffplayProcess == existing) {
+                                ffplayProcess = null;
+                            }
+                        }
+                    }
+                }
+                AtomicBoolean picture;
+                try {
+                    process = startFfplay(playlistUri, startAt, volumeLinear);
+                    picture = incomingPicture;
+                    startedAtNanos = System.nanoTime();
+                } catch (Exception e) {
+                    log.warn("HLS ffplay start failed, retrying: {}", e.toString());
+                    if (seek != null && seek > 0.05) {
+                        pendingSeekSeconds.compareAndSet(null, seek);
+                    }
+                    sleepQuiet(300);
                     continue;
                 }
-                ffplayProcess = process;
+                synchronized (processLock) {
+                    if (epoch.get() != myEpoch || stopRequested.get() || userStopped.get()) {
+                        process.destroyForcibly();
+                        continue;
+                    }
+                    // Publish pid before the first-picture wait. MPEG-TS clocks often
+                    // latch at the container start PTS (~1.4s) during that window.
+                    ffplayProcess = process;
+                }
+                sleepQuiet(150);
+                if (!process.isAlive()) {
+                    synchronized (processLock) {
+                        if (ffplayProcess == process) {
+                            ffplayProcess = null;
+                        }
+                    }
+                    process.destroyForcibly();
+                    log.warn("HLS ffplay exited immediately for {}", playlistUri);
+                    if (seek != null && seek > 0.05) {
+                        pendingSeekSeconds.compareAndSet(null, seek);
+                    }
+                    sleepQuiet(300);
+                    continue;
+                }
+                log.info("HLS ffplay started pid={} ss={} volume={}", process.pid(),
+                        startAt > 0.05 ? String.format(Locale.US, "%.3f", startAt) : "0",
+                        Math.round(volumeLinear * 100));
+                Process held = heldFrame;
+                if (held != null && held.isAlive() && held != process) {
+                    boolean shown = waitForPicture(picture, process, myEpoch);
+                    if (epoch.get() != myEpoch || stopRequested.get() || userStopped.get()) {
+                        destroyLoose(process);
+                        destroyLoose(held);
+                        heldFrame = null;
+                        continue;
+                    }
+                    if (!shown && !process.isAlive()) {
+                        log.warn("HLS replacement exited before a picture; keeping the held frame");
+                        synchronized (processLock) {
+                            if (ffplayProcess == process) {
+                                ffplayProcess = null;
+                            }
+                        }
+                        continue;
+                    }
+                    if (pendingSeekSeconds.get() != null && !shown) {
+                        destroyLoose(process);
+                        synchronized (processLock) {
+                            if (ffplayProcess == process) {
+                                ffplayProcess = null;
+                            }
+                        }
+                        continue;
+                    }
+                    destroyLoose(held);
+                    if (heldFrame == held) {
+                        heldFrame = null;
+                    }
+                    log.info("HLS previous frame dropped (replacement picture={})", shown);
+                }
             }
-            log.info("HLS ffplay started pid={} ss={} volume={}", process.pid(),
-                    startAt > 0.05 ? String.format(Locale.US, "%.3f", startAt) : "0",
-                    Math.round(volumeLinear * 100));
 
             try {
                 while (epoch.get() == myEpoch && !stopRequested.get() && !userStopped.get()
@@ -282,9 +435,27 @@ final class FfmpegHlsPipeline {
                     }
                     sleepQuiet(50);
                 }
-                if (pendingSeekSeconds.get() != null || paused.get()
-                        || stopRequested.get() || userStopped.get() || epoch.get() != myEpoch) {
+                if (stopRequested.get() || userStopped.get() || epoch.get() != myEpoch) {
                     destroyFfplay();
+                    destroyLoose(heldFrame);
+                    heldFrame = null;
+                    continue;
+                }
+                if (pendingSeekSeconds.get() != null) {
+                    Process held = heldFrame;
+                    if (held != null && held.isAlive() && held != process) {
+                        destroyLoose(process);
+                        synchronized (processLock) {
+                            if (ffplayProcess == process) {
+                                ffplayProcess = null;
+                            }
+                        }
+                    }
+                    // Otherwise keep this process; the next iteration freezes it as the held frame.
+                    continue;
+                }
+                if (paused.get()) {
+                    // Keep the frozen window. The next loop iteration waits until resume or seek.
                     continue;
                 }
                 // Process exited on its own.
@@ -327,8 +498,9 @@ final class FfmpegHlsPipeline {
             cmd.add("-fs");
         }
         cmd.add("-autoexit");
+        // info (not error) so the status line is visible; the log pump keeps only real messages.
         cmd.add("-loglevel");
-        cmd.add("error");
+        cmd.add("info");
         // FFmpeg 6+/8 default extension_picky rejects YouTube googlevideo URLs (no .ts/.m4s).
         // Only for HLS — these options can break plain mpegts/.ts opens used in smoke tests.
         if (isHlsPlaylistUri(playlistUri)) {
@@ -343,26 +515,40 @@ final class FfmpegHlsPipeline {
         cmd.add("-flags");
         cmd.add("low_delay");
         cmd.add("-framedrop");
+        // Sync to the video clock. "audio" holds the first frame until the audio
+        // clock exists, which on HLS is the multi-second probe.
         cmd.add("-sync");
-        cmd.add("audio");
+        cmd.add("video");
         cmd.add("-volume");
         cmd.add(String.valueOf(Math.max(0, Math.min(100, (int) Math.round(volume * 100)))));
         if (startAt > 0.05) {
             cmd.add("-ss");
             cmd.add(String.format(Locale.US, "%.3f", startAt));
         }
+        // Default analyze window is 5s. A short window is enough for H.264 HLS and
+        // is what was sitting between "ffplay started" and the first picture.
+        cmd.add("-probesize");
+        cmd.add("32768");
+        cmd.add("-analyzeduration");
+        cmd.add("200000");
         cmd.add(playlistUri);
 
         ProcessBuilder pb = new ProcessBuilder(cmd);
         FfplayPcmSink.forcePulseAudioEnv(pb);
-        NativeProcessLog.configureProcessLogging(pb, "ffmpeg");
-        Process process = pb.start();
-        // Give SDL a moment; if it dies immediately the URL/env is wrong.
-        sleepQuiet(150);
-        if (!process.isAlive()) {
-            process.destroyForcibly();
-            throw new IllegalStateException("ffplay exited immediately for " + playlistUri);
+        if (isHlsPlaylistUri(playlistUri)) {
+            Ipv4Getaddrinfo.apply(pb);
         }
+        pb.redirectErrorStream(true);
+        pb.redirectOutput(ProcessBuilder.Redirect.PIPE);
+        AtomicBoolean picture = new AtomicBoolean();
+        incomingPicture = picture;
+        Process process = pb.start();
+        synchronized (processLock) {
+            ffplayProcess = process;
+        }
+        Thread pump = new Thread(() -> pumpFfplayLog(process.getInputStream(), picture), "ffmpeg-hls-log");
+        pump.setDaemon(true);
+        pump.start();
         return process;
     }
 
@@ -378,18 +564,141 @@ final class FfmpegHlsPipeline {
         return lower.endsWith(".m3u8") || lower.endsWith(".m3u");
     }
 
+    /**
+     * @return true when the signal was delivered. False on Windows or when ffplay is not running.
+     */
+    private boolean signalFfplay(String signal) {
+        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+        if (os.contains("win")) {
+            return false;
+        }
+        Process process;
+        synchronized (processLock) {
+            process = ffplayProcess;
+        }
+        if (process == null || !process.isAlive()) {
+            return false;
+        }
+        try {
+            Process kill = new ProcessBuilder("kill", "-" + signal, Long.toString(process.pid()))
+                    .redirectError(ProcessBuilder.Redirect.DISCARD)
+                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                    .start();
+            if (!kill.waitFor(2, TimeUnit.SECONDS) || kill.exitValue() != 0) {
+                log.warn("kill -{} pid={} failed", signal, process.pid());
+                return false;
+            }
+            return true;
+        } catch (Exception e) {
+            log.warn("kill -{} failed: {}", signal, e.toString());
+            return false;
+        }
+    }
+
+    private static final long HELD_FRAME_TIMEOUT_MS = 12_000;
+
+    private boolean waitForPicture(AtomicBoolean picture, Process process, long myEpoch) {
+        long deadline = System.nanoTime() + HELD_FRAME_TIMEOUT_MS * 1_000_000L;
+        while (System.nanoTime() < deadline) {
+            if (picture != null && picture.get()) {
+                return true;
+            }
+            if (process == null || !process.isAlive()) {
+                return false;
+            }
+            if (epoch.get() != myEpoch || stopRequested.get() || userStopped.get()) {
+                return false;
+            }
+            if (pendingSeekSeconds.get() != null) {
+                return false;
+            }
+            sleepQuiet(40);
+        }
+        return picture != null && picture.get();
+    }
+
+    private void pumpFfplayLog(InputStream in, AtomicBoolean picture) {
+        Path logFile = NativeProcessLog.playerLogFile("ffmpeg");
+        try {
+            Path parent = logFile.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+        } catch (IOException e) {
+            log.debug("HLS log dir: {}", e.toString());
+        }
+        try (InputStream input = in;
+             OutputStream out = Files.newOutputStream(
+                     logFile,
+                     StandardOpenOption.CREATE,
+                     StandardOpenOption.APPEND)) {
+            byte[] buf = new byte[2048];
+            ByteArrayOutputStream line = new ByteArrayOutputStream();
+            int n;
+            while ((n = input.read(buf)) >= 0) {
+                for (int i = 0; i < n; i++) {
+                    byte b = buf[i];
+                    if (b == '\r' || b == '\n') {
+                        String text = line.toString(StandardCharsets.UTF_8).replace("\u001b[2K", "");
+                        line.reset();
+                        if (text.isBlank()) {
+                            continue;
+                        }
+                        if (text.contains("fd=") && text.contains("vq=")) {
+                            Double clock = statusClockSeconds(text);
+                            if (clock != null) {
+                                picture.set(true);
+                                noteClock(clock);
+                            }
+                            continue;
+                        }
+                        out.write(text.getBytes(StandardCharsets.UTF_8));
+                        out.write('\n');
+                    } else {
+                        line.write(b);
+                    }
+                }
+            }
+        } catch (IOException e) {
+            log.debug("HLS ffplay log pump ended: {}", e.toString());
+        }
+    }
+
     private void destroyFfplay() {
         Process process;
         synchronized (processLock) {
             process = ffplayProcess;
             ffplayProcess = null;
         }
+        destroyLoose(process);
+    }
+
+    private void destroyLoose(Process process) {
         if (process == null) {
             return;
         }
+        synchronized (processLock) {
+            if (ffplayProcess == process) {
+                ffplayProcess = null;
+            }
+            if (heldFrame == process) {
+                heldFrame = null;
+            }
+        }
+        if (process.isAlive()) {
+            try {
+                new ProcessBuilder("kill", "-CONT", Long.toString(process.pid()))
+                        .redirectError(ProcessBuilder.Redirect.DISCARD)
+                        .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                        .start()
+                        .waitFor(1, TimeUnit.SECONDS);
+            } catch (Exception ignored) {
+                // SIGKILL below still reaps a stopped process.
+            }
+        }
         process.destroy();
         try {
-            if (!process.waitFor(500, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+            if (!process.waitFor(500, TimeUnit.MILLISECONDS)) {
                 process.destroyForcibly();
             }
         } catch (InterruptedException e) {
@@ -419,6 +728,52 @@ final class FfmpegHlsPipeline {
 
     void setOnEnded(Runnable onEnded) {
         this.onEnded = onEnded == null ? () -> {} : onEnded;
+    }
+
+    void setOnPresented(Runnable onPresented) {
+        this.onPresented = onPresented == null ? () -> {} : onPresented;
+    }
+
+    void setOnSeekDisplayed(Runnable onSeekDisplayed) {
+        this.onSeekDisplayed = onSeekDisplayed == null ? () -> {} : onSeekDisplayed;
+    }
+
+    /** First real ffplay clock. Until then the reported position does not advance. */
+    private void noteClock(double clockSeconds) {
+        if (positionAnchorNanos == 0) {
+            positionBaseSeconds = clockSeconds;
+            positionAnchorNanos = System.nanoTime();
+            log.info("HLS clock latched at {}s", String.format(Locale.US, "%.3f", clockSeconds));
+        }
+        if (replacementClockPending) {
+            replacementClockPending = false;
+            // The status clock is the real picture. Do not walk the sender backward
+            // onto an earlier keyframe; only adopt it when it is at or ahead of us.
+            if (clockSeconds + 0.05 >= positionBaseSeconds) {
+                positionBaseSeconds = clockSeconds;
+                positionAnchorNanos = System.nanoTime();
+            }
+            log.info("HLS seek picture at {}s", String.format(Locale.US, "%.3f", currentPositionSeconds()));
+            try {
+                onSeekDisplayed.run();
+            } catch (RuntimeException e) {
+                log.warn("HLS seek picture callback failed: {}", e.toString());
+            }
+        }
+        notePicture();
+    }
+
+    private void notePicture() {
+        if (pictureAnnounced) {
+            return;
+        }
+        pictureAnnounced = true;
+        log.info("HLS first picture");
+        try {
+            onPresented.run();
+        } catch (RuntimeException e) {
+            log.warn("HLS picture callback failed: {}", e.toString());
+        }
     }
 
     private static void sleepQuiet(long ms) {

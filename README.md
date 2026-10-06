@@ -24,7 +24,7 @@
 - AirPlay audio + screen mirroring
 - FairPlay decryption for mirrored streams
 - Volume control
-- YouTube HLS playback (AirPlay video from the YouTube app)
+- YouTube HLS playback (not stable, disabled by default `airplay.hls-enabled=false`)
 - Playbacks: GStreamer, FFmpeg (`ffplay`)
 - Optional session dump (protocol + decrypted media) for debugging
 
@@ -35,15 +35,18 @@
 ```shell
 git clone https://github.com/serezhka/java-airplay.git
 cd java-airplay
-./gradlew bootRun
+./gradlew :player:gstreamer:bootRun
 ```
+
+FFmpeg receiver: `./gradlew :player:ffmpeg:bootRun`. `./gradlew bootJar` builds both jars.
 
 ### Pre-built jar
 
-Download the [latest release](https://github.com/serezhka/java-airplay/releases/latest), then:
+Download the [latest release](https://github.com/serezhka/java-airplay/releases/latest), then run one receiver:
 
 ```shell
-java -jar java-airplay-server-{version}.jar
+java -jar java-airplay-gstreamer-{version}.jar
+java -jar java-airplay-ffmpeg-{version}.jar
 ```
 
 Open **Screen Mirroring** on the iPhone / iPad / Mac and pick the receiver name (default from config, e.g. `srzhka`).
@@ -55,11 +58,10 @@ Create `application.properties` in the working directory:
 ```properties
 # airplay
 airplay.serverName=srzhka
-airplay.width=1280
-airplay.height=720
-airplay.fps=24
-# player (gstreamer, ffmpeg)
-player.implementation=gstreamer
+airplay.width=1920
+airplay.height=1080
+airplay.fps=60
+airplay.hls-enabled=false
 player.tray.enabled=true
 # dump (optional sidecar)
 dump.enabled=false
@@ -74,7 +76,7 @@ dump.videoFps=60
 
 ## Playback
 
-Pick a backend with `player.implementation` (`gstreamer` or `ffmpeg`). Install the matching native player first.
+GStreamer and FFmpeg are separate receivers. Install the native player that matches the jar or `bootRun` task you start.
 
 ### GStreamer (recommended)
 
@@ -95,6 +97,10 @@ Set `dump.enabled=true` to record beside the live player under `dumps/<timestamp
 - `protocol/` — RTSP/HTTP captures
 - `media/` — decrypted `.h264` / remuxed `.mp4`, audio `.caf` / `.aac`
 - `extras/` — HLS playlists, artwork, DMAP metadata when present
+
+## Known issues
+
+- YouTube sometimes shows an empty black window on the phone while its interface is drawn on the receiver. That happens when screen mirroring is already on and the receiver advertises video. `airplay.hls-enabled=false` leaves mirroring and audio without that video advertisement.
 
 ## Related projects
 

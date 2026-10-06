@@ -6,6 +6,7 @@ import com.github.serezhka.airplay.protocol.fairplay.FairPlayVideoDecryptor;
 import com.github.serezhka.airplay.protocol.media.MediaStreamInfo;
 import com.github.serezhka.airplay.protocol.media.VideoStreamInfo;
 import com.github.serezhka.airplay.protocol.pairing.PairingHandshake;
+import com.github.serezhka.airplay.protocol.pairing.PairingIdentity;
 import com.github.serezhka.airplay.protocol.rtsp.RtspMediaSetup;
 
 import java.io.InputStream;
@@ -17,12 +18,20 @@ import java.util.Optional;
  */
 public final class FairPlaySession {
 
-    private final PairingHandshake pairing = new PairingHandshake();
+    private final PairingHandshake pairing;
     private final FairPlayHandshake fairPlay = new FairPlayHandshake();
     private final RtspMediaSetup rtsp = new RtspMediaSetup();
 
     private FairPlayVideoDecryptor fairPlayVideoDecryptor;
     private FairPlayAudioDecryptor fairPlayAudioDecryptor;
+
+    public FairPlaySession() {
+        this(PairingIdentity.generate());
+    }
+
+    public FairPlaySession(PairingIdentity identity) {
+        this.pairing = new PairingHandshake(identity);
+    }
 
     public PairingHandshake pairing() {
         return pairing;

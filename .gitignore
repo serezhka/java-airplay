@@ -9,9 +9,7 @@ dumps/
 **/logs
 /log.*
 gst.log
-player/app/log
 /research/
 /.cursor/*
-player/harness/logs/
 **/build/reports/playback-metrics/
 __pycache__/

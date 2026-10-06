@@ -1,6 +1,7 @@
 package com.github.serezhka.airplay.protocol;
 
 import com.github.serezhka.airplay.protocol.FairPlaySession;
+import com.github.serezhka.airplay.protocol.pairing.PairingIdentity;
 import net.i2p.crypto.eddsa.EdDSAEngine;
 import net.i2p.crypto.eddsa.EdDSAPublicKey;
 import net.i2p.crypto.eddsa.KeyPairGenerator;
@@ -18,12 +19,30 @@ import java.security.KeyPair;
 import java.security.MessageDigest;
 import java.util.Arrays;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AirPlayPairingTest {
 
     private final FairPlaySession airPlay = new FairPlaySession();
+
+    @Test
+    void advertisedKeyMatchesPairSetup() throws Exception {
+        PairingIdentity identity = PairingIdentity.generate();
+        FairPlaySession first = new FairPlaySession(identity);
+        FairPlaySession second = new FairPlaySession(identity);
+
+        ByteArrayOutputStream firstKey = new ByteArrayOutputStream(32);
+        first.pairSetup(firstKey);
+        ByteArrayOutputStream secondKey = new ByteArrayOutputStream(32);
+        second.pairSetup(secondKey);
+
+        assertArrayEquals(identity.publicKey(), firstKey.toByteArray());
+        assertArrayEquals(firstKey.toByteArray(), secondKey.toByteArray());
+        assertEquals(identity.publicKeyHex(), identity.publicKeyHex().toLowerCase());
+        assertEquals(64, identity.publicKeyHex().length());
+    }
 
     @Test
     void pairingTest() throws Exception {

@@ -13,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Getter
@@ -62,30 +63,78 @@ public class HlsPlaylistState {
      * YouTube sets pause (1) — on EOS we must pause and wait for the next {@code /play}.
      */
     private volatile int actionAtItemEnd = 1;
+    /** {@code /scrub} until the seek-picture callback or the closing {@code rate=1}. */
+    private volatile boolean scrubGesture;
     /**
-     * After {@code /scrub}, ignore {@code rate=0} until the next {@code rate=1}.
-     * Event latch (not a timer): scrub brackets with rate=0 then rate=1.
+     * {@code rate=0} not yet classified. The playback-info already queued with it does not
+     * decide; the next one does, unless {@code /scrub} cleared this first.
      */
-    private volatile boolean ignorePauseUntilRateOne;
+    private volatile boolean rateZeroPending;
+    private int playbackInfosSinceRateZero;
+    /** True from pipeline start until the first displayed frame is announced. */
+    private final AtomicBoolean presentationPending = new AtomicBoolean();
 
     public HlsPlaylistState(String remoteMasterUri, String playlistUriLocal) {
+        this(remoteMasterUri, playlistUriLocal, null);
+    }
+
+    /**
+     * @param clientItemUuid item {@code uuid} from {@code POST /play}; reverse {@code playing}
+     *                       must carry this value or the sender keeps the pause UI after a scrub
+     */
+    public HlsPlaylistState(String remoteMasterUri, String playlistUriLocal, String clientItemUuid) {
         this.remoteMasterUri = remoteMasterUri;
         this.playlistUriLocal = playlistUriLocal;
-        this.itemUuid = UUID.randomUUID().toString().toUpperCase();
+        this.itemUuid = clientItemUuid != null && !clientItemUuid.isBlank()
+                ? clientItemUuid
+                : UUID.randomUUID().toString().toUpperCase();
         this.reverseEventSessionId = NEXT_REVERSE_SESSION_ID.getAndAdd(2);
     }
 
-    /** Arm after {@code /scrub}: drop rate=0 until the client sends rate=1. */
-    public void markScrubIgnorePauseUntilPlay() {
-        ignorePauseUntilRateOne = true;
+    /** Pipeline is up; do not tell the sender {@code playing} until a frame is visible. */
+    public void awaitPresentation() {
+        presentationPending.set(true);
     }
 
-    public boolean shouldIgnorePause() {
-        return ignorePauseUntilRateOne;
+    /** @return true the first time a visible frame (or the fallback) may be announced */
+    public boolean claimPresentation() {
+        return presentationPending.compareAndSet(true, false);
     }
 
-    public void clearScrubIgnorePause() {
-        ignorePauseUntilRateOne = false;
+    /** Sender must stay on {@code loading} until {@link #claimPresentation()} succeeds. */
+    public boolean isAwaitingPresentation() {
+        return presentationPending.get();
+    }
+
+    public void beginScrubGesture() {
+        scrubGesture = true;
+    }
+
+    public boolean isScrubGesture() {
+        return scrubGesture;
+    }
+
+    public void endScrubGesture() {
+        scrubGesture = false;
+    }
+
+    public void armRateZero() {
+        rateZeroPending = true;
+        playbackInfosSinceRateZero = 0;
+    }
+
+    public void clearRateZero() {
+        rateZeroPending = false;
+        playbackInfosSinceRateZero = 0;
+    }
+
+    /** @return true when this poll is the one that commits a pause */
+    public boolean notePlaybackInfoForPause() {
+        if (!rateZeroPending) {
+            return false;
+        }
+        playbackInfosSinceRateZero++;
+        return playbackInfosSinceRateZero >= 2;
     }
 
     public void setPendingSeekSeconds(Double pendingSeekSeconds) {

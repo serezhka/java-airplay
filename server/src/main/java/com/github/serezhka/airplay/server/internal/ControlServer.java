@@ -1,5 +1,6 @@
 package com.github.serezhka.airplay.server.internal;
 
+import com.github.serezhka.airplay.protocol.pairing.PairingIdentity;
 import com.github.serezhka.airplay.server.AirPlayConfig;
 import com.github.serezhka.airplay.server.Playback;
 import com.github.serezhka.airplay.server.internal.handler.control.ControlHandler;
@@ -30,7 +31,7 @@ import java.net.InetSocketAddress;
 @Slf4j
 public class ControlServer implements Runnable {
 
-    private final SessionManager sessionManager = new SessionManager();
+    private final SessionManager sessionManager;
     private final HlsFcupService hlsFcupService;
 
     private final AirPlayConfig airPlayConfig;
@@ -41,11 +42,27 @@ public class ControlServer implements Runnable {
     @Getter
     private int port;
 
-    public ControlServer(AirPlayConfig airPlayConfig, Playback airPlayConsumer) {
+    public ControlServer(AirPlayConfig airPlayConfig, Playback airPlayConsumer, PairingIdentity identity) {
+        this.sessionManager = new SessionManager(identity);
         this.airPlayConfig = airPlayConfig;
         this.airPlayConsumer = airPlayConsumer;
         this.hlsFcupService = new HlsFcupService(sessionManager, airPlayConsumer);
-        airPlayConsumer.setObserver(hlsFcupService::refreshActivePlaylists);
+        airPlayConsumer.setObserver(new Playback.Observer() {
+            @Override
+            public void onEnded() {
+                hlsFcupService.refreshActivePlaylists();
+            }
+
+            @Override
+            public void onPresented() {
+                hlsFcupService.onPlaybackPresented();
+            }
+
+            @Override
+            public void onSeekDisplayed() {
+                hlsFcupService.onSeekDisplayed();
+            }
+        });
     }
 
     public void start() throws InterruptedException {
@@ -72,7 +89,7 @@ public class ControlServer implements Runnable {
             serverBootstrap
                     .group(bossGroup, workerGroup)
                     .channel(serverSocketChannelClass())
-                    .localAddress(new InetSocketAddress(0)) // bind random port
+                    .localAddress(new InetSocketAddress(0))
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         public void initChannel(final SocketChannel ch) {

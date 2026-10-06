@@ -25,4 +25,6 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
-          files: player/app/build/libs/*
+          files: |
+            player/gstreamer/build/libs/java-airplay-gstreamer-*.jar
+            player/ffmpeg/build/libs/java-airplay-ffmpeg-*.jar

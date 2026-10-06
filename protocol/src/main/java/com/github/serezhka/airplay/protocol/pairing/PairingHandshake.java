@@ -3,7 +3,6 @@ package com.github.serezhka.airplay.protocol.pairing;
 import lombok.extern.slf4j.Slf4j;
 import net.i2p.crypto.eddsa.EdDSAEngine;
 import net.i2p.crypto.eddsa.EdDSAPublicKey;
-import net.i2p.crypto.eddsa.KeyPairGenerator;
 import net.i2p.crypto.eddsa.Utils;
 import net.i2p.crypto.eddsa.spec.EdDSANamedCurveTable;
 import net.i2p.crypto.eddsa.spec.EdDSAPublicKeySpec;
@@ -35,8 +34,8 @@ public class PairingHandshake {
 
     private boolean pairVerified;
 
-    public PairingHandshake() {
-        this.keyPair = new KeyPairGenerator().generateKeyPair();
+    public PairingHandshake(PairingIdentity identity) {
+        this.keyPair = identity.keyPair();
     }
 
     public void pairSetup(OutputStream out) throws IOException {

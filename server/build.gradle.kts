@@ -11,5 +11,5 @@ dependencies {
     implementation(libs.eddsa)
     implementation(libs.m3u8.parser)
 
-    testImplementation(libs.archunit.junit5)
+    testImplementation(libs.archunit.junit6)
 }
