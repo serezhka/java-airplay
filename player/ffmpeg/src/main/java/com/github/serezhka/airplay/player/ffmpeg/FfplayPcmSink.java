@@ -34,6 +34,7 @@ final class FfplayPcmSink implements AutoCloseable {
     private final Thread writer;
     private final AtomicBoolean closed = new AtomicBoolean();
     private volatile long droppedChunks;
+    private volatile double volumeLinear = 1.0;
 
     private FfplayPcmSink(Process process, int sampleRate, int channels) {
         this.process = process;
@@ -89,6 +90,10 @@ final class FfplayPcmSink implements AutoCloseable {
         return !closed.get() && process.isAlive();
     }
 
+    void setVolume(double volumeLinear) {
+        this.volumeLinear = Math.max(0.0, Math.min(1.0, volumeLinear));
+    }
+
     void write(byte[] pcm, int offset, int length) throws IOException {
         if (closed.get() || !process.isAlive()) {
             throw new IOException("ffplay PCM sink dead");
@@ -97,6 +102,7 @@ final class FfplayPcmSink implements AutoCloseable {
             return;
         }
         byte[] chunk = Arrays.copyOfRange(pcm, offset, offset + length);
+        scaleS16Le(chunk, volumeLinear);
         while (!queue.offer(chunk)) {
             // Drop oldest queued audio rather than block the decode/display loop.
             if (queue.poll() != null) {
@@ -104,6 +110,24 @@ final class FfplayPcmSink implements AutoCloseable {
             } else {
                 break;
             }
+        }
+    }
+
+    static void scaleS16Le(byte[] pcm, double gain) {
+        if (pcm == null || pcm.length < 2 || gain >= 0.999) {
+            return;
+        }
+        double clamped = Math.max(0.0, Math.min(1.0, gain));
+        for (int i = 0; i + 1 < pcm.length; i += 2) {
+            int sample = (short) ((pcm[i] & 0xFF) | (pcm[i + 1] << 8));
+            int scaled = (int) Math.round(sample * clamped);
+            if (scaled > Short.MAX_VALUE) {
+                scaled = Short.MAX_VALUE;
+            } else if (scaled < Short.MIN_VALUE) {
+                scaled = Short.MIN_VALUE;
+            }
+            pcm[i] = (byte) scaled;
+            pcm[i + 1] = (byte) (scaled >> 8);
         }
     }
 

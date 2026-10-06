@@ -159,8 +159,11 @@ public class FFmpegPlayer implements Playback {
     }
 
     @Override
-    public void onVolume(double volumeLinear) {
+    public synchronized void onVolume(double volumeLinear) {
         this.volumeLinear = Math.max(0.0, Math.min(1.0, volumeLinear));
+        if (pcmSink != null) {
+            pcmSink.setVolume(this.volumeLinear);
+        }
         hls.setVolume(this.volumeLinear);
         log.info("Volume set to {}", this.volumeLinear);
     }
@@ -202,6 +205,7 @@ public class FFmpegPlayer implements Playback {
         try {
             alacDecoder = new LibavAlacDecoder(audioStreamInfo);
             pcmSink = FfplayPcmSink.start(alacDecoder.sampleRate(), alacDecoder.channels());
+            pcmSink.setVolume(volumeLinear);
         } catch (Exception e) {
             closeAudioDecoders();
             throw new IllegalStateException("Failed to start libav ALAC → ffplay PCM sink", e);
@@ -212,6 +216,7 @@ public class FFmpegPlayer implements Playback {
         try {
             aacDecoder = new LibavAacDecoder(audioStreamInfo);
             pcmSink = FfplayPcmSink.start(aacDecoder.sampleRate(), aacDecoder.channels());
+            pcmSink.setVolume(volumeLinear);
             log.info("AAC-LC: using libav → ffplay PCM sink");
         } catch (Exception e) {
             closeAudioDecoders();
@@ -223,6 +228,7 @@ public class FFmpegPlayer implements Playback {
         try {
             aacDecoder = new LibavAacDecoder(audioStreamInfo);
             pcmSink = FfplayPcmSink.start(aacDecoder.sampleRate(), aacDecoder.channels());
+            pcmSink.setVolume(volumeLinear);
             log.info("AAC-ELD: using libav → ffplay PCM sink");
         } catch (Exception e) {
             closeAudioDecoders();
