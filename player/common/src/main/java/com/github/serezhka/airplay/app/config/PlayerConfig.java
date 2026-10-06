@@ -5,7 +5,6 @@ import com.github.serezhka.airplay.player.dump.DumpConfig;
 import com.github.serezhka.airplay.server.AirPlayConfig;
 import com.github.serezhka.airplay.server.AirPlayServer;
 import com.github.serezhka.airplay.server.Playback;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.ApplicationContext;
@@ -17,10 +16,8 @@ public class PlayerConfig {
 
     @Bean
     @ConfigurationProperties(prefix = "airplay")
-    public AirPlayConfig airPlayConfig(@Value("${airplay.hls.enabled:true}") boolean hlsEnabled) {
-        AirPlayConfig config = new AirPlayConfig();
-        config.setHlsEnabled(hlsEnabled);
-        return config;
+    public AirPlayConfig airPlayConfig() {
+        return new AirPlayConfig();
     }
 
     @Bean

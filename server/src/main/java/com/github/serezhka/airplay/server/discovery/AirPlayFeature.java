@@ -77,7 +77,7 @@ public enum AirPlayFeature {
 
     /**
      * Bits a sender treats as "this receiver can play video".
-     * Cleared together when {@code airplay.hls.enabled} is false.
+     * Cleared together when {@code airplay.hls-enabled} is false.
      */
     public static final Set<AirPlayFeature> VIDEO_PLAYBACK = EnumSet.of(
             VIDEO,

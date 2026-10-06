@@ -16,7 +16,7 @@ dependencies {
 
     annotationProcessor("org.springframework.boot:spring-boot-configuration-processor")
 
-    testImplementation(libs.archunit.junit5)
+    testImplementation(libs.archunit.junit6)
     testFixturesImplementation(platform(libs.junit.bom))
     testFixturesImplementation(libs.junit.jupiter)
     "integrationTestImplementation"(testFixtures(project()))

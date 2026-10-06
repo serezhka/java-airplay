@@ -12,7 +12,6 @@ public class GstreamerPlaybackConfig {
 
     @Bean
     public Playback playback(AirPlayConfig airPlayConfig, DumpConfig dumpConfig) {
-        int fps = Math.max(1, airPlayConfig.getFps());
-        return PlaybackFactory.withDump(new GstPlayer(fps), dumpConfig);
+        return PlaybackFactory.withDump(new GstPlayer(airPlayConfig.getFps()), dumpConfig);
     }
 }

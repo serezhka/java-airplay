@@ -12,7 +12,6 @@ public class FfmpegPlaybackConfig {
 
     @Bean
     public Playback playback(AirPlayConfig airPlayConfig, DumpConfig dumpConfig) {
-        int fps = Math.max(1, airPlayConfig.getFps());
-        return PlaybackFactory.withDump(new FFmpegPlayer(fps), dumpConfig);
+        return PlaybackFactory.withDump(new FFmpegPlayer(airPlayConfig.getFps()), dumpConfig);
     }
 }

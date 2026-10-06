@@ -96,7 +96,6 @@ public class GstPlayer implements Playback {
         hls.setOnEnded(() -> observer.onEnded());
         hls.setOnPresented(() -> observer.onPresented());
         hls.setOnSeekDisplayed(() -> observer.onSeekDisplayed());
-        int framerate = Math.max(1, fps);
         useD3d11 = GstVideoSinkFactory.hasD3d11();
         boolean useXimage = GstVideoSinkFactory.hasXimage();
         boolean forceAppsink = Boolean.parseBoolean(System.getProperty("airplay.gst.appsink", "false"))
@@ -125,7 +124,7 @@ public class GstPlayer implements Playback {
         h264Src.setStreamType(AppSrc.StreamType.STREAM);
         h264Src.setCaps(Caps.fromString(
                 "video/x-h264,colorimetry=bt709,stream-format=(string)byte-stream,alignment=(string)nal,framerate="
-                        + framerate + "/1"));
+                        + fps + "/1"));
         h264Src.set("is-live", true);
         h264Src.set("format", Format.TIME);
         h264Src.set("do-timestamp", true);

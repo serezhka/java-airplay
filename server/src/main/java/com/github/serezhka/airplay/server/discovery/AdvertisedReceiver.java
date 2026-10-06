@@ -15,7 +15,7 @@ public final class AdvertisedReceiver {
     /**
      * Screen mirroring, FairPlay, legacy pairing, RAOP, and the codecs we decode.
      * Video playback ({@code /play}, volume, HLS, play queue) is included and
-     * dropped as a group when {@code airplay.hls.enabled} is false.
+     * dropped as a group when {@code airplay.hls-enabled} is false.
      */
     private static final Set<AirPlayFeature> ADVERTISED = EnumSet.of(
             AirPlayFeature.VIDEO,

@@ -8,12 +8,16 @@ dependencies {
     implementation(libs.bundles.jna.full)
     implementation(libs.bundles.gstreamer)
 
-    testImplementation(libs.archunit.junit5)
+    testImplementation(libs.archunit.junit6)
     "integrationTestImplementation"(testFixtures(projects.player.common))
 }
 
 tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
     archiveBaseName.set("java-airplay-gstreamer")
+}
+
+springBoot {
+    mainClass.set("com.github.serezhka.airplay.app.GstreamerPlayerApp")
 }
 
 tasks.named("bootRun") {

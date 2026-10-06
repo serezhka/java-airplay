@@ -1,11 +1,11 @@
 package com.github.serezhka.airplay.app;
 
-public final class GstreamerPlayerApp {
+import org.springframework.boot.autoconfigure.SpringBootApplication;
 
-    private GstreamerPlayerApp() {
-    }
+@SpringBootApplication
+public class GstreamerPlayerApp {
 
     public static void main(String[] args) {
-        PlayerApp.launch(args);
+        PlayerApp.launch(GstreamerPlayerApp.class, args);
     }
 }

@@ -1,11 +1,11 @@
 package com.github.serezhka.airplay.app;
 
-public final class FfmpegPlayerApp {
+import org.springframework.boot.autoconfigure.SpringBootApplication;
 
-    private FfmpegPlayerApp() {
-    }
+@SpringBootApplication
+public class FfmpegPlayerApp {
 
     public static void main(String[] args) {
-        PlayerApp.launch(args);
+        PlayerApp.launch(FfmpegPlayerApp.class, args);
     }
 }

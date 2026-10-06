@@ -24,7 +24,7 @@
 - AirPlay audio + screen mirroring
 - FairPlay decryption for mirrored streams
 - Volume control
-- YouTube HLS playback (not stable, disabled by default `airplay.hls.enabled=false`)
+- YouTube HLS playback (not stable, disabled by default `airplay.hls-enabled=false`)
 - Playbacks: GStreamer, FFmpeg (`ffplay`)
 - Optional session dump (protocol + decrypted media) for debugging
 
@@ -61,7 +61,7 @@ airplay.serverName=srzhka
 airplay.width=1920
 airplay.height=1080
 airplay.fps=60
-airplay.hls.enabled=false
+airplay.hls-enabled=false
 player.tray.enabled=true
 # dump (optional sidecar)
 dump.enabled=false
@@ -100,7 +100,7 @@ Set `dump.enabled=true` to record beside the live player under `dumps/<timestamp
 
 ## Known issues
 
-- YouTube sometimes shows an empty black window on the phone while its interface is drawn on the receiver. That happens when screen mirroring is already on and the receiver advertises video. `airplay.hls.enabled=false` leaves mirroring and audio without that video advertisement.
+- YouTube sometimes shows an empty black window on the phone while its interface is drawn on the receiver. That happens when screen mirroring is already on and the receiver advertises video. `airplay.hls-enabled=false` leaves mirroring and audio without that video advertisement.
 
 ## Related projects
 

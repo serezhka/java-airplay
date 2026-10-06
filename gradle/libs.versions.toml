@@ -2,13 +2,13 @@
 java = "21"
 springBoot = "4.1.1"
 springDependencyManagement = "1.1.7"
-lombokPlugin = "8.14"
+lombokPlugin = "9.8.0"
 testLogger = "4.0.0"
-junit = "5.12.2"
+junit = "6.0.3"
 netty = "4.2.17.Final"
-slf4j = "2.0.17"
-logback = "1.5.18"
-jna = "5.17.0"
+slf4j = "2.0.18"
+logback = "1.5.38"
+jna = "5.19.1"
 jmdns = "3.6.1"
 plist = "1.28"
 eddsa = "0.3.0"
@@ -20,7 +20,7 @@ systemTray = "4.4"
 javacv = "1.5.11"
 ffmpegPlatform = "7.1-1.5.11"
 jakartaAnnotation = "3.0.0"
-archunit = "1.4.1"
+archunit = "1.5.1"
 
 [libraries]
 netty-all = { module = "io.netty:netty-all", version.ref = "netty" }
@@ -43,7 +43,7 @@ jakarta-annotation-api = { module = "jakarta.annotation:jakarta.annotation-api",
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
-archunit-junit5 = { module = "com.tngtech.archunit:archunit-junit5", version.ref = "archunit" }
+archunit-junit6 = { module = "com.tngtech.archunit:archunit-junit6", version.ref = "archunit" }
 
 spring-boot-gradle-plugin = { module = "org.springframework.boot:spring-boot-gradle-plugin", version.ref = "springBoot" }
 spring-dependency-management-plugin = { module = "io.spring.gradle:dependency-management-plugin", version.ref = "springDependencyManagement" }

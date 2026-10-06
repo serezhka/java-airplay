@@ -4,20 +4,18 @@ import com.github.serezhka.airplay.server.AirPlayServer;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.WebApplicationType;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.builder.SpringApplicationBuilder;
+import org.springframework.stereotype.Component;
 
-@Slf4j
+@Component
 @RequiredArgsConstructor
-@SpringBootApplication
 public class PlayerApp {
 
     private final AirPlayServer airPlayServer;
 
-    public static void launch(String[] args) {
-        new SpringApplicationBuilder(PlayerApp.class)
+    public static void launch(Class<?> application, String[] args) {
+        new SpringApplicationBuilder(application)
                 .web(WebApplicationType.NONE)
                 .headless(false)
                 .run(args);
