@@ -139,7 +139,7 @@ public class HlsFcupService {
             // (playlistRemove / next /play still need the reverse channel).
             if (!hls.isPostEosMediaSweepDone()
                     || hls.noteMasterPollAndShouldResweepMedia(MEDIA_RESWEEP_EVERY_MASTER_POLLS)) {
-                log.info("HLS master unchanged after EOS, refreshing media playlists session={}", session.getId());
+                log.debug("HLS master unchanged after EOS, refreshing media playlists session={}", session.getId());
                 hls.beginPostEosMediaRefresh(remoteMediaUris);
                 String first = hls.nextMediaUri();
                 if (first != null) {
@@ -153,7 +153,7 @@ public class HlsFcupService {
                 scheduleMasterPoll(session);
             }
         } else {
-            log.info("HLS master refreshed during playback, bytes={}", rewrittenBody.length());
+            log.debug("HLS master refreshed during playback, bytes={}", rewrittenBody.length());
         }
     }
 
@@ -172,7 +172,7 @@ public class HlsFcupService {
             hls.setPlaybackRate(1);
             beginDisplayedPlayback(session);
         } else {
-            log.info("HLS media unchanged after EOS, polling master session {}", session.getId());
+            log.debug("HLS media unchanged after EOS, polling master session {}", session.getId());
             scheduleMasterPoll(session);
         }
     }
@@ -209,7 +209,7 @@ public class HlsFcupService {
                 }
                 synchronized (queue) {
                     queue.inFlight = false;
-                    log.info("Reverse /event accepted, {} still queued session={}",
+                    log.debug("Reverse /event accepted, {} still queued session={}",
                             queue.pending.size(), session.getId());
                     flushReverseQueue(session, queue);
                 }
@@ -267,7 +267,7 @@ public class HlsFcupService {
                 continue;
             }
             hls.endScrubGesture();
-            log.info("Announcing playing (seek picture) session={}", session.getId());
+            log.debug("Announcing playing (seek picture) session={}", session.getId());
             sendPlaybackStateEvent(session, "playing");
         }
     }
@@ -299,7 +299,7 @@ public class HlsFcupService {
             return;
         }
         cancelPresentationFallback(session.getId());
-        log.info("Announcing playing ({}) session={}", reason, session.getId());
+        log.debug("Announcing playing ({}) session={}", reason, session.getId());
         sendPlaybackStateEvent(session, "playing");
     }
 
@@ -400,10 +400,10 @@ public class HlsFcupService {
         }
         String xml = new String(body, StandardCharsets.UTF_8).replaceAll("\\s+", " ").trim();
         if (playback != null) {
-            log.info("Playback state event: {} position={} rate={} session={} xml={}",
+            log.debug("Playback state event: {} position={} rate={} session={} xml={}",
                     state, playback.position(), playback.rate(), session.getId(), xml);
         } else {
-            log.info("Playback state event: {} session={} xml={}", state, session.getId(), xml);
+            log.debug("Playback state event: {} session={} xml={}", state, session.getId(), xml);
         }
         return body;
     }
@@ -420,7 +420,7 @@ public class HlsFcupService {
         int sid = hls.getReverseEventSessionId();
         String itemUuid = hls.getItemUuid();
         String playId = session.getId();
-        log.info("VOD EOS reverse burst playId={} reverseSessionId={} itemUuid={}",
+        log.debug("VOD EOS reverse burst playId={} reverseSessionId={} itemUuid={}",
                 playId, sid, itemUuid);
         enqueueReverseEvent(session,
                 PropertyListUtil.preparePlaybackStateEvent("loading", sid, itemUuid, null));
@@ -442,7 +442,7 @@ public class HlsFcupService {
         if (hls != null) {
             requestId = hls.nextFcupRequestId();
         }
-        log.info("FCUP request: url={}, requestId={}, session={}", listUri, requestId, session.getId());
+        log.debug("FCUP request: url={}, requestId={}, session={}", listUri, requestId, session.getId());
         byte[] requestContent = PropertyListUtil.prepareEventRequest(session.getId(), listUri, requestId);
         enqueueReverseEvent(session, requestContent);
     }

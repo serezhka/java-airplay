@@ -19,18 +19,21 @@ import org.freedesktop.gstreamer.interfaces.VideoOverlay;
 
 import javax.swing.JFrame;
 import java.util.EnumSet;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * HLS URI playback via {@code playbin3} (fallback {@code playbin}).
+ * HLS URI playback via GStreamer {@code playbin3}.
  * <p>
- * Modern {@code hlsdemux2} needs a streams-aware context; plain {@code uridecodebin} does not
- * provide one. A custom demux graph is a follow-up.
+ * Requires streams-aware {@code hlsdemux2} (do not demote it). Short VOD ENDLIST ads often
+ * never post bus EOS — {@link #checkPositionAtEnd()} covers that. Tear-down runs on
+ * {@code hls-seek-retry} so adaptive-demux HTTP work does not abort the JVM from Netty.
  */
 @Slf4j
 final class GstHlsPipeline {
@@ -66,17 +69,13 @@ final class GstHlsPipeline {
     private volatile boolean mediaClockTrusted;
     private final ScrubClock scrubClock = new ScrubClock();
     private volatile double volumeLinear = 1.0;
-    /** First open uses playbin3. A slot failure rebuilds once with playbin. */
-    private volatile boolean usePlaybin3 = true;
-    private volatile int recoveries;
     private volatile int pipelineGeneration;
-    private final AtomicBoolean recovering = new AtomicBoolean();
-    private final AtomicBoolean gaveUp = new AtomicBoolean();
     private final Object pipelineLock = new Object();
 
     void start(String playlistUri, double volumeLinear) {
+        // stop() must not run under pipelineLock — it disposes on hls-seek-retry.
+        stop();
         synchronized (pipelineLock) {
-            stop();
             uri = playlistUri;
             paused = false;
             ended = false;
@@ -86,8 +85,6 @@ final class GstHlsPipeline {
             lastEndedNotifyNanos = 0;
             mediaClockTrusted = false;
             this.volumeLinear = clampVolume(volumeLinear);
-            usePlaybin3 = ElementFactory.find("playbin3") != null;
-            recoveries = 0;
             buildPipeline();
         }
     }
@@ -106,14 +103,16 @@ final class GstHlsPipeline {
             videoSink = display.sink();
         }
 
-        String launch = usePlaybin3 ? "playbin3 name=hls" : "playbin name=hls";
         final int generation = ++pipelineGeneration;
-        pipeline = (Pipeline) Gst.parseLaunch(launch);
+        if (ElementFactory.find("playbin3") == null) {
+            throw new IllegalStateException("playbin3 is required for HLS (install gstreamer1.0-plugins-base)");
+        }
+        pipeline = (Pipeline) Gst.parseLaunch("playbin3 name=hls");
         pipeline.set("uri", uri);
         pipeline.set("volume", volumeLinear);
         pipeline.set("video-sink", videoSink);
         watchFirstPicture(videoSink);
-        log.info("HLS pipeline using {} headless={}", launch.split(" ")[0], headless);
+        log.info("HLS pipeline using playbin3 headless={}", headless);
 
         if (!headless && display != null && display.overlay() && display.canvas() != null) {
             window = GstFullscreenWindow.create(display.canvas());
@@ -142,12 +141,10 @@ final class GstHlsPipeline {
                 return;
             }
             log.error("HLS pipeline error: code={} message={}", code, message);
-            // hlsdemux2 "Invalid manifest" after ad often never delivers bus EOS — treat as end.
+            // Demux "Invalid manifest" after ad often never delivers bus EOS — treat as end.
             if (message != null && message.toLowerCase().contains("manifest")) {
                 markEndedAndRefresh("ERROR " + message);
-                return;
             }
-            scheduleRebuild(code, message);
         });
         pipeline.getBus().connect((Bus.WARNING) (source, code, message) -> {
             if (generation != pipelineGeneration) {
@@ -180,65 +177,16 @@ final class GstHlsPipeline {
 
         pipeline.play();
         tryPendingSeek("start");
-        // playbin3 + hlsdemux2 often never posts bus EOS for short VOD ENDLIST ads;
-        // poll playlist duration vs position (same idea as the FFmpeg player ENDLIST path).
+        // Short VOD ENDLIST ads often never post bus EOS; poll duration vs position
+        // (same idea as the FFmpeg player ENDLIST path).
         endWatch = seekScheduler.scheduleAtFixedRate(this::checkPositionAtEnd, 400, 200, TimeUnit.MILLISECONDS);
         log.info("HLS pipeline started uri={}", uri);
     }
 
     /**
-     * playbin3 drops the picture when decodebin3 cannot take another stream
-     * (logged as a missing plug-in) and then leaves the last frame on screen.
-     * Rebuild once with playbin, which keeps decoding the streams it can show.
+     * Drop the current pipeline. Caller may already hold {@link #pipelineLock}.
+     * Prefer {@link #disposePipelineOffNetty} when stopping from a control thread.
      */
-    private void scheduleRebuild(int code, String message) {
-        if (recoveries >= 1) {
-            if (!recovering.get() && gaveUp.compareAndSet(false, true)) {
-                log.warn("HLS pipeline error after restart, leaving it: code={} message={}", code, message);
-            }
-            return;
-        }
-        if (!recovering.compareAndSet(false, true)) {
-            return;
-        }
-        recoveries++;
-        usePlaybin3 = false;
-        Double pending = pendingSeekSeconds;
-        double resumeAt = pending != null ? pending : (mediaClockTrusted ? wallClockSeconds() : positionBaseSeconds);
-        final int token = pipelineGeneration;
-        final String keepUri = uri;
-        log.info("HLS playbin3 failed (code={} {}), restarting with playbin at {}s", code, message, resumeAt);
-        seekScheduler.execute(() -> {
-            try {
-                synchronized (pipelineLock) {
-                    if (token != pipelineGeneration || keepUri == null || !keepUri.equals(uri) || ended) {
-                        return;
-                    }
-                    boolean wasPaused = paused;
-                    disposePipeline();
-                    if (!keepUri.equals(uri) || ended) {
-                        return;
-                    }
-                    buildPipeline();
-                    if (resumeAt > 0.5) {
-                        pendingSeekSeconds = resumeAt;
-                        seekAttempts.set(0);
-                        tryPendingSeek("restart");
-                    }
-                    if (wasPaused && pipeline != null) {
-                        pipeline.pause();
-                        paused = true;
-                    }
-                }
-            } catch (RuntimeException e) {
-                log.warn("HLS pipeline restart failed: {}", e.toString());
-            } finally {
-                recovering.set(false);
-            }
-        });
-    }
-
-    /** Drop the current pipeline without forgetting the playlist or the clock. */
     private void disposePipeline() {
         pipelineGeneration++;
         cancelSeekRetry();
@@ -263,6 +211,32 @@ final class GstHlsPipeline {
         }
     }
 
+    /** Adaptive demux HTTP completions must not run on the Netty/control thread. */
+    private void disposePipelineOffNetty() {
+        if (Thread.currentThread().getName().startsWith("hls-seek-retry")) {
+            disposePipeline();
+            return;
+        }
+        try {
+            seekScheduler.submit(() -> {
+                synchronized (pipelineLock) {
+                    disposePipeline();
+                }
+            }).get(5, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("HLS teardown interrupted");
+            synchronized (pipelineLock) {
+                disposePipeline();
+            }
+        } catch (ExecutionException | TimeoutException e) {
+            log.warn("HLS teardown: {}", e.toString());
+            synchronized (pipelineLock) {
+                disposePipeline();
+            }
+        }
+    }
+
     void stop() {
         synchronized (pipelineLock) {
             cancelSeekRetry();
@@ -280,10 +254,9 @@ final class GstHlsPipeline {
             scrubClock.clear();
             presented.set(false);
             seekPicturePending = false;
-            gaveUp.set(false);
             uri = null;
-            disposePipeline();
         }
+        disposePipelineOffNetty();
     }
 
     void pause() {
@@ -296,7 +269,7 @@ final class GstHlsPipeline {
         positionBaseSeconds = reported > 0 ? reported : positionBaseSeconds;
         paused = true;
         pipeline.pause();
-        log.info("HLS paused at {}s", positionBaseSeconds);
+        log.debug("HLS paused at {}s", positionBaseSeconds);
     }
 
     void resume() {
@@ -309,14 +282,14 @@ final class GstHlsPipeline {
         positionAnchorNanos = System.nanoTime();
         double pos = positionBaseSeconds;
         pipeline.play();
-        // playbin3 often stays frozen after PAUSED→PLAYING without a flush seek.
-        // Only seek when leaving pause — never on redundant rate=1 while already playing.
+        // Flush seek after PAUSED→PLAYING so the picture does not stay frozen.
+        // Only when leaving pause — never on redundant rate=1 while already playing.
         if (wasPaused && pos > 0.05) {
             pendingSeekSeconds = pos;
             seekAttempts.set(0);
             tryPendingSeek("resume");
         }
-        log.info("HLS resumed from {}s (wasPaused={})", pos, wasPaused);
+        log.debug("HLS resumed from {}s (wasPaused={})", pos, wasPaused);
     }
 
     void seek(double positionSeconds) {
@@ -526,7 +499,7 @@ final class GstHlsPipeline {
             return;
         }
         seekPicturePending = false;
-        log.info("HLS seek picture at {}s", currentPositionSeconds());
+        log.debug("HLS seek picture at {}s", currentPositionSeconds());
         try {
             onSeekDisplayed.run();
         } catch (RuntimeException e) {
@@ -574,7 +547,7 @@ final class GstHlsPipeline {
                 ns,
                 SeekType.NONE,
                 -1);
-        log.info("HLS seek to {}s -> {} ({})", seek, ok, reason);
+        log.debug("HLS seek to {}s -> {} ({})", seek, ok, reason);
         if (ok) {
             pendingSeekSeconds = null;
             seekAttempts.set(0);

@@ -92,11 +92,13 @@ public class DumpingAirPlayConsumer implements Playback {
     @Override
     public void onSeek(double positionSeconds) {
         player.onSeek(positionSeconds);
+        dumpSafely(() -> dump.onSeek(positionSeconds));
     }
 
     @Override
     public void onVolume(double volumeLinear) {
         player.onVolume(volumeLinear);
+        dumpSafely(() -> dump.onVolume(volumeLinear));
     }
 
     @Override

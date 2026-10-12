@@ -47,14 +47,20 @@ public class MdnsAdvertiser {
                         JmDNS jmDNS = JmDNS.create(inetAddress);
                         jmDNS.registerService(ServiceInfo.create(serverName + AIRPLAY_SERVICE_TYPE,
                                 serverName, airTunesPort, 0, 0, airPlayMDNSProps(mac)));
-                        log.info("{} service is registered on address {}, port {}", serverName + AIRPLAY_SERVICE_TYPE,
-                                inetAddress.getHostAddress(), airTunesPort);
-
                         String airTunesServerName = mac.replaceAll(":", "") + "@" + serverName;
                         jmDNS.registerService(ServiceInfo.create(airTunesServerName + AIRTUNES_SERVICE_TYPE,
                                 airTunesServerName, airTunesPort, 0, 0, airTunesMDNSProps()));
-                        log.info("{} service is registered on address {}, port {}", airTunesServerName + AIRTUNES_SERVICE_TYPE,
-                                inetAddress.getHostAddress(), airTunesPort);
+                        // Loopback registrations are noise at INFO; LAN address is the discovery path.
+                        if (inetAddress.isLoopbackAddress()) {
+                            log.debug("{} / {} registered on {}, port {}",
+                                    serverName + AIRPLAY_SERVICE_TYPE,
+                                    airTunesServerName + AIRTUNES_SERVICE_TYPE,
+                                    inetAddress.getHostAddress(), airTunesPort);
+                        } else {
+                            log.info("{} registered on {}, port {}",
+                                    serverName + AIRPLAY_SERVICE_TYPE,
+                                    inetAddress.getHostAddress(), airTunesPort);
+                        }
 
                         jmDNSList.add(jmDNS);
                     } catch (IOException e) {

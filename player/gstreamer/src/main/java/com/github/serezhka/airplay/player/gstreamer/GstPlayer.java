@@ -38,17 +38,16 @@ public class GstPlayer implements Playback {
     }
 
     /**
-     * Device H.264 decoders drop frames when they have no usable context.
+     * Device H.264 decoders drop frames when they have no usable context — demote them.
      * <p>
-     * The adaptive demuxer with a built-in HTTP client completes those requests on
-     * whatever thread stops the pipeline. Stopping it from the control thread
-     * aborts the process ({@code playlistRemove}). The other demuxer closes its
-     * HTTP source on that source's own thread.
+     * Do <b>not</b> demote {@code hlsdemux2}: {@code playbin3}/{@code decodebin3} need a
+     * streams-aware adaptive demuxer. Ranking it {@code NONE} forces legacy {@code hlsdemux},
+     * and playbin3 then fails with a misleading "missing a plug-in" (code=12). HLS stop must
+     * still run off the Netty thread — see {@link GstHlsPipeline#stop()}.
      */
     private static void preferSoftwareVideoDecode() {
         String[] demote = {
-                "nvh264dec", "nvh265dec", "nvvp8dec", "nvvp9dec", "nvav1dec",
-                "hlsdemux2"
+                "nvh264dec", "nvh265dec", "nvvp8dec", "nvvp9dec", "nvav1dec"
         };
         String rank = System.getenv("GST_PLUGIN_FEATURE_RANK");
         if (rank == null) {

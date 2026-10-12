@@ -44,6 +44,7 @@ public class DumpPlayer implements Playback {
     private int playlistContentSeq;
     private int artworkSeq;
     private int metadataSeq;
+    private int eventSeq;
 
     private FileChannel videoChannel;
     private FileChannel audioChannel;
@@ -189,6 +190,26 @@ public class DumpPlayer implements Playback {
         writeSessionJson();
     }
 
+    @Override
+    public synchronized void onPause() {
+        writeEvent("pause", "");
+    }
+
+    @Override
+    public synchronized void onResume() {
+        writeEvent("resume", "");
+    }
+
+    @Override
+    public synchronized void onSeek(double positionSeconds) {
+        writeEvent("seek", String.format(Locale.US, "%.6f", positionSeconds));
+    }
+
+    @Override
+    public synchronized void onVolume(double volumeLinear) {
+        writeEvent("volume", String.format(Locale.US, "%.6f", volumeLinear));
+    }
+
     @PreDestroy
     public synchronized void close() {
         closeVideo();
@@ -260,10 +281,25 @@ public class DumpPlayer implements Playback {
             Files.createDirectories(sessionDir.resolve("protocol"));
             Files.createDirectories(sessionDir.resolve("media"));
             Files.createDirectories(sessionDir.resolve("extras"));
+            Files.createDirectories(sessionDir.resolve("events"));
         } catch (IOException e) {
             log.error("Failed to create dump session directory {}", sessionDir, e);
         }
         log.info("Dump session directory: {}", sessionDir.toAbsolutePath());
+    }
+
+    private void writeEvent(String kind, String payload) {
+        ensureSession();
+        if (sessionDir == null) {
+            return;
+        }
+        eventSeq++;
+        String name = String.format(Locale.ROOT, "%04d_%s.txt", eventSeq, sanitize(kind, "event"));
+        String body = payload == null || payload.isBlank()
+                ? kind
+                : kind + " " + payload;
+        writeBytes(sessionDir.resolve("events").resolve(name),
+                body.getBytes(StandardCharsets.UTF_8));
     }
 
     private void writeProtocol(ControlExchange exchange) {

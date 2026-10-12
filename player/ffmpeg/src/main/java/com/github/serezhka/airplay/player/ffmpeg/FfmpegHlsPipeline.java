@@ -136,7 +136,7 @@ final class FfmpegHlsPipeline {
         if (!signalFfplay("STOP")) {
             destroyFfplay();
         }
-        log.info("HLS paused at {}s", positionBaseSeconds);
+        log.debug("HLS paused at {}s", positionBaseSeconds);
     }
 
     void resume() {
@@ -144,16 +144,16 @@ final class FfmpegHlsPipeline {
             return;
         }
         if (ended.get()) {
-            log.info("HLS resume ignored at EOS ({}s); waiting for next playlist", positionBaseSeconds);
+            log.debug("HLS resume ignored at EOS ({}s); waiting for next playlist", positionBaseSeconds);
             return;
         }
         paused.set(false);
         positionAnchorNanos = System.nanoTime();
         if (!signalFfplay("CONT")) {
             pendingSeekSeconds.set(positionBaseSeconds);
-            log.info("HLS resume reopening from {}s", positionBaseSeconds);
+            log.debug("HLS resume reopening from {}s", positionBaseSeconds);
         } else {
-            log.info("HLS resumed from {}s", positionBaseSeconds);
+            log.debug("HLS resumed from {}s", positionBaseSeconds);
         }
     }
 
@@ -179,10 +179,10 @@ final class FfmpegHlsPipeline {
             running = ffplayProcess;
         }
         if ((running == null || !running.isAlive()) && (heldFrame == null || !heldFrame.isAlive())) {
-            log.info("HLS seek queued to {}s", positionSeconds);
+            log.debug("HLS seek queued to {}s", positionSeconds);
             return;
         }
-        log.info("HLS seek requested to {}s, holding the current frame", positionSeconds);
+        log.info("HLS seek requested to {}s", positionSeconds);
     }
 
     void noteMediaDuration(double seconds) {
@@ -197,8 +197,16 @@ final class FfmpegHlsPipeline {
             return;
         }
         volumeLinear = next;
-        // ffplay volume is start-only; reopen at current position.
+        // Prefer live Pulse/PipeWire sink-input gain so we do not reopen ffplay (black flash).
+        // Fall back to seek-reopen only when pactl cannot touch this pid.
+        Process running = ffplayProcess;
+        if (running != null && running.isAlive()
+                && PulseSinkInputVolume.setByPid(running.pid(), next)) {
+            return;
+        }
         if (isActive() && !paused.get() && !ended.get()) {
+            log.debug("Pulse volume unavailable; reopening ffplay at {}s volume={}",
+                    String.format(Locale.US, "%.3f", currentPositionSeconds()), next);
             pendingSeekSeconds.set(currentPositionSeconds());
             destroyFfplay();
         }
@@ -379,7 +387,7 @@ final class FfmpegHlsPipeline {
                     sleepQuiet(300);
                     continue;
                 }
-                log.info("HLS ffplay started pid={} ss={} volume={}", process.pid(),
+                log.debug("HLS ffplay started pid={} ss={} volume={}", process.pid(),
                         startAt > 0.05 ? String.format(Locale.US, "%.3f", startAt) : "0",
                         Math.round(volumeLinear * 100));
                 Process held = heldFrame;
@@ -413,7 +421,7 @@ final class FfmpegHlsPipeline {
                     if (heldFrame == held) {
                         heldFrame = null;
                     }
-                    log.info("HLS previous frame dropped (replacement picture={})", shown);
+                    log.debug("HLS previous frame dropped (replacement picture={})", shown);
                 }
             }
 
@@ -477,7 +485,7 @@ final class FfmpegHlsPipeline {
                     sleepQuiet(250);
                     continue;
                 }
-                log.info("HLS ffplay exited code={} after {}ms", code, livedNs / 1_000_000L);
+                log.debug("HLS ffplay exited code={} after {}ms", code, livedNs / 1_000_000L);
                 markEndedAndRefresh("EOS", myEpoch);
                 return;
             } catch (InterruptedException e) {
@@ -743,7 +751,7 @@ final class FfmpegHlsPipeline {
         if (positionAnchorNanos == 0) {
             positionBaseSeconds = clockSeconds;
             positionAnchorNanos = System.nanoTime();
-            log.info("HLS clock latched at {}s", String.format(Locale.US, "%.3f", clockSeconds));
+            log.debug("HLS clock latched at {}s", String.format(Locale.US, "%.3f", clockSeconds));
         }
         if (replacementClockPending) {
             replacementClockPending = false;
@@ -753,7 +761,7 @@ final class FfmpegHlsPipeline {
                 positionBaseSeconds = clockSeconds;
                 positionAnchorNanos = System.nanoTime();
             }
-            log.info("HLS seek picture at {}s", String.format(Locale.US, "%.3f", currentPositionSeconds()));
+            log.debug("HLS seek picture at {}s", String.format(Locale.US, "%.3f", currentPositionSeconds()));
             try {
                 onSeekDisplayed.run();
             } catch (RuntimeException e) {
