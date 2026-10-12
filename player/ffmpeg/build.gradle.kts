@@ -17,7 +17,7 @@ tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
 }
 
 springBoot {
-    mainClass.set("com.github.serezhka.airplay.app.FfmpegPlayerApp")
+    mainClass.set("com.github.serezhka.airplay.player.ffmpeg.app.FfmpegPlayerApp")
 }
 
 tasks.named("bootRun") {

@@ -1,6 +1,6 @@
 package com.github.serezhka.airplay.player.ffmpeg.process;
 
-import com.github.serezhka.airplay.player.support.NativeProcessLog;
+import com.github.serezhka.airplay.player.common.support.NativeProcessLog;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

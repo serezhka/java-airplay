@@ -1,7 +1,7 @@
 package com.github.serezhka.airplay.player.gstreamer;
 
-import com.github.serezhka.airplay.player.harness.GstLaunchPlayer;
-import com.github.serezhka.airplay.player.harness.PlaybackBench;
+import com.github.serezhka.airplay.player.gstreamer.harness.GstLaunchPlayer;
+import com.github.serezhka.airplay.player.common.harness.PlaybackBench;
 import com.github.serezhka.airplay.server.Playback;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
