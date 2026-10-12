@@ -1,4 +1,4 @@
-package com.github.serezhka.airplay.player.ffmpeg;
+package com.github.serezhka.airplay.player.ffmpeg.process;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

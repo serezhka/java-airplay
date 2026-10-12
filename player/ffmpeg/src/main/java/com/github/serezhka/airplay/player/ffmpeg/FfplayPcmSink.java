@@ -1,14 +1,12 @@
 package com.github.serezhka.airplay.player.ffmpeg;
 
-import com.github.serezhka.airplay.player.support.NativeProcessLog;
+import com.github.serezhka.airplay.player.ffmpeg.process.FfplayProcess;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.OutputStream;
 import java.util.Arrays;
-import java.util.Locale;
-import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -53,19 +51,7 @@ final class FfplayPcmSink implements AutoCloseable {
         int rate = sampleRate > 0 ? sampleRate : 44_100;
         int ch = channels > 0 ? channels : 2;
         String layout = ch <= 1 ? "mono" : "stereo";
-        // FFmpeg 7+/8 pcm demuxer: -sample_rate / -ch_layout (not -ar / -ac).
-        ProcessBuilder pb = new ProcessBuilder(
-                "ffplay", "-nodisp", "-loglevel", "error",
-                "-fflags", "nobuffer", "-flags", "low_delay",
-                "-f", "s16le", "-sample_rate", String.valueOf(rate), "-ch_layout", layout,
-                "-i", "pipe:0");
-        forcePulseAudioEnv(pb);
-        // Smaller SDL buffer → less path latency on Pulse/xrdp (Linux only).
-        if (System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("linux")) {
-            pb.environment().put("SDL_AUDIOBUFFERSIZE", "1024");
-        }
-        NativeProcessLog.configureProcessLogging(pb, "ffmpeg");
-        Process process = pb.start();
+        Process process = FfplayProcess.startPcmSink(rate, ch);
         FfplayPcmSink sink = new FfplayPcmSink(process, rate, ch);
         // Keep the pipe from looking like EOF before the first real samples arrive.
         byte[] priming = new byte[rate / 50 * ch * 2]; // ~20ms silence
@@ -172,51 +158,6 @@ final class FfplayPcmSink implements AutoCloseable {
         } catch (IOException ignored) {
             // ignore
         }
-        process.destroy();
-        try {
-            if (!process.waitFor(500, TimeUnit.MILLISECONDS)) {
-                process.destroyForcibly();
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            process.destroyForcibly();
-        }
-    }
-
-    /**
-     * X11 display only — for video-only ffplay (no audio device). Prefer this over
-     * {@link #forcePulseAudioEnv} when the process has {@code -an}; Pulse is often
-     * missing under CI/xvfb and aborts SDL before the first frame.
-     */
-    static void applyDisplayEnv(ProcessBuilder pb) {
-        Map<String, String> env = pb.environment();
-        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
-        if (os.contains("linux")) {
-            env.putIfAbsent("SDL_VIDEODRIVER", "x11");
-            env.putIfAbsent("SDL_AUDIODRIVER", "dummy");
-        }
-        copyEnv(env, "DISPLAY");
-        copyEnv(env, "XAUTHORITY");
-        copyEnv(env, "XDG_RUNTIME_DIR");
-    }
-
-    /** Prefer Pulse/PipeWire over ALSA HDMI when ffplay is spawned from Java on Linux. */
-    static void forcePulseAudioEnv(ProcessBuilder pb) {
-        applyDisplayEnv(pb);
-        Map<String, String> env = pb.environment();
-        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
-        if (os.contains("linux")) {
-            // Override dummy from applyDisplayEnv — this process needs real audio.
-            env.put("SDL_AUDIODRIVER", "pulse");
-        }
-        copyEnv(env, "PULSE_SERVER");
-        copyEnv(env, "PULSE_SINK");
-    }
-
-    private static void copyEnv(Map<String, String> env, String key) {
-        String value = System.getenv(key);
-        if (value != null && !value.isBlank()) {
-            env.put(key, value);
-        }
+        FfplayProcess.destroy(process);
     }
 }

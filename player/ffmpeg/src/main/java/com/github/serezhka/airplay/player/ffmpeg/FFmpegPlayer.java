@@ -1,7 +1,8 @@
 package com.github.serezhka.airplay.player.ffmpeg;
 
-import com.github.serezhka.airplay.protocol.media.AudioStreamInfo;
+import com.github.serezhka.airplay.player.ffmpeg.process.FfplayProcess;
 import com.github.serezhka.airplay.player.support.NativeProcessLog;
+import com.github.serezhka.airplay.protocol.media.AudioStreamInfo;
 import com.github.serezhka.airplay.protocol.media.EndListDuration;
 import com.github.serezhka.airplay.protocol.media.VideoStreamInfo;
 import com.github.serezhka.airplay.server.Playback;
@@ -39,21 +40,10 @@ public class FFmpegPlayer implements Playback {
     public synchronized void onVideoFormat(VideoStreamInfo videoStreamInfo) {
         stopVideoProcess();
         try {
-            // Video-only: -an + dummy SDL audio. Do not force Pulse here — CI/xvfb has no
-            // Pulse server, and SDL_AUDIODRIVER=pulse makes ffplay exit before the first NAL.
-            ProcessBuilder pb = new ProcessBuilder("ffplay", "-fs", "-an", "-loglevel", "debug",
-                    "-f", "h264",
-                    "-framerate", String.valueOf(this.fps),
-                    "-codec:v", "h264", "-probesize", "32",
-                    "-analyzeduration", "0", "-flags", "low_delay", "-");
-            FfplayPcmSink.applyDisplayEnv(pb);
-            NativeProcessLog.configureProcessLogging(pb, "ffmpeg");
-            h264Process = pb.start();
-            if (!h264Process.isAlive()) {
-                h264Process = null;
-                throw new IllegalStateException("ffplay exited immediately after start");
-            }
+            // Video-only: -an + dummy SDL audio (see FfplayProcess.applyDisplayEnv).
+            h264Process = FfplayProcess.startH264Pipe(this.fps);
         } catch (IOException e) {
+            h264Process = null;
             throw new IllegalStateException("Failed to start ffplay. Make sure it is available on PATH.", e);
         }
     }
@@ -245,7 +235,7 @@ public class FFmpegPlayer implements Playback {
         } catch (IOException e) {
             log.debug("Failed to close ffplay input", e);
         }
-        h264Process.destroy();
+        FfplayProcess.destroy(h264Process);
         h264Process = null;
     }
 

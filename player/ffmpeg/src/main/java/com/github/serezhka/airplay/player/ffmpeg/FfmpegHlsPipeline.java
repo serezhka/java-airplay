@@ -1,5 +1,6 @@
 package com.github.serezhka.airplay.player.ffmpeg;
 
+import com.github.serezhka.airplay.player.ffmpeg.process.FfplayProcess;
 import com.github.serezhka.airplay.player.support.NativeProcessLog;
 import lombok.extern.slf4j.Slf4j;
 
@@ -11,10 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Locale;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -104,7 +102,6 @@ final class FfmpegHlsPipeline {
         pendingSeekSeconds.set(null);
         destroyFfplay();
         destroyLoose(heldFrame);
-        heldFrame = null;
         Thread thread = playbackThread;
         playbackThread = null;
         uri = null;
@@ -201,7 +198,7 @@ final class FfmpegHlsPipeline {
         // Fall back to seek-reopen only when pactl cannot touch this pid.
         Process running = ffplayProcess;
         if (running != null && running.isAlive()
-                && PulseSinkInputVolume.setByPid(running.pid(), next)) {
+                && FfplayProcess.setPulseVolume(running.pid(), next)) {
             return;
         }
         if (isActive() && !paused.get() && !ended.get()) {
@@ -446,7 +443,6 @@ final class FfmpegHlsPipeline {
                 if (stopRequested.get() || userStopped.get() || epoch.get() != myEpoch) {
                     destroyFfplay();
                     destroyLoose(heldFrame);
-                    heldFrame = null;
                     continue;
                 }
                 if (pendingSeekSeconds.get() != null) {
@@ -498,59 +494,9 @@ final class FfmpegHlsPipeline {
 
     private Process startFfplay(String playlistUri, double startAt, double volume) throws Exception {
         boolean headless = Boolean.parseBoolean(System.getProperty("airplay.ffmpeg.hls.headless", "false"));
-        List<String> cmd = new ArrayList<>();
-        cmd.add("ffplay");
-        if (headless) {
-            cmd.add("-nodisp");
-        } else {
-            cmd.add("-fs");
-        }
-        cmd.add("-autoexit");
-        // info (not error) so the status line is visible; the log pump keeps only real messages.
-        cmd.add("-loglevel");
-        cmd.add("info");
-        // FFmpeg 6+/8 default extension_picky rejects YouTube googlevideo URLs (no .ts/.m4s).
-        // Only for HLS — these options can break plain mpegts/.ts opens used in smoke tests.
-        if (isHlsPlaylistUri(playlistUri)) {
-            cmd.add("-extension_picky");
-            cmd.add("0");
-            cmd.add("-allowed_extensions");
-            cmd.add("ALL");
-            cmd.add("-allowed_segment_extensions");
-            cmd.add("ALL");
-        }
-        // -fflags nobuffer makes ffplay exit in ~200ms on short VOD ENDLIST items.
-        cmd.add("-flags");
-        cmd.add("low_delay");
-        cmd.add("-framedrop");
-        // Sync to the video clock. "audio" holds the first frame until the audio
-        // clock exists, which on HLS is the multi-second probe.
-        cmd.add("-sync");
-        cmd.add("video");
-        cmd.add("-volume");
-        cmd.add(String.valueOf(Math.max(0, Math.min(100, (int) Math.round(volume * 100)))));
-        if (startAt > 0.05) {
-            cmd.add("-ss");
-            cmd.add(String.format(Locale.US, "%.3f", startAt));
-        }
-        // Default analyze window is 5s. A short window is enough for H.264 HLS and
-        // is what was sitting between "ffplay started" and the first picture.
-        cmd.add("-probesize");
-        cmd.add("32768");
-        cmd.add("-analyzeduration");
-        cmd.add("200000");
-        cmd.add(playlistUri);
-
-        ProcessBuilder pb = new ProcessBuilder(cmd);
-        FfplayPcmSink.forcePulseAudioEnv(pb);
-        if (isHlsPlaylistUri(playlistUri)) {
-            Ipv4Getaddrinfo.apply(pb);
-        }
-        pb.redirectErrorStream(true);
-        pb.redirectOutput(ProcessBuilder.Redirect.PIPE);
         AtomicBoolean picture = new AtomicBoolean();
         incomingPicture = picture;
-        Process process = pb.start();
+        Process process = FfplayProcess.startHls(playlistUri, startAt, volume, headless);
         synchronized (processLock) {
             ffplayProcess = process;
         }
@@ -560,47 +506,13 @@ final class FfmpegHlsPipeline {
         return process;
     }
 
-    private static boolean isHlsPlaylistUri(String playlistUri) {
-        if (playlistUri == null) {
-            return false;
-        }
-        String lower = playlistUri.toLowerCase(Locale.ROOT);
-        int q = lower.indexOf('?');
-        if (q >= 0) {
-            lower = lower.substring(0, q);
-        }
-        return lower.endsWith(".m3u8") || lower.endsWith(".m3u");
-    }
-
-    /**
-     * @return true when the signal was delivered. False on Windows or when ffplay is not running.
-     */
+    /** @return true when the signal was delivered. */
     private boolean signalFfplay(String signal) {
-        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
-        if (os.contains("win")) {
-            return false;
-        }
         Process process;
         synchronized (processLock) {
             process = ffplayProcess;
         }
-        if (process == null || !process.isAlive()) {
-            return false;
-        }
-        try {
-            Process kill = new ProcessBuilder("kill", "-" + signal, Long.toString(process.pid()))
-                    .redirectError(ProcessBuilder.Redirect.DISCARD)
-                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-                    .start();
-            if (!kill.waitFor(2, TimeUnit.SECONDS) || kill.exitValue() != 0) {
-                log.warn("kill -{} pid={} failed", signal, process.pid());
-                return false;
-            }
-            return true;
-        } catch (Exception e) {
-            log.warn("kill -{} failed: {}", signal, e.toString());
-            return false;
-        }
+        return FfplayProcess.signal(process, signal);
     }
 
     private static final long HELD_FRAME_TIMEOUT_MS = 12_000;
@@ -693,26 +605,7 @@ final class FfmpegHlsPipeline {
                 heldFrame = null;
             }
         }
-        if (process.isAlive()) {
-            try {
-                new ProcessBuilder("kill", "-CONT", Long.toString(process.pid()))
-                        .redirectError(ProcessBuilder.Redirect.DISCARD)
-                        .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-                        .start()
-                        .waitFor(1, TimeUnit.SECONDS);
-            } catch (Exception ignored) {
-                // SIGKILL below still reaps a stopped process.
-            }
-        }
-        process.destroy();
-        try {
-            if (!process.waitFor(500, TimeUnit.MILLISECONDS)) {
-                process.destroyForcibly();
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            process.destroyForcibly();
-        }
+        FfplayProcess.destroy(process);
     }
 
     private void markEndedAndRefresh(String reason, long myEpoch) {

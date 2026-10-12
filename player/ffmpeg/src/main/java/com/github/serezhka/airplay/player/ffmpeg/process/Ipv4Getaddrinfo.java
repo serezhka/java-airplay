@@ -1,4 +1,4 @@
-package com.github.serezhka.airplay.player.ffmpeg;
+package com.github.serezhka.airplay.player.ffmpeg.process;
 
 import lombok.extern.slf4j.Slf4j;
 

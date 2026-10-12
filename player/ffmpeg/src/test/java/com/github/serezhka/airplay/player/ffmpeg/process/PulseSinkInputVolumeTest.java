@@ -1,4 +1,4 @@
-package com.github.serezhka.airplay.player.ffmpeg;
+package com.github.serezhka.airplay.player.ffmpeg.process;
 
 import org.junit.jupiter.api.Test;
 
