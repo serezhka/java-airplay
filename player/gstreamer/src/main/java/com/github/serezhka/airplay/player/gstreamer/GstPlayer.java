@@ -42,20 +42,31 @@ public class GstPlayer implements Playback {
     }
 
     /**
+     * Tune plugin ranks before {@link Gst#init}.
+     * <p>
      * Device H.264 decoders drop frames when they have no usable context — demote them.
+     * Prefer {@code curlhttpsrc} over {@code souphttpsrc}: even after soft-stop (no
+     * {@code setState(NULL)}), in-flight libsoup completions can still abort the JVM
+     * seconds later. Soft-stop alone is not enough while soup is the HTTP src.
      * <p>
      * Do <b>not</b> demote {@code hlsdemux2}: {@code playbin3}/{@code decodebin3} need a
      * streams-aware adaptive demuxer. Ranking it {@code NONE} forces legacy {@code hlsdemux},
-     * and playbin3 then fails with a misleading "missing a plug-in" (code=12). HLS stop must
-     * still run off the Netty thread — see {@link GstHlsPipeline#stop()}.
+     * and playbin3 then fails with a misleading "missing a plug-in" (code=12).
      */
     private static void preferSoftwareVideoDecode() {
         String[] demote = {
-                "nvh264dec", "nvh265dec", "nvvp8dec", "nvvp9dec", "nvav1dec"
+                "nvh264dec", "nvh265dec", "nvvp8dec", "nvvp9dec", "nvav1dec",
+                "souphttpsrc"
         };
         String rank = System.getenv("GST_PLUGIN_FEATURE_RANK");
         if (rank == null) {
             rank = "";
+        }
+        if (!rank.contains("curlhttpsrc:")) {
+            if (!rank.isBlank()) {
+                rank = rank + ",";
+            }
+            rank = rank + "curlhttpsrc:300";
         }
         for (String feature : demote) {
             if (rank.contains(feature + ":")) {

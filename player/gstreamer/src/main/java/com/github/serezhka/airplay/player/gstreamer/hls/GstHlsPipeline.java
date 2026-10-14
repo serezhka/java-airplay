@@ -35,8 +35,12 @@ import java.util.concurrent.atomic.AtomicInteger;
  * HLS URI playback via GStreamer {@code playbin3}.
  * <p>
  * Requires streams-aware {@code hlsdemux2} (do not demote it). Short VOD ENDLIST ads often
- * never post bus EOS — {@link #checkPositionAtEnd()} covers that. Tear-down runs on
- * {@code hls-seek-retry} so adaptive-demux HTTP work does not abort the JVM from Netty.
+ * never post bus EOS — {@link #checkPositionAtEnd()} covers that.
+ * <p>
+ * Never {@code setState(NULL)} / {@code dispose()} a live adaptive playbin: the HTTP
+ * stack underneath can abort the JVM on teardown ({@code playlistRemove}). {@link #stop()}
+ * only pauses and orphans the native pipeline; {@link #start} builds a new one on
+ * {@link Gst#getExecutor()}.
  */
 @Slf4j
 public final class GstHlsPipeline {
@@ -76,19 +80,33 @@ public final class GstHlsPipeline {
     private final Object pipelineLock = new Object();
 
     public void start(String playlistUri, double volumeLinear) {
-        // stop() must not run under pipelineLock — it disposes on hls-seek-retry.
-        stop();
-        synchronized (pipelineLock) {
-            uri = playlistUri;
-            paused = false;
-            ended = false;
-            positionBaseSeconds = 0;
-            positionAnchorNanos = System.nanoTime();
-            startedAtNanos = System.nanoTime();
-            lastEndedNotifyNanos = 0;
-            mediaClockTrusted = false;
-            this.volumeLinear = clampVolume(volumeLinear);
-            buildPipeline();
+        // Build on the GStreamer service thread — never on Netty (same rule as teardown).
+        Runnable build = () -> {
+            synchronized (pipelineLock) {
+                orphanPipelineLocked("replace");
+                uri = playlistUri;
+                paused = false;
+                ended = false;
+                positionBaseSeconds = 0;
+                positionAnchorNanos = System.nanoTime();
+                startedAtNanos = System.nanoTime();
+                lastEndedNotifyNanos = 0;
+                mediaClockTrusted = false;
+                this.volumeLinear = clampVolume(volumeLinear);
+                buildPipeline();
+            }
+        };
+        if (Thread.currentThread().getName().startsWith("gstreamer service thread")) {
+            build.run();
+            return;
+        }
+        try {
+            Gst.getExecutor().submit(build).get(20, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("HLS start interrupted");
+        } catch (ExecutionException | TimeoutException e) {
+            log.warn("HLS start failed: {}", e.toString());
         }
     }
 
@@ -187,79 +205,74 @@ public final class GstHlsPipeline {
     }
 
     /**
-     * Drop the current pipeline. Caller may already hold {@link #pipelineLock}.
-     * Prefer {@link #disposePipelineOffNetty} when stopping from a control thread.
+     * Pause and detach the native playbin without {@code setState(NULL)}.
+     * Caller must hold {@link #pipelineLock}. Safe from any thread for the Java-side
+     * bookkeeping; the pause itself is best-effort if GST is mid-callback.
      */
-    private void disposePipeline() {
+    private void orphanPipelineLocked(String reason) {
         pipelineGeneration++;
         cancelSeekRetry();
         cancelEndWatch();
-        if (pipeline != null) {
-            try {
-                pipeline.setState(State.NULL);
-            } catch (Throwable t) {
-                log.debug("HLS setState(NULL) failed: {}", t.toString());
-            }
-            try {
-                pipeline.dispose();
-            } catch (Throwable t) {
-                log.debug("HLS dispose failed: {}", t.toString());
-            }
-            pipeline = null;
-        }
+        Pipeline orphan = pipeline;
+        pipeline = null;
         videoSink = null;
-        if (window != null) {
-            GstFullscreenWindow.hide(window);
-            window = null;
+        JFrame closingWindow = window;
+        window = null;
+        if (closingWindow != null) {
+            GstFullscreenWindow.hide(closingWindow);
         }
-    }
-
-    /** Adaptive demux HTTP completions must not run on the Netty/control thread. */
-    private void disposePipelineOffNetty() {
-        if (Thread.currentThread().getName().startsWith("hls-seek-retry")) {
-            disposePipeline();
+        if (orphan == null) {
             return;
         }
+        log.info("HLS pipeline orphaned ({}); skipping setState(NULL)", reason);
         try {
-            seekScheduler.submit(() -> {
-                synchronized (pipelineLock) {
-                    disposePipeline();
-                }
-            }).get(5, TimeUnit.SECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            log.warn("HLS teardown interrupted");
-            synchronized (pipelineLock) {
-                disposePipeline();
-            }
-        } catch (ExecutionException | TimeoutException e) {
-            log.warn("HLS teardown: {}", e.toString());
-            synchronized (pipelineLock) {
-                disposePipeline();
-            }
+            orphan.setState(State.PAUSED);
+        } catch (Throwable t) {
+            log.debug("HLS pause-on-orphan failed: {}", t.toString());
         }
+        // Native Pipeline intentionally leaked: dispose()/NULL can abort this JVM.
     }
 
     public void stop() {
-        synchronized (pipelineLock) {
-            cancelSeekRetry();
-            cancelEndWatch();
-            pendingSeekSeconds = null;
-            seekAttempts.set(0);
-            paused = false;
-            ended = false;
-            positionBaseSeconds = 0;
-            positionAnchorNanos = 0;
-            playlistDurationSeconds = 0;
-            lastEndedNotifyNanos = 0;
-            startedAtNanos = 0;
-            mediaClockTrusted = false;
-            scrubClock.clear();
-            presented.set(false);
-            seekPicturePending = false;
-            uri = null;
+        Runnable stop = () -> {
+            synchronized (pipelineLock) {
+                pendingSeekSeconds = null;
+                seekAttempts.set(0);
+                paused = false;
+                ended = false;
+                positionBaseSeconds = 0;
+                positionAnchorNanos = 0;
+                playlistDurationSeconds = 0;
+                lastEndedNotifyNanos = 0;
+                startedAtNanos = 0;
+                mediaClockTrusted = false;
+                scrubClock.clear();
+                presented.set(false);
+                seekPicturePending = false;
+                uri = null;
+                orphanPipelineLocked("stop");
+            }
+        };
+        if (Thread.currentThread().getName().startsWith("gstreamer service thread")) {
+            stop.run();
+            return;
         }
-        disposePipelineOffNetty();
+        try {
+            Gst.getExecutor().submit(stop).get(5, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("HLS stop interrupted");
+            synchronized (pipelineLock) {
+                uri = null;
+                orphanPipelineLocked("stop-interrupted");
+            }
+        } catch (ExecutionException | TimeoutException e) {
+            log.warn("HLS stop deferred: {}", e.toString());
+            synchronized (pipelineLock) {
+                uri = null;
+                orphanPipelineLocked("stop-deferred");
+            }
+        }
     }
 
     public void pause() {
