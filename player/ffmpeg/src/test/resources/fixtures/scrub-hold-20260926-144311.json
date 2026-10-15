@@ -1,0 +1,9 @@
+{
+  "session": "session-20260926-144311-stable-ffmpeg",
+  "note": "YouTube scrub sends rate=0, then /scrub on release. A 400ms pause defer fired on the long hold and closed ffplay.",
+  "gestures": [
+    {"rate0": "14:46:15.363", "scrub": "14:46:15.548", "gapMs": 185, "position": 215.978, "deferredPauseApplied": false},
+    {"rate0": "14:46:24.691", "scrub": "14:46:26.533", "gapMs": 1842, "position": 371.089, "deferredPauseApplied": true},
+    {"rate0": "14:46:32.555", "scrub": null, "gapMs": null, "deferredPauseApplied": true}
+  ]
+}

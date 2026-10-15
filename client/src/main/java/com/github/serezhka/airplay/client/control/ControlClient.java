@@ -29,7 +29,7 @@ import java.io.IOException;
 import java.util.Map;
 
 @Slf4j
-public class ControlClient implements Runnable {
+public class ControlClient implements Runnable, AutoCloseable {
 
     private final String address;
     private final int port;
@@ -37,6 +37,8 @@ public class ControlClient implements Runnable {
     private int cseqIdx;
 
     private ControlHandler controlHandler;
+    private volatile EventLoopGroup workerGroup;
+    private volatile io.netty.channel.Channel channel;
 
     /** {@code X-Apple-HKP} value for HAP TLV pairing (default {@code 4} = transient AirPlay). */
     private String hkpVersion = "4";
@@ -44,15 +46,20 @@ public class ControlClient implements Runnable {
     public ControlClient(String address, int port) throws InterruptedException {
         this.address = address;
         this.port = port;
-        new Thread(this).start();
+        Thread t = new Thread(this, "airplay-control-client");
+        t.setDaemon(true);
+        t.start();
         synchronized (this) {
-            wait();
+            wait(15_000L);
+        }
+        if (controlHandler == null) {
+            throw new IllegalStateException("control client failed to start");
         }
     }
 
     @Override
     public void run() {
-        var workerGroup = eventLoopGroup();
+        workerGroup = eventLoopGroup();
         var bootstrap = new Bootstrap();
 
         controlHandler = new ControlHandler();
@@ -76,18 +83,36 @@ public class ControlClient implements Runnable {
             });
 
             var channelFuture = bootstrap.connect().sync();
+            channel = channelFuture.channel();
             log.info("Control client started");
 
             synchronized (this) {
-                this.notify();
+                this.notifyAll();
             }
 
             channelFuture.channel().closeFuture().sync();
         } catch (InterruptedException e) {
-            throw new RuntimeException(e);
+            Thread.currentThread().interrupt();
+            synchronized (this) {
+                this.notifyAll();
+            }
         } finally {
             log.info("Control client stopped");
-            workerGroup.shutdownGracefully();
+            if (workerGroup != null) {
+                workerGroup.shutdownGracefully();
+            }
+        }
+    }
+
+    @Override
+    public void close() {
+        io.netty.channel.Channel ch = channel;
+        if (ch != null) {
+            ch.close();
+        }
+        EventLoopGroup group = workerGroup;
+        if (group != null) {
+            group.shutdownGracefully(0, 2, java.util.concurrent.TimeUnit.SECONDS);
         }
     }
 

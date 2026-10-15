@@ -1,7 +1,7 @@
 package com.github.serezhka.airplay.server.internal;
 
-import com.github.serezhka.airplay.lib.AirPlay;
-import com.github.serezhka.airplay.server.AirPlayConsumer;
+import com.github.serezhka.airplay.protocol.FairPlaySession;
+import com.github.serezhka.airplay.server.Playback;
 import com.github.serezhka.airplay.server.internal.decoder.VideoDecoder;
 import com.github.serezhka.airplay.server.internal.handler.video.VideoHandler;
 import io.netty.bootstrap.ServerBootstrap;
@@ -25,15 +25,15 @@ import java.net.InetSocketAddress;
 @RequiredArgsConstructor
 public class VideoServer implements Runnable {
 
-    private final AirPlay airPlay;
+    private final FairPlaySession airPlay;
 
     private Thread thread;
-    private AirPlayConsumer airPlayConsumer;
+    private Playback airPlayConsumer;
 
     @Getter
     private int port;
 
-    public void start(AirPlayConsumer airPlayConsumer) throws InterruptedException {
+    public void start(Playback airPlayConsumer) throws InterruptedException {
         this.airPlayConsumer = airPlayConsumer;
         thread = new Thread(this);
         thread.start();
@@ -48,6 +48,11 @@ public class VideoServer implements Runnable {
             thread = null;
             airPlayConsumer = null;
         }
+    }
+
+    /** True while the accept thread is alive (mirror video path). */
+    public boolean isRunning() {
+        return thread != null && thread.isAlive();
     }
 
     @Override
@@ -81,9 +86,9 @@ public class VideoServer implements Runnable {
 
             channelFuture.channel().closeFuture().sync();
         } catch (InterruptedException e) {
-            log.info("AirPlay video server interrupted");
+            log.debug("AirPlay video server interrupted");
         } finally {
-            log.info("AirPlay video server stopped");
+            log.debug("AirPlay video server stopped");
             bossGroup.shutdownGracefully();
             workerGroup.shutdownGracefully();
         }

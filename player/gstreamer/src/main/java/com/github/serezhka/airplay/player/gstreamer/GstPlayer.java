@@ -1,10 +1,14 @@
 package com.github.serezhka.airplay.player.gstreamer;
 
-import com.github.serezhka.airplay.lib.AudioStreamInfo;
-import com.github.serezhka.airplay.lib.AppLogs;
-import com.github.serezhka.airplay.lib.HlsEndListDuration;
-import com.github.serezhka.airplay.lib.VideoStreamInfo;
-import com.github.serezhka.airplay.server.AirPlayConsumer;
+import com.github.serezhka.airplay.player.common.support.NativeProcessLog;
+import com.github.serezhka.airplay.player.gstreamer.display.GstFullscreenWindow;
+import com.github.serezhka.airplay.player.gstreamer.display.GstVideoSinkFactory;
+import com.github.serezhka.airplay.player.gstreamer.hls.GstHlsPipeline;
+import com.github.serezhka.airplay.player.gstreamer.util.GstPlayerUtils;
+import com.github.serezhka.airplay.protocol.media.AudioStreamInfo;
+import com.github.serezhka.airplay.protocol.media.EndListDuration;
+import com.github.serezhka.airplay.protocol.media.VideoStreamInfo;
+import com.github.serezhka.airplay.server.Playback;
 import com.sun.jna.Native;
 import lombok.extern.slf4j.Slf4j;
 import org.freedesktop.gstreamer.Buffer;
@@ -26,14 +30,55 @@ import java.awt.Canvas;
 import java.awt.Color;
 
 @Slf4j
-public class GstPlayer implements AirPlayConsumer {
+public class GstPlayer implements Playback {
 
     static {
         GstPlayerUtils.configurePaths();
         GLib.setEnv("GST_DEBUG_NO_COLOR", "1", true);
-        GLib.setEnv("GST_DEBUG_FILE", AppLogs.playerLogFile("gstreamer").toString(), true);
+        GLib.setEnv("GST_DEBUG_FILE", NativeProcessLog.playerLogFile("gstreamer").toString(), true);
         GLib.setEnv("GST_DEBUG", System.getProperty("airplay.gst.debug", "3"), true);
+        preferSoftwareVideoDecode();
         Gst.init(Version.of(1, 10), "BasicPipeline");
+    }
+
+    /**
+     * Tune plugin ranks before {@link Gst#init}.
+     * <p>
+     * Device H.264 decoders drop frames when they have no usable context — demote them.
+     * Prefer {@code curlhttpsrc} over {@code souphttpsrc}: even after soft-stop (no
+     * {@code setState(NULL)}), in-flight libsoup completions can still abort the JVM
+     * seconds later. Soft-stop alone is not enough while soup is the HTTP src.
+     * <p>
+     * Do <b>not</b> demote {@code hlsdemux2}: {@code playbin3}/{@code decodebin3} need a
+     * streams-aware adaptive demuxer. Ranking it {@code NONE} forces legacy {@code hlsdemux},
+     * and playbin3 then fails with a misleading "missing a plug-in" (code=12).
+     */
+    private static void preferSoftwareVideoDecode() {
+        String[] demote = {
+                "nvh264dec", "nvh265dec", "nvvp8dec", "nvvp9dec", "nvav1dec",
+                "souphttpsrc"
+        };
+        String rank = System.getenv("GST_PLUGIN_FEATURE_RANK");
+        if (rank == null) {
+            rank = "";
+        }
+        if (!rank.contains("curlhttpsrc:")) {
+            if (!rank.isBlank()) {
+                rank = rank + ",";
+            }
+            rank = rank + "curlhttpsrc:300";
+        }
+        for (String feature : demote) {
+            if (rank.contains(feature + ":")) {
+                continue;
+            }
+            if (!rank.isBlank()) {
+                rank = rank + ",";
+            }
+            rank = rank + feature + ":NONE";
+        }
+        GLib.setEnv("GST_PLUGIN_FEATURE_RANK", rank, true);
+        log.info("GStreamer feature rank: {}", rank);
     }
 
     private final Pipeline h264Pipeline;
@@ -51,6 +96,7 @@ public class GstPlayer implements AirPlayConsumer {
     private final AppSrc aacLcSrc;
 
     private final GstHlsPipeline hls = new GstHlsPipeline();
+    private volatile Playback.Observer observer = Playback.Observer.NONE;
     private volatile double volumeLinear = 1.0;
 
     private AudioStreamInfo.CompressionType audioCompressionType;
@@ -60,8 +106,10 @@ public class GstPlayer implements AirPlayConsumer {
     }
 
     public GstPlayer(int fps) {
-        log.info("GStreamer debug log: {}", AppLogs.playerLogFile("gstreamer"));
-        int framerate = Math.max(1, fps);
+        log.info("GStreamer debug log: {}", NativeProcessLog.playerLogFile("gstreamer"));
+        hls.setOnEnded(() -> observer.onEnded());
+        hls.setOnPresented(() -> observer.onPresented());
+        hls.setOnSeekDisplayed(() -> observer.onSeekDisplayed());
         useD3d11 = GstVideoSinkFactory.hasD3d11();
         boolean useXimage = GstVideoSinkFactory.hasXimage();
         boolean forceAppsink = Boolean.parseBoolean(System.getProperty("airplay.gst.appsink", "false"))
@@ -90,7 +138,7 @@ public class GstPlayer implements AirPlayConsumer {
         h264Src.setStreamType(AppSrc.StreamType.STREAM);
         h264Src.setCaps(Caps.fromString(
                 "video/x-h264,colorimetry=bt709,stream-format=(string)byte-stream,alignment=(string)nal,framerate="
-                        + framerate + "/1"));
+                        + fps + "/1"));
         h264Src.set("is-live", true);
         h264Src.set("format", Format.TIME);
         h264Src.set("do-timestamp", true);
@@ -216,38 +264,43 @@ public class GstPlayer implements AirPlayConsumer {
     }
 
     @Override
-    public void onMediaPlaylist(String playlistUri) {
+    public void setObserver(Playback.Observer observer) {
+        this.observer = observer == null ? Playback.Observer.NONE : observer;
+    }
+
+    @Override
+    public void onPlaylist(String playlistUri) {
         hls.start(playlistUri, volumeLinear);
     }
 
     @Override
-    public void onMediaPlaylistRemove() {
+    public void onPlaylistRemoved() {
         hls.stop();
     }
 
     @Override
-    public void onMediaPlaylistContent(String playlistUri, String content) {
+    public void onPlaylistContent(String playlistUri, String content) {
         if (playlistUri == null || !playlistUri.contains("mediadata.m3u8") || content == null) {
             return;
         }
-        double sum = HlsEndListDuration.sumSeconds(content);
+        double sum = EndListDuration.sumSeconds(content);
         if (sum > 0) {
             hls.noteMediaDuration(sum);
         }
     }
 
     @Override
-    public void onMediaPlaylistPause() {
+    public void onPause() {
         hls.pause();
     }
 
     @Override
-    public void onMediaPlaylistResume() {
+    public void onResume() {
         hls.resume();
     }
 
     @Override
-    public void onMediaPlaylistSeek(double positionSeconds) {
+    public void onSeek(double positionSeconds) {
         hls.seek(positionSeconds);
     }
 
@@ -274,9 +327,9 @@ public class GstPlayer implements AirPlayConsumer {
     }
 
     @Override
-    public PlaybackInfo playbackInfo() {
+    public Playback.Info info() {
         if (!hls.isActive()) {
-            return AirPlayConsumer.super.playbackInfo();
+            return Playback.super.info();
         }
         double duration = hls.durationSeconds();
         double position = hls.currentPositionSeconds();
@@ -285,7 +338,7 @@ public class GstPlayer implements AirPlayConsumer {
         }
         // VOD EOS is paused locally; report rate=1 (rate=0 looks like user pause).
         double rate = (hls.isPaused() && !hls.isEnded()) ? 0 : 1;
-        return new PlaybackInfo(duration, position, rate);
+        return new Playback.Info(duration, position, rate);
     }
 
     boolean isVideoPipelinePlaying() {

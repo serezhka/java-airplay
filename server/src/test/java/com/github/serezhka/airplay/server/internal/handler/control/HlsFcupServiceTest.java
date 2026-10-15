@@ -1,6 +1,6 @@
 package com.github.serezhka.airplay.server.internal.handler.control;
 
-import com.github.serezhka.airplay.server.AirPlayConsumer;
+import com.github.serezhka.airplay.server.Playback;
 import com.github.serezhka.airplay.server.internal.handler.session.HlsPlaylistState;
 import com.github.serezhka.airplay.server.internal.handler.session.SessionManager;
 import org.junit.jupiter.api.AfterEach;
@@ -23,9 +23,9 @@ class HlsFcupServiceTest {
     private final List<String> reverseBodies = new CopyOnWriteArrayList<>();
     private final AtomicInteger pauseCalls = new AtomicInteger();
     private final AtomicInteger resumeCalls = new AtomicInteger();
-    private final AirPlayConsumer consumer = new AirPlayConsumer() {
+    private final Playback consumer = new Playback() {
         @Override
-        public void onVideoFormat(com.github.serezhka.airplay.lib.VideoStreamInfo videoStreamInfo) {
+        public void onVideoFormat(com.github.serezhka.airplay.protocol.media.VideoStreamInfo videoStreamInfo) {
         }
 
         @Override
@@ -37,7 +37,7 @@ class HlsFcupServiceTest {
         }
 
         @Override
-        public void onAudioFormat(com.github.serezhka.airplay.lib.AudioStreamInfo audioStreamInfo) {
+        public void onAudioFormat(com.github.serezhka.airplay.protocol.media.AudioStreamInfo audioStreamInfo) {
         }
 
         @Override
@@ -49,17 +49,17 @@ class HlsFcupServiceTest {
         }
 
         @Override
-        public void onMediaPlaylist(String playlistUri) {
+        public void onPlaylist(String playlistUri) {
             playlists.add(playlistUri);
         }
 
         @Override
-        public void onMediaPlaylistPause() {
+        public void onPause() {
             pauseCalls.incrementAndGet();
         }
 
         @Override
-        public void onMediaPlaylistResume() {
+        public void onResume() {
             resumeCalls.incrementAndGet();
         }
     };
@@ -87,6 +87,7 @@ class HlsFcupServiceTest {
     @AfterEach
     void tearDown() {
         service.cancelAllMasterPolls();
+        service.stopStateHeartbeat();
     }
 
     @Test
@@ -179,5 +180,46 @@ class HlsFcupServiceTest {
         assertTrue(xmls.get(3).contains("<string>shape</string>"));
         assertTrue(xmls.get(4).contains("<string>currentItemChanged</string>"));
         recording.cancelAllMasterPolls();
+        recording.stopStateHeartbeat();
+    }
+
+    @Test
+    void heartbeatAnnouncesPlayingAndPausedButNotTheEndPin() {
+        var session = sessions.getSession("beat");
+        var hls = new HlsPlaylistState(
+                "mlhls://localhost/master.m3u8",
+                "http://127.0.0.1/playlist/master.m3u8?session=beat");
+        hls.markPlaybackStarted();
+        session.setHlsPlaylistState(hls);
+
+        assertEquals("playing", service.playbackStateToAnnounce(session));
+
+        hls.setPlaybackRate(0);
+        assertEquals("paused", service.playbackStateToAnnounce(session));
+
+        hls.setPlaybackRate(1);
+        hls.setWaitingForMasterChange(true);
+        assertEquals(null, service.playbackStateToAnnounce(session));
+    }
+
+    @Test
+    void playingIsAnnouncedOnlyAfterThePicture() {
+        var session = sessions.getSession("show");
+        var hls = new HlsPlaylistState(
+                "mlhls://localhost/master.m3u8",
+                "http://127.0.0.1/playlist/master.m3u8?session=show");
+        session.setHlsPlaylistState(hls);
+
+        service.beginDisplayedPlayback(session);
+
+        assertEquals(List.of("http://127.0.0.1/playlist/master.m3u8?session=show"), playlists);
+        assertTrue(reverseBodies.stream().noneMatch(body -> body.contains("playing")));
+
+        service.onPlaybackPresented();
+        assertTrue(reverseBodies.stream().anyMatch(body -> body.contains("state:playing")));
+
+        reverseBodies.clear();
+        service.onPlaybackPresented();
+        assertTrue(reverseBodies.isEmpty());
     }
 }

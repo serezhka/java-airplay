@@ -9,7 +9,7 @@ application {
 }
 
 dependencies {
-    implementation(projects.lib)
+    implementation(projects.protocol)
     implementation(libs.slf4j.api)
     implementation(libs.dd.plist)
     implementation(libs.jmdns)

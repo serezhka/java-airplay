@@ -15,7 +15,6 @@ import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Scanner;
-import java.util.Set;
 
 /**
  * Smoke client: legacy pair + FairPlay + mirror video, optional AAC audio.
@@ -41,7 +40,7 @@ public class App {
             log.info("Using {}:{}", address, port);
         } else {
             ServiceDiscovery discovery = new ServiceDiscovery();
-            Set<ServiceDiscovery.Info> airplayServices = discovery.discover();
+            var airplayServices = discovery.discover();
             if (airplayServices.isEmpty()) {
                 log.info("No airplay services found! Exiting..");
                 System.exit(0);

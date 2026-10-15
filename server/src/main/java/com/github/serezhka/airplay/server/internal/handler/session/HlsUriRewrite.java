@@ -48,7 +48,12 @@ public final class HlsUriRewrite {
 
     /**
      * Keep H.264 ({@code avc1}) variants only. YouTube masters mix AVC + VP9/AV1; a single
-     * HLS consumer cannot switch video codecs mid-playlist. Also drops subtitle renditions.
+     * HLS consumer cannot switch video codecs mid-playlist.
+     * <p>
+     * Drops subtitles and every audio rendition except one default per {@code GROUP-ID}
+     * referenced by the remaining variant ({@code DEFAULT=YES}, else the first). Keeps a
+     * single AVC video variant (highest bandwidth). Extra renditions make ffplay probe
+     * every playlist before the first frame — about five seconds on a full YouTube master.
      */
     public static String preferAvcVariants(String masterPlaylist) {
         String[] lines = masterPlaylist.split("\\R", -1);
@@ -85,6 +90,21 @@ public final class HlsUriRewrite {
         if (variants.isEmpty()) {
             return masterPlaylist;
         }
+        int best = 0;
+        long bestBandwidth = -1;
+        for (int i = 0; i < variants.size(); i += 2) {
+            long bandwidth = extractAttr(variants.get(i), "BANDWIDTH")
+                    .map(HlsUriRewrite::parseLong)
+                    .orElse(0L);
+            if (bandwidth >= bestBandwidth) {
+                bestBandwidth = bandwidth;
+                best = i;
+            }
+        }
+        String chosenInfo = variants.get(best);
+        String chosenUri = variants.get(best + 1);
+        audioGroups.clear();
+        extractAttr(chosenInfo, "AUDIO").ifPresent(audioGroups::add);
 
         StringBuilder out = new StringBuilder();
         for (String header : headers) {
@@ -93,16 +113,38 @@ public final class HlsUriRewrite {
             }
             out.append(header).append('\n');
         }
+        for (String media : defaultAudioOnly(audioMedia, audioGroups)) {
+            out.append(media).append('\n');
+        }
+        out.append(chosenInfo).append('\n');
+        out.append(chosenUri).append('\n');
+        return out.toString();
+    }
+
+    private static long parseLong(String value) {
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException e) {
+            return 0L;
+        }
+    }
+
+    /** One audio rendition per referenced group: {@code DEFAULT=YES}, otherwise the first. */
+    private static List<String> defaultAudioOnly(List<String> audioMedia, Set<String> audioGroups) {
+        java.util.Map<String, String> chosen = new java.util.LinkedHashMap<>();
+        java.util.Map<String, Boolean> chosenIsDefault = new java.util.LinkedHashMap<>();
         for (String media : audioMedia) {
             String group = extractAttr(media, "GROUP-ID").orElse("");
-            if (audioGroups.isEmpty() || audioGroups.contains(group)) {
-                out.append(media).append('\n');
+            if (!audioGroups.isEmpty() && !audioGroups.contains(group)) {
+                continue;
+            }
+            boolean isDefault = extractAttr(media, "DEFAULT").orElse("").equalsIgnoreCase("YES");
+            if (!chosen.containsKey(group) || (isDefault && !chosenIsDefault.getOrDefault(group, false))) {
+                chosen.put(group, media);
+                chosenIsDefault.put(group, isDefault);
             }
         }
-        for (String variantLine : variants) {
-            out.append(variantLine).append('\n');
-        }
-        return out.toString();
+        return new ArrayList<>(chosen.values());
     }
 
     private static boolean isAvcStreamInfo(String streamInf) {

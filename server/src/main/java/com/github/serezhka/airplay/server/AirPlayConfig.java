@@ -8,4 +8,5 @@ public class AirPlayConfig {
     private int width;
     private int height;
     private int fps;
+    private boolean hlsEnabled;
 }

@@ -21,11 +21,9 @@ rootProject.name = "java-airplay"
 
 enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
 
-include("lib")
+include("protocol")
 include("server")
 include("client")
-include("player:app")
+include("player:common")
 include("player:gstreamer")
-include("player:dump")
 include("player:ffmpeg")
-include("player:harness")

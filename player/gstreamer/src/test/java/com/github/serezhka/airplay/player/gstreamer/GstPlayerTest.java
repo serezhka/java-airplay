@@ -1,5 +1,6 @@
 package com.github.serezhka.airplay.player.gstreamer;
 
+import com.github.serezhka.airplay.player.gstreamer.util.GstPlayerUtils;
 import org.freedesktop.gstreamer.Gst;
 import org.freedesktop.gstreamer.Pipeline;
 import org.freedesktop.gstreamer.Version;
