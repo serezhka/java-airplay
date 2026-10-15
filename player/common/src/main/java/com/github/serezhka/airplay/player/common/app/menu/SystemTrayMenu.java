@@ -13,6 +13,7 @@ import org.springframework.context.ApplicationContext;
 
 import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
@@ -21,6 +22,9 @@ import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Tray: Quit, Cast to… (browse / connect / PIN), Disconnect.
+ * <p>
+ * Status text goes only through {@link SystemTray#setStatus} (a separate MenuItem
+ * would duplicate the same line in the menu).
  */
 @Slf4j
 public class SystemTrayMenu {
@@ -36,7 +40,8 @@ public class SystemTrayMenu {
     private final SystemTray systemTray;
     private final Menu castMenu;
     private final MenuItem disconnectItem;
-    private final MenuItem statusItem;
+    /** Device rows + placeholder under Cast to… (Refresh/separator stay). */
+    private final List<Entry> deviceEntries = new ArrayList<>();
 
     public SystemTrayMenu(ApplicationContext context, MirrorCaster mirrorCaster) {
         this.context = context;
@@ -44,22 +49,18 @@ public class SystemTrayMenu {
         systemTray = SystemTray.get();
         if (systemTray == null) {
             log.warn("Unable to load SystemTray!");
-            // Keep fields assigned for null-safe no-op
             castMenu = null;
             disconnectItem = null;
-            statusItem = null;
             return;
         }
 
         systemTray.setImage(Objects.requireNonNull(getClass().getResource("/menu/tray_icon.png")));
         systemTray.setStatus("java-airplay");
 
-        statusItem = new MenuItem("Not casting");
-        statusItem.setEnabled(false);
-        systemTray.getMenu().add(statusItem);
-
         castMenu = systemTray.getMenu().add(new Menu("Cast to…"));
-        rebuildCastMenu(List.of());
+        castMenu.add(new MenuItem("Refresh…", e -> castExecutor.execute(this::refreshDevices)));
+        castMenu.add(new Separator());
+        showDevices(List.of());
 
         disconnectItem = new MenuItem("Disconnect cast", e -> castExecutor.execute(() -> {
             mirrorCaster.disconnect();
@@ -78,37 +79,36 @@ public class SystemTrayMenu {
         }));
     }
 
-    private void rebuildCastMenu(List<ServiceDiscovery.Info> devices) {
+    private void showDevices(List<ServiceDiscovery.Info> devices) {
         if (castMenu == null) {
             return;
         }
-        clearMenu(castMenu);
-        castMenu.add(new MenuItem("Refresh…", e -> castExecutor.execute(this::refreshDevices)));
-        castMenu.add(new Separator());
+        for (Entry entry : deviceEntries) {
+            entry.remove();
+        }
+        deviceEntries.clear();
+
         if (devices.isEmpty()) {
             MenuItem empty = new MenuItem("(no devices — Refresh)");
             empty.setEnabled(false);
-            castMenu.add(empty);
+            deviceEntries.add(castMenu.add(empty));
             return;
         }
         for (ServiceDiscovery.Info device : devices) {
-            castMenu.add(new MenuItem(device.toString(), e -> castExecutor.execute(() -> connectTo(device))));
+            ServiceDiscovery.Info target = device;
+            deviceEntries.add(castMenu.add(new MenuItem(target.toString(),
+                    e -> castExecutor.execute(() -> connectTo(target)))));
         }
-    }
-
-    private static void clearMenu(Menu menu) {
-        Entry entry;
-        while ((entry = menu.getFirst()) != null) {
-            entry.remove();
-        }
+        log.info("Tray cast menu lists {} device(s)", devices.size());
     }
 
     private void refreshDevices() {
         setStatus("Searching…");
         try {
             List<ServiceDiscovery.Info> devices = mirrorCaster.discover();
+            log.info("Tray refresh got {} device(s): {}", devices.size(), devices);
             SwingUtilities.invokeLater(() -> {
-                rebuildCastMenu(devices);
+                showDevices(devices);
                 refreshStatus();
                 if (devices.isEmpty()) {
                     JOptionPane.showMessageDialog(null,
@@ -146,7 +146,6 @@ public class SystemTrayMenu {
                     return;
                 }
                 if (needPin == JOptionPane.YES_OPTION) {
-                    // Request PIN on background… but we're on EDT; kick request after dialog prep.
                     new Thread(() -> mirrorCaster.requestPinDisplay(device), "airplay-pin-start").start();
                     String pin = (String) JOptionPane.showInputDialog(
                             null,
@@ -185,29 +184,22 @@ public class SystemTrayMenu {
     }
 
     private void refreshStatus() {
-        if (statusItem == null || disconnectItem == null) {
+        if (disconnectItem == null || systemTray == null) {
             return;
         }
         if (mirrorCaster.isConnected()) {
             String name = mirrorCaster.connectedDevice().map(ServiceDiscovery.Info::name).orElse("device");
-            statusItem.setText("Casting → " + name);
             disconnectItem.setEnabled(true);
             systemTray.setStatus("Casting → " + name);
         } else {
-            statusItem.setText("Not casting");
             disconnectItem.setEnabled(false);
             systemTray.setStatus("java-airplay");
         }
     }
 
     private void setStatus(String text) {
-        SwingUtilities.invokeLater(() -> {
-            if (statusItem != null) {
-                statusItem.setText(text);
-            }
-            if (systemTray != null) {
-                systemTray.setStatus(text);
-            }
-        });
+        if (systemTray != null) {
+            systemTray.setStatus(text);
+        }
     }
 }

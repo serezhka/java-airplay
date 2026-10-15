@@ -61,7 +61,7 @@ public class ServiceDiscovery {
         }
         List<Info> out = new ArrayList<>(byKey.values());
         out.sort(Comparator.comparing(Info::name, String.CASE_INSENSITIVE_ORDER));
-        log.info("Discovered {} AirPlay service(s)", out.size());
+        log.info("Discovered {} AirPlay service(s): {}", out.size(), out);
         return out;
     }
 
