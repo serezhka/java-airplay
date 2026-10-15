@@ -42,15 +42,17 @@ public class ServiceDiscovery {
                 TimeUnit.MILLISECONDS.sleep(Math.min(waitMs, 1500));
                 ServiceInfo[] found = jmdns.list(AIRPLAY_SERVICE_TYPE, waitMs);
                 for (ServiceInfo serviceInfo : found) {
-                    Inet4Address[] v4 = serviceInfo.getInet4Addresses();
-                    if (v4.length == 0) {
-                        continue;
+                    for (InetAddress addr : serviceInfo.getInetAddresses()) {
+                        if (!(addr instanceof Inet4Address) || addr.isLoopbackAddress()) {
+                            continue;
+                        }
+                        Info info = new Info(
+                                serviceInfo.getName(),
+                                addr.getHostAddress(),
+                                serviceInfo.getPort());
+                        // Prefer first non-loopback; do not let 127.0.0.1 win the key.
+                        byKey.putIfAbsent(info.address() + ":" + info.port(), info);
                     }
-                    Info info = new Info(
-                            serviceInfo.getName(),
-                            v4[0].getHostAddress(),
-                            serviceInfo.getPort());
-                    byKey.putIfAbsent(info.address() + ":" + info.port(), info);
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();

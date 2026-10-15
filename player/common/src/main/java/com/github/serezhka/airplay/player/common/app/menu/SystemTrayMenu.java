@@ -2,8 +2,6 @@ package com.github.serezhka.airplay.player.common.app.menu;
 
 import com.github.serezhka.airplay.client.cast.MirrorCaster;
 import com.github.serezhka.airplay.client.discovery.ServiceDiscovery;
-import dorkbox.systemTray.Entry;
-import dorkbox.systemTray.Menu;
 import dorkbox.systemTray.MenuItem;
 import dorkbox.systemTray.Separator;
 import dorkbox.systemTray.SystemTray;
@@ -11,9 +9,21 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.SpringApplication;
 import org.springframework.context.ApplicationContext;
 
+import javax.swing.BorderFactory;
+import javax.swing.DefaultListModel;
+import javax.swing.JButton;
+import javax.swing.JDialog;
+import javax.swing.JLabel;
+import javax.swing.JList;
 import javax.swing.JOptionPane;
+import javax.swing.JPanel;
+import javax.swing.JScrollPane;
+import javax.swing.ListSelectionModel;
 import javax.swing.SwingUtilities;
-import java.util.ArrayList;
+import javax.swing.WindowConstants;
+import java.awt.BorderLayout;
+import java.awt.Dimension;
+import java.awt.FlowLayout;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
@@ -21,10 +31,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Tray: Quit, Cast to… (browse / connect / PIN), Disconnect.
- * <p>
- * Status text goes only through {@link SystemTray#setStatus} (a separate MenuItem
- * would duplicate the same line in the menu).
+ * Tray: Cast to… opens a Swing picker (dorkbox submenus do not refresh reliably),
+ * Disconnect, Quit.
  */
 @Slf4j
 public class SystemTrayMenu {
@@ -38,10 +46,7 @@ public class SystemTrayMenu {
     });
 
     private final SystemTray systemTray;
-    private final Menu castMenu;
     private final MenuItem disconnectItem;
-    /** Device rows + placeholder under Cast to… (Refresh/separator stay). */
-    private final List<Entry> deviceEntries = new ArrayList<>();
 
     public SystemTrayMenu(ApplicationContext context, MirrorCaster mirrorCaster) {
         this.context = context;
@@ -49,7 +54,6 @@ public class SystemTrayMenu {
         systemTray = SystemTray.get();
         if (systemTray == null) {
             log.warn("Unable to load SystemTray!");
-            castMenu = null;
             disconnectItem = null;
             return;
         }
@@ -57,10 +61,8 @@ public class SystemTrayMenu {
         systemTray.setImage(Objects.requireNonNull(getClass().getResource("/menu/tray_icon.png")));
         systemTray.setStatus("java-airplay");
 
-        castMenu = systemTray.getMenu().add(new Menu("Cast to…"));
-        castMenu.add(new MenuItem("Refresh…", e -> castExecutor.execute(this::refreshDevices)));
-        castMenu.add(new Separator());
-        showDevices(List.of());
+        systemTray.getMenu().add(new MenuItem("Cast to…", e ->
+                SwingUtilities.invokeLater(this::openCastDialog)));
 
         disconnectItem = new MenuItem("Disconnect cast", e -> castExecutor.execute(() -> {
             mirrorCaster.disconnect();
@@ -79,54 +81,88 @@ public class SystemTrayMenu {
         }));
     }
 
-    private void showDevices(List<ServiceDiscovery.Info> devices) {
-        if (castMenu == null) {
-            return;
-        }
-        for (Entry entry : deviceEntries) {
-            entry.remove();
-        }
-        deviceEntries.clear();
+    private void openCastDialog() {
+        JDialog dialog = new JDialog((java.awt.Frame) null, "Cast videotestsrc", true);
+        dialog.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
 
-        if (devices.isEmpty()) {
-            MenuItem empty = new MenuItem("(no devices — Refresh)");
-            empty.setEnabled(false);
-            deviceEntries.add(castMenu.add(empty));
-            return;
-        }
-        for (ServiceDiscovery.Info device : devices) {
-            ServiceDiscovery.Info target = device;
-            deviceEntries.add(castMenu.add(new MenuItem(target.toString(),
-                    e -> castExecutor.execute(() -> connectTo(target)))));
-        }
-        log.info("Tray cast menu lists {} device(s)", devices.size());
-    }
+        DefaultListModel<ServiceDiscovery.Info> model = new DefaultListModel<>();
+        JList<ServiceDiscovery.Info> list = new JList<>(model);
+        list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        list.setVisibleRowCount(8);
 
-    private void refreshDevices() {
-        setStatus("Searching…");
-        try {
-            List<ServiceDiscovery.Info> devices = mirrorCaster.discover();
-            log.info("Tray refresh got {} device(s): {}", devices.size(), devices);
-            SwingUtilities.invokeLater(() -> {
-                showDevices(devices);
-                refreshStatus();
-                if (devices.isEmpty()) {
-                    JOptionPane.showMessageDialog(null,
-                            "No AirPlay devices found on the LAN.",
-                            "Cast",
-                            JOptionPane.INFORMATION_MESSAGE);
+        JLabel status = new JLabel(" ");
+        JButton refresh = new JButton("Refresh");
+        JButton connect = new JButton("Connect");
+        JButton cancel = new JButton("Cancel");
+        connect.setEnabled(false);
+
+        list.addListSelectionListener(e -> {
+            if (!e.getValueIsAdjusting()) {
+                connect.setEnabled(list.getSelectedValue() != null);
+            }
+        });
+
+        Runnable doRefresh = () -> {
+            refresh.setEnabled(false);
+            connect.setEnabled(false);
+            status.setText("Searching…");
+            castExecutor.execute(() -> {
+                try {
+                    List<ServiceDiscovery.Info> devices = mirrorCaster.discover();
+                    log.info("Cast dialog refresh: {} device(s): {}", devices.size(), devices);
+                    SwingUtilities.invokeLater(() -> {
+                        model.clear();
+                        for (ServiceDiscovery.Info d : devices) {
+                            model.addElement(d);
+                        }
+                        status.setText(devices.isEmpty()
+                                ? "No devices found"
+                                : devices.size() + " device(s)");
+                        refresh.setEnabled(true);
+                    });
+                } catch (Exception ex) {
+                    log.warn("Discovery failed: {}", ex.toString());
+                    SwingUtilities.invokeLater(() -> {
+                        status.setText("Discovery failed");
+                        refresh.setEnabled(true);
+                        JOptionPane.showMessageDialog(dialog, ex.getMessage(), "Cast",
+                                JOptionPane.ERROR_MESSAGE);
+                    });
                 }
             });
-        } catch (Exception ex) {
-            log.warn("Discovery failed: {}", ex.toString());
-            SwingUtilities.invokeLater(() -> {
-                refreshStatus();
-                JOptionPane.showMessageDialog(null,
-                        "Discovery failed:\n" + ex.getMessage(),
-                        "Cast",
-                        JOptionPane.ERROR_MESSAGE);
-            });
-        }
+        };
+
+        refresh.addActionListener(e -> doRefresh.run());
+        cancel.addActionListener(e -> dialog.dispose());
+        connect.addActionListener(e -> {
+            ServiceDiscovery.Info device = list.getSelectedValue();
+            if (device == null) {
+                return;
+            }
+            dialog.dispose();
+            castExecutor.execute(() -> connectTo(device));
+        });
+
+        JPanel south = new JPanel(new BorderLayout(8, 8));
+        south.add(status, BorderLayout.CENTER);
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        buttons.add(refresh);
+        buttons.add(connect);
+        buttons.add(cancel);
+        south.add(buttons, BorderLayout.EAST);
+
+        JPanel root = new JPanel(new BorderLayout(8, 8));
+        root.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        root.add(new JLabel("Select an AirPlay receiver:"), BorderLayout.NORTH);
+        root.add(new JScrollPane(list), BorderLayout.CENTER);
+        root.add(south, BorderLayout.SOUTH);
+        root.setPreferredSize(new Dimension(480, 320));
+
+        dialog.setContentPane(root);
+        dialog.pack();
+        dialog.setLocationRelativeTo(null);
+        doRefresh.run();
+        dialog.setVisible(true);
     }
 
     private void connectTo(ServiceDiscovery.Info device) {
