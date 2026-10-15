@@ -1,5 +1,7 @@
 package com.github.serezhka.airplay.client.hap;
 
+import com.github.serezhka.airplay.protocol.crypto.AirPlayKeyLabels;
+
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
@@ -11,7 +13,7 @@ import java.util.Arrays;
  */
 public final class HapSrp6a {
 
-    private static final String USERNAME = "Pair-Setup";
+    private static final String USERNAME = AirPlayKeyLabels.PAIR_SETUP_SRP_USERNAME;
 
     /** RFC 5054 3072-bit safe prime. */
     private static final BigInteger N = new BigInteger(

@@ -1,5 +1,7 @@
 package com.github.serezhka.airplay.client.hap;
 
+import com.github.serezhka.airplay.protocol.crypto.AirPlayKeyLabels;
+
 import javax.crypto.AEADBadTagException;
 import javax.crypto.Cipher;
 import javax.crypto.spec.IvParameterSpec;
@@ -31,9 +33,9 @@ public final class HapControlCipher {
     /** Client role: encrypt with Write key, decrypt with Read key. */
     public static HapControlCipher forClient(byte[] srpSharedSecret) throws GeneralSecurityException {
         byte[] writeKey = HapCrypto.hkdfSha512(srpSharedSecret,
-                "Control-Salt", "Control-Write-Encryption-Key", 32);
+                AirPlayKeyLabels.CONTROL_SALT, AirPlayKeyLabels.CONTROL_WRITE_KEY, 32);
         byte[] readKey = HapCrypto.hkdfSha512(srpSharedSecret,
-                "Control-Salt", "Control-Read-Encryption-Key", 32);
+                AirPlayKeyLabels.CONTROL_SALT, AirPlayKeyLabels.CONTROL_READ_KEY, 32);
         return new HapControlCipher(new Encryptor(writeKey), new Decryptor(readKey));
     }
 

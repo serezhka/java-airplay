@@ -9,30 +9,21 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.SpringApplication;
 import org.springframework.context.ApplicationContext;
 
-import javax.swing.BorderFactory;
-import javax.swing.DefaultListModel;
-import javax.swing.JButton;
-import javax.swing.JDialog;
-import javax.swing.JLabel;
-import javax.swing.JList;
 import javax.swing.JOptionPane;
-import javax.swing.JPanel;
-import javax.swing.JScrollPane;
-import javax.swing.ListSelectionModel;
 import javax.swing.SwingUtilities;
-import javax.swing.WindowConstants;
-import java.awt.BorderLayout;
-import java.awt.Dimension;
-import java.awt.FlowLayout;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Tray: Cast to… opens a Swing picker (dorkbox submenus do not refresh reliably),
- * Disconnect, Quit.
+ * Tray: Cast submenu (devices, GTK-safe rebuild) + Exit.
+ * Click a device to connect (⚙… / ✓); click again to disconnect.
  */
 @Slf4j
 public class SystemTrayMenu {
@@ -44,9 +35,20 @@ public class SystemTrayMenu {
         t.setDaemon(true);
         return t;
     });
+    private final ScheduledExecutorService uiDebounce = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "airplay-tray-debounce");
+        t.setDaemon(true);
+        return t;
+    });
 
     private final SystemTray systemTray;
-    private final MenuItem disconnectItem;
+    private final CastDeviceMenu deviceMenu;
+    private final AtomicReference<List<ServiceDiscovery.Info>> devices =
+            new AtomicReference<>(List.of());
+    private final AtomicReference<String> activeKey = new AtomicReference<>();
+    private final AtomicReference<CastDeviceMenu.DeviceState> deviceState =
+            new AtomicReference<>(CastDeviceMenu.DeviceState.IDLE);
+    private final AtomicBoolean rebuildScheduled = new AtomicBoolean();
 
     public SystemTrayMenu(ApplicationContext context, MirrorCaster mirrorCaster) {
         this.context = context;
@@ -54,188 +56,131 @@ public class SystemTrayMenu {
         systemTray = SystemTray.get();
         if (systemTray == null) {
             log.warn("Unable to load SystemTray!");
-            disconnectItem = null;
+            deviceMenu = null;
             return;
         }
 
         systemTray.setImage(Objects.requireNonNull(getClass().getResource("/menu/tray_icon.png")));
-        systemTray.setStatus("java-airplay");
+        // Do not call setStatus — on GTK AppIndicator each status string becomes a
+        // non-removable disabled menu row ("java-airplay", "Connecting…", …).
 
-        systemTray.getMenu().add(new MenuItem("Cast to…", e ->
-                SwingUtilities.invokeLater(this::openCastDialog)));
+        deviceMenu = new CastDeviceMenu(
+                systemTray,
+                device -> castExecutor.execute(() -> onDeviceClick(device)));
 
-        disconnectItem = new MenuItem("Disconnect cast", e -> castExecutor.execute(() -> {
-            mirrorCaster.disconnect();
-            SwingUtilities.invokeLater(this::refreshStatus);
-        }));
-        disconnectItem.setEnabled(false);
-        systemTray.getMenu().add(disconnectItem);
-
+        // Exit is fixed on the root menu — never rebuilt (GTK peer safety).
         systemTray.getMenu().add(new Separator());
-        systemTray.getMenu().add(new MenuItem("Quit", event -> {
-            castExecutor.execute(mirrorCaster::disconnect);
-            castExecutor.shutdownNow();
-            systemTray.shutdown();
-            SpringApplication.exit(context, () -> 0);
-            System.exit(0);
-        }));
+        systemTray.getMenu().add(new MenuItem("Exit", e -> exitApp()));
+
+        rebuildMenuNow();
+
+        mirrorCaster.startDiscovery(list -> {
+            devices.set(List.copyOf(list));
+            log.info("Discovery update: {} device(s)", list.size());
+            scheduleRebuild();
+        });
     }
 
-    private void openCastDialog() {
-        JDialog dialog = new JDialog((java.awt.Frame) null, "Cast videotestsrc", true);
-        dialog.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
-
-        DefaultListModel<ServiceDiscovery.Info> model = new DefaultListModel<>();
-        JList<ServiceDiscovery.Info> list = new JList<>(model);
-        list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        list.setVisibleRowCount(8);
-
-        JLabel status = new JLabel(" ");
-        JButton refresh = new JButton("Refresh");
-        JButton connect = new JButton("Connect");
-        JButton cancel = new JButton("Cancel");
-        connect.setEnabled(false);
-
-        list.addListSelectionListener(e -> {
-            if (!e.getValueIsAdjusting()) {
-                connect.setEnabled(list.getSelectedValue() != null);
-            }
-        });
-
-        Runnable doRefresh = () -> {
-            refresh.setEnabled(false);
-            connect.setEnabled(false);
-            status.setText("Searching…");
-            castExecutor.execute(() -> {
-                try {
-                    List<ServiceDiscovery.Info> devices = mirrorCaster.discover();
-                    log.info("Cast dialog refresh: {} device(s): {}", devices.size(), devices);
-                    SwingUtilities.invokeLater(() -> {
-                        model.clear();
-                        for (ServiceDiscovery.Info d : devices) {
-                            model.addElement(d);
-                        }
-                        status.setText(devices.isEmpty()
-                                ? "No devices found"
-                                : devices.size() + " device(s)");
-                        refresh.setEnabled(true);
-                    });
-                } catch (Exception ex) {
-                    log.warn("Discovery failed: {}", ex.toString());
-                    SwingUtilities.invokeLater(() -> {
-                        status.setText("Discovery failed");
-                        refresh.setEnabled(true);
-                        JOptionPane.showMessageDialog(dialog, ex.getMessage(), "Cast",
-                                JOptionPane.ERROR_MESSAGE);
-                    });
-                }
-            });
-        };
-
-        refresh.addActionListener(e -> doRefresh.run());
-        cancel.addActionListener(e -> dialog.dispose());
-        connect.addActionListener(e -> {
-            ServiceDiscovery.Info device = list.getSelectedValue();
-            if (device == null) {
-                return;
-            }
-            dialog.dispose();
-            castExecutor.execute(() -> connectTo(device));
-        });
-
-        JPanel south = new JPanel(new BorderLayout(8, 8));
-        south.add(status, BorderLayout.CENTER);
-        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT));
-        buttons.add(refresh);
-        buttons.add(connect);
-        buttons.add(cancel);
-        south.add(buttons, BorderLayout.EAST);
-
-        JPanel root = new JPanel(new BorderLayout(8, 8));
-        root.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
-        root.add(new JLabel("Select an AirPlay receiver:"), BorderLayout.NORTH);
-        root.add(new JScrollPane(list), BorderLayout.CENTER);
-        root.add(south, BorderLayout.SOUTH);
-        root.setPreferredSize(new Dimension(480, 320));
-
-        dialog.setContentPane(root);
-        dialog.pack();
-        dialog.setLocationRelativeTo(null);
-        doRefresh.run();
-        dialog.setVisible(true);
+    private void scheduleRebuild() {
+        if (!rebuildScheduled.compareAndSet(false, true)) {
+            return;
+        }
+        uiDebounce.schedule(() -> {
+            rebuildScheduled.set(false);
+            SwingUtilities.invokeLater(this::rebuildMenuNow);
+        }, 400, TimeUnit.MILLISECONDS);
     }
 
-    private void connectTo(ServiceDiscovery.Info device) {
-        setStatus("Connecting to " + device.name() + "…");
+    private void onDeviceClick(ServiceDiscovery.Info device) {
+        String key = device.key();
+        String current = activeKey.get();
+        CastDeviceMenu.DeviceState state = deviceState.get();
+
+        if (state == CastDeviceMenu.DeviceState.CONNECTED
+                && key.equals(current)
+                && mirrorCaster.isConnected()) {
+            mirrorCaster.disconnect();
+            activeKey.set(null);
+            deviceState.set(CastDeviceMenu.DeviceState.IDLE);
+            rebuildMenuNow();
+            return;
+        }
+
+        if (state == CastDeviceMenu.DeviceState.CONNECTING) {
+            return;
+        }
+
+        if (mirrorCaster.isConnected()) {
+            mirrorCaster.disconnect();
+        }
+
+        activeKey.set(key);
+        deviceState.set(CastDeviceMenu.DeviceState.CONNECTING);
+        rebuildMenuNow();
+
         try {
-            AtomicReference<String> pinChoice = new AtomicReference<>();
-            AtomicReference<Boolean> cancelled = new AtomicReference<>(false);
-            SwingUtilities.invokeAndWait(() -> {
-                int needPin = JOptionPane.showConfirmDialog(null,
-                        "Does " + device.name() + " require a PIN?\n"
-                                + "Yes = show PIN on TV (if supported), then enter it.\n"
-                                + "No = legacy path (this project's receiver).",
-                        "Cast",
-                        JOptionPane.YES_NO_CANCEL_OPTION);
-                if (needPin == JOptionPane.CANCEL_OPTION || needPin == JOptionPane.CLOSED_OPTION) {
-                    cancelled.set(true);
-                    return;
-                }
-                if (needPin == JOptionPane.YES_OPTION) {
-                    new Thread(() -> mirrorCaster.requestPinDisplay(device), "airplay-pin-start").start();
-                    String pin = (String) JOptionPane.showInputDialog(
-                            null,
-                            "Enter the PIN shown on " + device.name(),
-                            "Cast PIN",
-                            JOptionPane.QUESTION_MESSAGE,
-                            null,
-                            null,
-                            "");
-                    if (pin == null) {
-                        cancelled.set(true);
-                        return;
-                    }
-                    pinChoice.set(pin.trim());
-                } else {
-                    pinChoice.set("");
-                }
-            });
-            if (Boolean.TRUE.equals(cancelled.get())) {
-                SwingUtilities.invokeLater(this::refreshStatus);
-                return;
-            }
-            mirrorCaster.connect(device, pinChoice.get());
-            SwingUtilities.invokeLater(this::refreshStatus);
+            mirrorCaster.connect(device, this::promptPinOnEdt);
+            deviceState.set(CastDeviceMenu.DeviceState.CONNECTED);
+            rebuildMenuNow();
+        } catch (MirrorCaster.CastCancelledException cancelled) {
+            log.info("{}", cancelled.getMessage());
+            clearActive();
         } catch (Exception ex) {
             log.warn("Cast to {} failed: {}", device, ex.toString());
             mirrorCaster.disconnect();
-            SwingUtilities.invokeLater(() -> {
-                refreshStatus();
-                JOptionPane.showMessageDialog(null,
-                        "Cast failed:\n" + ex.getMessage(),
-                        "Cast",
-                        JOptionPane.ERROR_MESSAGE);
-            });
+            clearActive();
+            SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(null,
+                    "Cast failed:\n" + ex.getMessage(),
+                    "Cast",
+                    JOptionPane.ERROR_MESSAGE));
         }
     }
 
-    private void refreshStatus() {
-        if (disconnectItem == null || systemTray == null) {
+    private void clearActive() {
+        activeKey.set(null);
+        deviceState.set(CastDeviceMenu.DeviceState.IDLE);
+        rebuildMenuNow();
+    }
+
+    private void rebuildMenuNow() {
+        if (deviceMenu == null) {
             return;
         }
-        if (mirrorCaster.isConnected()) {
-            String name = mirrorCaster.connectedDevice().map(ServiceDiscovery.Info::name).orElse("device");
-            disconnectItem.setEnabled(true);
-            systemTray.setStatus("Casting → " + name);
-        } else {
-            disconnectItem.setEnabled(false);
-            systemTray.setStatus("java-airplay");
-        }
+        deviceMenu.install(
+                new ArrayList<>(devices.get()),
+                activeKey.get(),
+                deviceState.get());
     }
 
-    private void setStatus(String text) {
+    private String promptPinOnEdt(ServiceDiscovery.Info device) throws Exception {
+        AtomicReference<String> pin = new AtomicReference<>();
+        SwingUtilities.invokeAndWait(() -> {
+            String entered = (String) JOptionPane.showInputDialog(
+                    null,
+                    "Enter the PIN shown on " + device.name(),
+                    "Cast PIN",
+                    JOptionPane.QUESTION_MESSAGE,
+                    null,
+                    null,
+                    "");
+            pin.set(entered);
+        });
+        return pin.get();
+    }
+
+    private void exitApp() {
+        castExecutor.execute(() -> {
+            try {
+                mirrorCaster.close();
+            } catch (Exception ignored) {
+            }
+        });
+        castExecutor.shutdownNow();
+        uiDebounce.shutdownNow();
         if (systemTray != null) {
-            systemTray.setStatus(text);
+            systemTray.shutdown();
         }
+        SpringApplication.exit(context, () -> 0);
+        System.exit(0);
     }
 }

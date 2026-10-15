@@ -14,3 +14,9 @@ gst.log
 **/build/reports/playback-metrics/
 __pycache__/
 /scripts
+# local probe / dump helpers (not part of the product path)
+/client/scripts/
+
+# local pairing secrets
+**/.dt-creds*.json
+**/dt-creds.json

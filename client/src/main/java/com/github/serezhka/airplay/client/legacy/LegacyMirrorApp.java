@@ -20,23 +20,15 @@ import java.util.concurrent.TimeUnit;
  *
  * <pre>
  *   ./gradlew :client:run -PmainClass=com.github.serezhka.airplay.client.legacy.LegacyMirrorApp \
- *       --args='--host 192.168.0.101 --port 7000'
+ *       --args='--host &lt;receiver-ip&gt; --port 7000'
  *
  *   ./gradlew :client:run -PmainClass=com.github.serezhka.airplay.client.legacy.LegacyMirrorApp \
- *       --args='--host 192.168.0.101 --port 7000 --duration 15'
+ *       --args='--host &lt;receiver-ip&gt; --port 7000 --duration 15'
  * </pre>
  */
 @Slf4j
 public final class LegacyMirrorApp {
 
-    /** FairPlay fixture session key (matches lib AirPlayFairPlayTest vectors). */
-    private static final byte[] ENCRYPTED_AES_KEY = new byte[]{
-            70, 80, 76, 89, 1, 2, 1, 0, 0, 0, 0, 60, 0, 0, 0, 0, 63, 121, 70, -69, 3, -8, 117, -13, 83, 72,
-            105, -51, -11, -43, -1, 17, 0, 0, 0, 16, 24, -109, 13, 105, -32, -125, -73, -128, 21, 29, -31, 72,
-            -41, 112, -36, -75, 57, 110, 71, -72, -25, -59, 102, 22, 19, -43, 35, 74, -20, 86, 15, 16, 126, 5,
-            15, -45};
-    private static final byte[] AES_KEY = new byte[]{
-            116, 39, -113, 75, -84, 63, -70, 20, -55, -65, -37, 125, 86, 89, -128, -6};
     private static final byte[] EIV = Base64.getDecoder().decode("91IdM6RTh4keicMei2GfQA==");
     private static final long STREAM_CONNECTION_ID = -3907568444900622110L;
 
@@ -66,11 +58,11 @@ public final class LegacyMirrorApp {
             log.debug("info:\n{}", info.toXMLPropertyList());
         }
 
-        byte[] sharedSecret = LegacyFairPlayHandshake.perform(controlClient);
+        LegacyFairPlayHandshake.Result fp = LegacyFairPlayHandshake.perform(controlClient);
         log.info("Legacy pair-verify + fp-setup finished");
 
         NSDictionary rtspSetup1Request = new NSDictionary();
-        rtspSetup1Request.put("ekey", ENCRYPTED_AES_KEY);
+        rtspSetup1Request.put("ekey", LegacyFairPlayHandshake.FIXTURE_EKEY);
         rtspSetup1Request.put("eiv", EIV);
         controlClient.rtspSetup(rtspSetup1Request);
 
@@ -91,7 +83,8 @@ public final class LegacyMirrorApp {
                 .get("dataPort").toJavaObject(Integer.class);
 
         FairPlayVideoEncryptor videoEncryptor =
-                new FairPlayVideoEncryptor(AES_KEY, sharedSecret, Long.toUnsignedString(STREAM_CONNECTION_ID));
+                new FairPlayVideoEncryptor(fp.aesKey(), fp.sharedSecret(),
+                        Long.toUnsignedString(STREAM_CONNECTION_ID));
         new VideoClient(cli.host, videoPort, videoEncryptor);
 
         if (cli.durationSeconds > 0) {
@@ -120,7 +113,7 @@ public final class LegacyMirrorApp {
                 }
             }
             if (host == null || host.isBlank()) {
-                throw new IllegalArgumentException("--host is required (e.g. --host 192.168.0.101)");
+                throw new IllegalArgumentException("--host is required (e.g. --host <receiver-ip>)");
             }
             return new Cli(host, port, durationSeconds);
         }

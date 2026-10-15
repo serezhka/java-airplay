@@ -18,6 +18,8 @@ import javax.crypto.spec.SecretKeySpec;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import com.github.serezhka.airplay.protocol.crypto.AirPlayKeyLabels;
+
 import java.nio.charset.StandardCharsets;
 import java.security.*;
 import java.util.Arrays;
@@ -109,11 +111,11 @@ public class PairingHandshake {
 
     private Cipher initCipher() throws NoSuchAlgorithmException, NoSuchPaddingException, InvalidAlgorithmParameterException, InvalidKeyException {
         MessageDigest sha512Digest = MessageDigest.getInstance("SHA-512");
-        sha512Digest.update("Pair-Verify-AES-Key".getBytes(StandardCharsets.UTF_8));
+        sha512Digest.update(AirPlayKeyLabels.PAIR_VERIFY_AES_KEY.getBytes(StandardCharsets.UTF_8));
         sha512Digest.update(ecdhSecret);
         byte[] sharedSecretSha512AesKey = Arrays.copyOfRange(sha512Digest.digest(), 0, 16);
 
-        sha512Digest.update("Pair-Verify-AES-IV".getBytes(StandardCharsets.UTF_8));
+        sha512Digest.update(AirPlayKeyLabels.PAIR_VERIFY_AES_IV.getBytes(StandardCharsets.UTF_8));
         sha512Digest.update(ecdhSecret);
         byte[] sharedSecretSha512AesIV = Arrays.copyOfRange(sha512Digest.digest(), 0, 16);
 

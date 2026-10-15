@@ -79,6 +79,10 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     }
 
     public FullHttpResponse receive() throws InterruptedException {
-        return responseQueue.take();
+        FullHttpResponse response = responseQueue.poll(45, TimeUnit.SECONDS);
+        if (response == null) {
+            throw new IllegalStateException("timed out waiting for control response (45s)");
+        }
+        return response;
     }
 }

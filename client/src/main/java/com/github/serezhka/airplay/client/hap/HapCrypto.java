@@ -1,7 +1,8 @@
 package com.github.serezhka.airplay.client.hap;
 
+import com.github.serezhka.airplay.protocol.crypto.HkdfSha512;
+
 import javax.crypto.Cipher;
-import javax.crypto.Mac;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
@@ -9,7 +10,7 @@ import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.util.Arrays;
 
-/** HKDF-SHA512 and ChaCha20-Poly1305 helpers for HAP pair-setup / pair-verify. */
+/** ChaCha helpers and thin wrappers for HAP pair-setup / pair-verify. */
 public final class HapCrypto {
 
     private HapCrypto() {
@@ -25,40 +26,34 @@ public final class HapCrypto {
 
     public static byte[] hkdfSha512(byte[] ikm, String salt, String info, int length)
             throws GeneralSecurityException {
-        return hkdfSha512(ikm, salt.getBytes(StandardCharsets.UTF_8),
-                info.getBytes(StandardCharsets.UTF_8), length);
+        return HkdfSha512.derive(ikm, salt, info, length);
     }
 
     public static byte[] hkdfSha512(byte[] ikm, byte[] salt, byte[] info, int length)
             throws GeneralSecurityException {
-        Mac mac = Mac.getInstance("HmacSHA512");
-        mac.init(new SecretKeySpec(salt, "HmacSHA512"));
-        byte[] prk = mac.doFinal(ikm);
-
-        mac.init(new SecretKeySpec(prk, "HmacSHA512"));
-        byte[] result = new byte[length];
-        byte[] t = new byte[0];
-        int offset = 0;
-        byte counter = 1;
-        while (offset < length) {
-            mac.update(t);
-            mac.update(info);
-            mac.update(counter);
-            t = mac.doFinal();
-            int copy = Math.min(t.length, length - offset);
-            System.arraycopy(t, 0, result, offset, copy);
-            offset += copy;
-            counter++;
-        }
-        return result;
+        return HkdfSha512.derive(ikm, salt, info, length);
     }
 
-    /** 12-byte ChaCha20-Poly1305 nonce: ASCII label left-aligned, zero-padded. */
+    /** 12-byte ChaCha20-Poly1305 nonce: ASCII label left-aligned, zero-padded (HAP PS-Msg*). */
     public static byte[] nonce(String label) {
         byte[] n = new byte[12];
         byte[] raw = label.getBytes(StandardCharsets.UTF_8);
         System.arraycopy(raw, 0, n, 0, Math.min(raw.length, 12));
         return n;
+    }
+
+    /**
+     * 12-byte nonce with the label at offset 4 (working AirPlay pair-verify / DataStream).
+     * {@code PV-Msg02}/{@code PV-Msg03} and LE counter nonces use this layout.
+     */
+    public static byte[] nonceAt4(byte[] label) {
+        byte[] n = new byte[12];
+        System.arraycopy(label, 0, n, 4, Math.min(label.length, 8));
+        return n;
+    }
+
+    public static byte[] nonceAt4(String label) {
+        return nonceAt4(label.getBytes(StandardCharsets.UTF_8));
     }
 
     public static byte[] chachaEncrypt(byte[] key, byte[] nonce12, byte[] plaintext)

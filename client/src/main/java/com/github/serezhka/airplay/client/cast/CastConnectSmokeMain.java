@@ -10,7 +10,8 @@ import java.util.concurrent.TimeUnit;
  * videotestsrc for a few seconds, disconnect.
  * <pre>
  *   ./gradlew :client:run -PmainClass=...CastConnectSmokeMain --args='--seconds 5'
- *   ./gradlew :client:run -PmainClass=...CastConnectSmokeMain --args='--host 192.168.0.208 --port 7000 --seconds 5'
+ *   ./gradlew :client:run -PmainClass=...CastConnectSmokeMain \
+ *       --args='--host &lt;receiver-ip&gt; --port 7000 --seconds 5'
  * </pre>
  */
 public final class CastConnectSmokeMain {

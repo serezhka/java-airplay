@@ -16,17 +16,17 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Blocking TCP control channel matching the measured Python probe framing
- * (raw RTSP + post-M4 ChaCha length-prefix blocks). Used to isolate Netty
- * pipeline quirks on receivers that accept the Python path.
+ * Blocking TCP control channel (raw RTSP + post-M4 ChaCha length-prefix blocks).
+ * Prefer this over Netty for HAP SETUP/RECORD — some receivers hang on the Netty path.
  */
-public final class HapSocketControl implements AutoCloseable {
+public final class HapSocketControl implements AutoCloseable, HapPairChannel {
 
     private final String host;
     private final Socket socket;
     private final InputStream in;
     private final OutputStream out;
     private int cseq;
+    private String hkpVersion = "3";
     private HapControlCipher cipher;
     private byte[] encryptedCarry = new byte[0];
     private byte[] plaintextCarry = new byte[0];
@@ -36,11 +36,21 @@ public final class HapSocketControl implements AutoCloseable {
         this.socket = new Socket();
         this.socket.connect(new InetSocketAddress(host, port), 8000);
         this.socket.setTcpNoDelay(true);
-        this.socket.setSoTimeout(12000);
+        this.socket.setSoTimeout(30_000);
         this.in = socket.getInputStream();
         this.out = socket.getOutputStream();
     }
 
+    public void setHkpVersion(String version) {
+        this.hkpVersion = version == null || version.isBlank() ? "3" : version.trim();
+    }
+
+    @Override
+    public String getHkpVersion() {
+        return hkpVersion;
+    }
+
+    @Override
     public void enableControlEncryption(byte[] srpSharedSecret) throws Exception {
         this.cipher = HapControlCipher.forClient(srpSharedSecret);
     }
@@ -53,9 +63,22 @@ public final class HapSocketControl implements AutoCloseable {
         return (NSDictionary) BinaryPropertyListParser.parse(r.body);
     }
 
+    public void pairPinStart() throws Exception {
+        Response r = exchange("POST", "/pair-pin-start", Map.of("X-Apple-HKP", hkpVersion), new byte[0]);
+        if (r.statusCode >= 400) {
+            throw new IllegalStateException("POST /pair-pin-start → " + r.statusLine);
+        }
+    }
+
+    @Override
+    public Map<Integer, byte[]> pairSetupTlv(byte[] tlvBody) throws Exception {
+        return pairSetupTlv(hkpVersion, tlvBody);
+    }
+
     public Map<Integer, byte[]> pairSetupTlv(String hkp, byte[] tlvBody) throws Exception {
+        // Working HKP3 senders use octet-stream for /pair-setup (not pairing+tlv8).
         Response r = exchange("POST", "/pair-setup", Map.of(
-                "Content-Type", "application/pairing+tlv8",
+                "Content-Type", "application/octet-stream",
                 "X-Apple-HKP", hkp
         ), tlvBody);
         if (r.statusCode >= 400) {
@@ -67,14 +90,38 @@ public final class HapSocketControl implements AutoCloseable {
         return Tlv8.decode(r.body);
     }
 
-    public NSDictionary rtspSetup(NSDictionary setup) throws Exception {
-        byte[] body = BinaryPropertyListWriter.writeToArray(setup);
-        return rtspSetupBody(body);
+    @Override
+    public Map<Integer, byte[]> pairVerifyTlv(byte[] tlvBody) throws Exception {
+        // Working sender uses octet-stream (not pairing+tlv8) for /pair-verify.
+        Response r = exchange("POST", "/pair-verify", Map.of(
+                "Content-Type", "application/octet-stream",
+                "X-Apple-HKP", hkpVersion
+        ), tlvBody);
+        if (r.statusCode >= 400) {
+            throw new IllegalStateException("POST /pair-verify → " + r.statusLine);
+        }
+        if (r.body.length == 0) {
+            throw new IllegalStateException("POST /pair-verify empty body");
+        }
+        return Tlv8.decode(r.body);
     }
 
-    /** SETUP with a pre-encoded binary plist body (e.g. from {@link HapPlist}). */
+    public NSDictionary rtspSetup(NSDictionary setup) throws Exception {
+        return rtspSetup("rtsp://" + host + "/stream", setup);
+    }
+
+    public NSDictionary rtspSetup(String requestUri, NSDictionary setup) throws Exception {
+        byte[] body = BinaryPropertyListWriter.writeToArray(setup);
+        return rtspSetupBody(requestUri, body);
+    }
+
+    /** SETUP with a pre-encoded binary plist body. */
     public NSDictionary rtspSetupBody(byte[] body) throws Exception {
-        Response r = exchange("SETUP", "rtsp://" + host + "/stream", Map.of(
+        return rtspSetupBody("rtsp://" + host + "/stream", body);
+    }
+
+    public NSDictionary rtspSetupBody(String requestUri, byte[] body) throws Exception {
+        Response r = exchange("SETUP", requestUri, Map.of(
                 "Content-Type", "application/x-apple-binary-plist",
                 "X-Apple-ProtocolVersion", "1"
         ), body);
@@ -88,8 +135,16 @@ public final class HapSocketControl implements AutoCloseable {
     }
 
     public void rtspRecord() throws Exception {
-        Response r = exchange("RECORD", "rtsp://" + host + "/stream",
-                Map.of("X-Apple-ProtocolVersion", "1"), new byte[0]);
+        rtspRecord("rtsp://" + host + "/stream", Map.of("X-Apple-ProtocolVersion", "1"));
+    }
+
+    public void rtspRecord(String requestUri, Map<String, String> extraHeaders) throws Exception {
+        Map<String, String> headers = new LinkedHashMap<>();
+        if (extraHeaders != null) {
+            headers.putAll(extraHeaders);
+        }
+        headers.putIfAbsent("X-Apple-ProtocolVersion", "1");
+        Response r = exchange("RECORD", requestUri, headers, new byte[0]);
         if (r.statusCode >= 400) {
             throw new IllegalStateException("RECORD → " + r.statusLine);
         }

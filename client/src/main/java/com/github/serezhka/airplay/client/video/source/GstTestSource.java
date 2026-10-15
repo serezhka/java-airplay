@@ -25,11 +25,13 @@ public class GstTestSource implements AutoCloseable {
     private final Pipeline pipeline;
 
     public GstTestSource(Consumer<byte[]> consumer) {
+        // Baseline + no B-frames — matches the measured working Annex-B feeder for TVs.
         pipeline = (Pipeline) Gst.parseLaunch(
-                "videotestsrc is-live=true ! "
+                "videotestsrc is-live=true pattern=smpte ! "
                         + "video/x-raw,framerate=30/1,width=1280,height=720 ! "
-                        + "x264enc tune=zerolatency byte-stream=true key-int-max=30 ! "
-                        + "video/x-h264,colorimetry=bt709,stream-format=(string)byte-stream,"
+                        + "x264enc tune=zerolatency speed-preset=ultrafast byte-stream=true "
+                        + "key-int-max=30 bframes=0 aud=true ! "
+                        + "video/x-h264,profile=baseline,stream-format=(string)byte-stream,"
                         + "alignment=(string)au ! appsink name=videoSink emit-signals=true sync=false");
         AppSink videoSink = (AppSink) pipeline.getElementByName("videoSink");
         videoSink.set("emit-signals", true);

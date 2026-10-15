@@ -1,5 +1,6 @@
 package com.github.serezhka.airplay.server.internal.decoder;
 
+import com.github.serezhka.airplay.protocol.mirror.MirrorPacketLayout;
 import com.github.serezhka.airplay.server.internal.packet.VideoPacket;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
@@ -36,7 +37,8 @@ public class VideoDecoder extends ReplayingDecoder<VideoDecoder.DecoderState> {
                 // timestamp = headerBuf.readLongLE();
                 checkpoint(DecoderState.READ_PAYLOAD);
             case READ_PAYLOAD:
-                if (payloadType == 0 || payloadType == 1) {
+                if (payloadType == MirrorPacketLayout.PAYLOAD_VIDEO
+                        || payloadType == MirrorPacketLayout.PAYLOAD_CODEC) {
                     ByteBuf payloadBuf = in.readSlice(payloadSize);
                     byte[] payloadBytes = new byte[payloadSize];
                     payloadBuf.readBytes(payloadBytes);

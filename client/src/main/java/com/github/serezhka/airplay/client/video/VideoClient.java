@@ -1,7 +1,11 @@
 package com.github.serezhka.airplay.client.video;
 
+import com.github.serezhka.airplay.client.crypto.AesCtrStreamEncryptor;
 import com.github.serezhka.airplay.client.crypto.FairPlayVideoEncryptor;
 import com.github.serezhka.airplay.client.video.source.GstTestSource;
+import com.github.serezhka.airplay.protocol.mirror.MirrorPacketHeaders;
+import com.github.serezhka.airplay.protocol.mirror.MirrorPacketLayout;
+import com.github.serezhka.airplay.protocol.mirror.MirrorVideoFraming;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
@@ -32,9 +36,13 @@ public class VideoClient extends ChannelInboundHandlerAdapter implements AutoClo
     private final String address;
     private final int port;
     private final FairPlayVideoEncryptor encryptor;
+    private final AesCtrStreamEncryptor streamEncryptor;
+
+    private static final int FRAME_WIDTH = 1280;
+    private static final int FRAME_HEIGHT = 720;
 
     private final CountDownLatch started = new CountDownLatch(1);
-    private final AtomicLong pts = new AtomicLong();
+    private final AtomicLong pts = new AtomicLong(System.nanoTime());
 
     private volatile EventLoopGroup workerGroup;
     private volatile Channel channel;
@@ -42,11 +50,30 @@ public class VideoClient extends ChannelInboundHandlerAdapter implements AutoClo
     private volatile GstTestSource gstTestSource;
     private volatile boolean sentCodecConfig;
     private volatile boolean closed;
+    private final AtomicLong packetsSent = new AtomicLong();
 
+    /**
+     * @param encryptor AES-CTR for FairPlay / raw-ekey streams; {@code null} = plaintext
+     *                  (HAP SETUP without {@code ekey})
+     */
     public VideoClient(String address, int port, FairPlayVideoEncryptor encryptor) throws InterruptedException {
+        this(address, port, encryptor, null);
+    }
+
+    /** Continuous CTR path used for HAP {@code aes_raw} (matches measured Python feeder). */
+    public VideoClient(String address, int port, AesCtrStreamEncryptor streamEncryptor) throws InterruptedException {
+        this(address, port, null, streamEncryptor);
+    }
+
+    private VideoClient(
+            String address,
+            int port,
+            FairPlayVideoEncryptor encryptor,
+            AesCtrStreamEncryptor streamEncryptor) throws InterruptedException {
         this.address = address;
         this.port = port;
         this.encryptor = encryptor;
+        this.streamEncryptor = streamEncryptor;
         Thread t = new Thread(this::run, "airplay-video-client");
         t.setDaemon(true);
         t.start();
@@ -113,6 +140,7 @@ public class VideoClient extends ChannelInboundHandlerAdapter implements AutoClo
 
         byte[] sps = null;
         byte[] pps = null;
+        List<MirrorVideoFraming.Nal> pending = new ArrayList<>();
         List<MirrorVideoFraming.Nal> vcl = new ArrayList<>();
         for (MirrorVideoFraming.Nal nal : nals) {
             int t = nal.type();
@@ -120,19 +148,25 @@ public class VideoClient extends ChannelInboundHandlerAdapter implements AutoClo
                 sps = nal.data();
             } else if (t == 8) {
                 pps = nal.data();
-            } else if (t != 9) {
+            } else if (t == 6) {
+                // SEI ahead of the next slice (same packing as the measured H.264 feeder).
+                pending.add(nal);
+            } else if (t == 1 || t == 5) {
+                vcl.addAll(pending);
+                pending.clear();
                 vcl.add(nal);
             }
+            // drop AUD (9) / filler
         }
 
         if (!sentCodecConfig && sps != null && pps != null) {
-            sendPacket(1, MirrorVideoFraming.buildType1CodecData(sps, pps));
+            sendPacket(MirrorPacketLayout.PAYLOAD_CODEC, MirrorVideoFraming.buildType1CodecData(sps, pps));
             sentCodecConfig = true;
         }
         if (vcl.isEmpty()) {
             return;
         }
-        sendPacket(0, MirrorVideoFraming.toAvcc(vcl));
+        sendPacket(MirrorPacketLayout.PAYLOAD_VIDEO, MirrorVideoFraming.toAvcc(vcl));
     }
 
     private void sendPacket(int payloadType, byte[] payload) {
@@ -140,16 +174,34 @@ public class VideoClient extends ChannelInboundHandlerAdapter implements AutoClo
         if (local == null || closed) {
             return;
         }
-        try {
-            encryptor.encrypt(payload);
-        } catch (Exception e) {
-            log.error("video encrypt failed: {}", e.getMessage());
-            return;
+        // Type-1 codec config is plaintext on the wire (receivers do not AES-CTR it).
+        // Encrypting it advances our CTR while the peer does not — every later frame decrypts wrong.
+        if (payloadType != MirrorPacketLayout.PAYLOAD_CODEC) {
+            try {
+                if (streamEncryptor != null) {
+                    streamEncryptor.encrypt(payload);
+                } else if (encryptor != null) {
+                    encryptor.encrypt(payload);
+                }
+            } catch (Exception e) {
+                log.error("video encrypt failed: {}", e.getMessage());
+                return;
+            }
         }
-        long timestamp = pts.getAndAdd(3000);
-        byte[] header = MirrorVideoFraming.header(payload.length, payloadType, timestamp);
-        local.write(Unpooled.wrappedBuffer(header));
-        local.writeAndFlush(Unpooled.wrappedBuffer(payload));
+        // ~33.3ms in nanoseconds — matches measured iPhone PTS scale better than 3000 ticks.
+        long timestamp = pts.getAndAdd(33_333_333L);
+        byte[] header = payloadType == MirrorPacketLayout.PAYLOAD_CODEC
+                ? MirrorPacketHeaders.legacy(payload.length, payloadType, timestamp, FRAME_WIDTH, FRAME_HEIGHT)
+                : MirrorPacketHeaders.legacy(payload.length, payloadType, timestamp);
+        // One TCP write: some TVs mis-frame when the 128B header and payload are split.
+        byte[] packet = new byte[header.length + payload.length];
+        System.arraycopy(header, 0, packet, 0, header.length);
+        System.arraycopy(payload, 0, packet, header.length, payload.length);
+        local.writeAndFlush(Unpooled.wrappedBuffer(packet));
+        long n = packetsSent.incrementAndGet();
+        if (n == 1 || n == 30 || n % 300 == 0) {
+            log.info("Video packets sent={} lastType={} lastLen={}", n, payloadType, payload.length);
+        }
     }
 
     @Override

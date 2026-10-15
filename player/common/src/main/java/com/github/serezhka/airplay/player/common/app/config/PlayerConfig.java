@@ -27,7 +27,7 @@ public class PlayerConfig {
         return new DumpConfig();
     }
 
-    @Bean
+    @Bean(destroyMethod = "close")
     public MirrorCaster mirrorCaster() {
         return new MirrorCaster();
     }

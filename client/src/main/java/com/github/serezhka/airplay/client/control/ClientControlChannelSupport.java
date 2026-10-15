@@ -80,30 +80,7 @@ public final class ClientControlChannelSupport {
             try {
                 byte[] plain = new byte[buf.readableBytes()];
                 buf.readBytes(plain);
-                // Temporary wire dump for Samsung SETUP 400 diagnosis.
-                if (plain.length > 8 && plain[0] == 'S' && plain[1] == 'E') {
-                    String head = new String(plain, 0, Math.min(plain.length, 800), java.nio.charset.StandardCharsets.ISO_8859_1);
-                    int cut = head.indexOf("\r\n\r\n");
-                    log.warn("OUTBOUND SETUP plaintext headers ({}B total):\n{}",
-                            plain.length, cut >= 0 ? head.substring(0, cut) : head);
-                    if (cut >= 0 && cut + 4 < plain.length) {
-                        byte[] body = Arrays.copyOfRange(plain, cut + 4, plain.length);
-                        log.warn("OUTBOUND SETUP body hex ({}B): {}",
-                                body.length, HapControlCipher.toHex(body));
-                        try {
-                            java.nio.file.Files.write(
-                                    java.nio.file.Path.of("/tmp/ap_probe/java_setup_" + plain.length + ".bplist"),
-                                    body);
-                        } catch (Exception ignored) {
-                        }
-                    }
-                }
                 byte[] encrypted = cipher.encryptor().encrypt(plain);
-                if (plain.length > 8 && plain[0] == 'S' && plain[1] == 'E') {
-                    log.warn("OUTBOUND SETUP ciphertext len={} head={}",
-                            encrypted.length,
-                            HapControlCipher.toHex(Arrays.copyOf(encrypted, Math.min(24, encrypted.length))));
-                }
                 ctx.write(Unpooled.wrappedBuffer(encrypted), promise);
             } finally {
                 buf.release();

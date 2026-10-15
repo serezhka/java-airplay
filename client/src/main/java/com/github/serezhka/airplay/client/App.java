@@ -23,7 +23,7 @@ import java.util.Scanner;
  *
  * <pre>
  *   ./gradlew :client:run
- *   ./gradlew :client:run --args='--host 192.168.0.208 --port 7000'
+ *   ./gradlew :client:run --args='--host &lt;receiver-ip&gt; --port 7000'
  * </pre>
  */
 @Slf4j
@@ -65,15 +65,13 @@ public class App {
             log.debug("info:\n{}", nsDictionary.toXMLPropertyList());
         }
 
-        byte[] sharedSecret = LegacyFairPlayHandshake.perform(controlClient);
+        LegacyFairPlayHandshake.Result fp = LegacyFairPlayHandshake.perform(controlClient);
         log.info("Pair-verify + fp-setup finished");
 
-        // FairPlay fixture session (matches lib AirPlayFairPlayTest vectors).
-        byte[] encryptedAesKey = new byte[]{70, 80, 76, 89, 1, 2, 1, 0, 0, 0, 0, 60, 0, 0, 0, 0, 63, 121, 70, -69, 3, -8, 117, -13, 83, 72, 105, -51, -11, -43, -1, 17, 0, 0, 0, 16, 24, -109, 13, 105, -32, -125, -73, -128, 21, 29, -31, 72, -41, 112, -36, -75, 57, 110, 71, -72, -25, -59, 102, 22, 19, -43, 35, 74, -20, 86, 15, 16, 126, 5, 15, -45};
         // Real senders put 16-byte NSData (base64 in XML dumps). AES-CBC IV must be 16 bytes.
         byte[] eiv = Base64.getDecoder().decode("91IdM6RTh4keicMei2GfQA==");
         NSDictionary rtspSetup1Request = new NSDictionary();
-        rtspSetup1Request.put("ekey", encryptedAesKey);
+        rtspSetup1Request.put("ekey", LegacyFairPlayHandshake.FIXTURE_EKEY);
         rtspSetup1Request.put("eiv", eiv);
         controlClient.rtspSetup(rtspSetup1Request);
 
@@ -106,10 +104,11 @@ public class App {
             log.debug("audio setup:\n{}", audioSetupResponse.toXMLPropertyList());
         }
 
-        byte[] aesKey = new byte[]{116, 39, -113, 75, -84, 63, -70, 20, -55, -65, -37, 125, 86, 89, -128, -6};
         FairPlayVideoEncryptor videoEncryptor =
-                new FairPlayVideoEncryptor(aesKey, sharedSecret, Long.toUnsignedString(streamConnectionID));
-        FairPlayAudioEncryptor audioEncryptor = new FairPlayAudioEncryptor(aesKey, eiv, sharedSecret);
+                new FairPlayVideoEncryptor(fp.aesKey(), fp.sharedSecret(),
+                        Long.toUnsignedString(streamConnectionID));
+        FairPlayAudioEncryptor audioEncryptor =
+                new FairPlayAudioEncryptor(fp.aesKey(), eiv, fp.sharedSecret());
 
         int videoPort = ((NSDictionary) ((NSArray) videoSetupResponse.get("streams")).getArray()[0])
                 .get("dataPort").toJavaObject(Integer.class);

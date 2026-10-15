@@ -5,6 +5,7 @@ import com.dd.plist.BinaryPropertyListWriter;
 import com.dd.plist.NSDictionary;
 import com.dd.plist.PropertyListFormatException;
 import com.github.serezhka.airplay.client.hap.HapControlCipher;
+import com.github.serezhka.airplay.client.hap.HapPairChannel;
 import com.github.serezhka.airplay.client.hap.Tlv8;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBufInputStream;
@@ -29,7 +30,7 @@ import java.io.IOException;
 import java.util.Map;
 
 @Slf4j
-public class ControlClient implements Runnable, AutoCloseable {
+public class ControlClient implements Runnable, AutoCloseable, HapPairChannel {
 
     private final String address;
     private final int port;
@@ -40,7 +41,10 @@ public class ControlClient implements Runnable, AutoCloseable {
     private volatile EventLoopGroup workerGroup;
     private volatile io.netty.channel.Channel channel;
 
-    /** {@code X-Apple-HKP} value for HAP TLV pairing (default {@code 4} = transient AirPlay). */
+    /**
+     * {@code X-Apple-HKP} for HAP TLV pairing.
+     * Default {@code 4} = transient AirPlay (works with on-screen PIN + SETUP/RECORD).
+     */
     private String hkpVersion = "4";
 
     public ControlClient(String address, int port) throws InterruptedException {
@@ -73,7 +77,7 @@ public class ControlClient implements Runnable, AutoCloseable {
                 protected void initChannel(SocketChannel ch) {
                     ChannelPipeline p = ch.pipeline();
                     // Encrypt/decrypt are added only after pair-setup M4 — keeping them
-                    // in the pipeline during plaintext pairing broke M3/M4 on Samsung.
+                    // in the pipeline during plaintext pairing breaks M3/M4.
                     p.addLast("encoder", new RtspEncoder());
                     p.addLast("decoder", new RtspDecoder());
                     p.addLast("logger", new LoggingHandler(LogLevel.DEBUG, ByteBufFormat.SIMPLE));
@@ -129,7 +133,7 @@ public class ControlClient implements Runnable, AutoCloseable {
     }
 
     /**
-     * Shows the on-TV pairing PIN (Samsung / modern receivers). Best-effort; ignore failures.
+     * Asks the receiver to show an on-screen pairing PIN. Best-effort.
      */
     public void pairPinStart() throws InterruptedException {
         FullHttpResponse response = exchangeRaw("POST", "/pair-pin-start",
@@ -228,7 +232,7 @@ public class ControlClient implements Runnable, AutoCloseable {
         return null;
     }
 
-    /** Starts media after streams SETUP (receiver returns 200 with empty body on Samsung). */
+    /** Starts media after streams SETUP. */
     public void rtspRecord() throws InterruptedException {
         FullHttpResponse response = exchangeRaw("RECORD", "rtsp://" + address + "/stream",
                 Map.of("X-Apple-ProtocolVersion", "1"), new byte[0]);
@@ -239,8 +243,8 @@ public class ControlClient implements Runnable, AutoCloseable {
     }
 
     /**
-     * Python-compatible raw RTSP framing for every method. Avoids Netty {@code RtspEncoder}
-     * header quirks that Samsung rejected on SETUP phase2 (identical plists over Python worked).
+     * Raw RTSP framing for every method. Avoids Netty {@code RtspEncoder} header quirks
+     * that some receivers reject on streams SETUP.
      */
     private FullHttpResponse exchangeRaw(String method, String path, Map<String, String> extraHeaders, byte[] body)
             throws InterruptedException {

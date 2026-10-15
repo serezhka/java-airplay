@@ -1,11 +1,13 @@
-package com.github.serezhka.airplay.client.video;
+package com.github.serezhka.airplay.protocol.mirror;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Helpers for AirPlay mirror video framing (Annex-B ↔ AVCC, type-1 codec config). */
+/**
+ * Annex-B ↔ AVCC helpers and type-1 codec-config payload for AirPlay mirror video.
+ */
 public final class MirrorVideoFraming {
 
     private MirrorVideoFraming() {
@@ -89,16 +91,5 @@ public final class MirrorVideoFraming {
         buf.putShort((short) pps.length);
         buf.put(pps);
         return buf.array();
-    }
-
-    /** 128-byte AirPlay mirror packet header. */
-    public static byte[] header(int payloadLen, int payloadType, long pts) {
-        ByteBuffer h = ByteBuffer.allocate(128);
-        h.order(java.nio.ByteOrder.LITTLE_ENDIAN);
-        h.putInt(payloadLen);
-        h.putShort((short) payloadType);
-        h.putShort((short) 0);
-        h.putLong(pts);
-        return h.array();
     }
 }

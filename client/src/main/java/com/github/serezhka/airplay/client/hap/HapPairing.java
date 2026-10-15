@@ -1,12 +1,14 @@
 package com.github.serezhka.airplay.client.hap;
 
-import com.github.serezhka.airplay.client.control.ControlClient;
+import com.github.serezhka.airplay.protocol.crypto.AirPlayKeyLabels;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import net.i2p.crypto.eddsa.EdDSAEngine;
+import net.i2p.crypto.eddsa.EdDSAPrivateKey;
 import net.i2p.crypto.eddsa.EdDSAPublicKey;
 import net.i2p.crypto.eddsa.KeyPairGenerator;
 import net.i2p.crypto.eddsa.spec.EdDSANamedCurveTable;
+import net.i2p.crypto.eddsa.spec.EdDSAPrivateKeySpec;
 import net.i2p.crypto.eddsa.spec.EdDSAPublicKeySpec;
 import org.whispersystems.curve25519.Curve25519;
 import org.whispersystems.curve25519.Curve25519KeyPair;
@@ -17,8 +19,7 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Client-side HAP TLV pair-setup (PIN / SRP) + pair-verify (Curve25519).
- * Requires {@code X-Apple-HKP} on the control channel (see {@link ControlClient}).
+ * Client-side HAP TLV pair-setup (PIN / SRP). Requires {@code X-Apple-HKP} on the channel.
  */
 @Slf4j
 public final class HapPairing {
@@ -31,7 +32,6 @@ public final class HapPairing {
     private byte[] accessoryPairingId;
     @Getter
     private byte[] accessoryLtpk;
-    /** Curve25519 shared secret from pair-verify (used like legacy pair-verify secret). */
     @Getter
     private byte[] sharedSecret;
 
@@ -41,26 +41,42 @@ public final class HapPairing {
     }
 
     /**
-     * Full Pair-Setup M1–M6 with the given PIN, then Pair-Verify M1–M4.
-     *
-     * @throws IllegalArgumentException if pin is null/blank
-     * @throws IllegalStateException    on HTTP/TLV/crypto failure
+     * Restore a controller identity saved after {@link #performPersistent} for
+     * pair-verify reconnect (no new PIN).
      */
-    public byte[] perform(ControlClient client, String pin) throws Exception {
+    public HapPairing(String pairingId, byte[] ed25519Seed, byte[] accessoryPairingId, byte[] accessoryLtpk) {
+        if (pairingId == null || pairingId.isBlank()) {
+            throw new IllegalArgumentException("pairingId required");
+        }
+        if (ed25519Seed == null || ed25519Seed.length != 32) {
+            throw new IllegalArgumentException("ed25519 seed must be 32 bytes");
+        }
+        var spec = EdDSANamedCurveTable.getByName(EdDSANamedCurveTable.ED_25519);
+        EdDSAPrivateKey priv = new EdDSAPrivateKey(new EdDSAPrivateKeySpec(ed25519Seed, spec));
+        EdDSAPublicKey pub = new EdDSAPublicKey(new EdDSAPublicKeySpec(priv.getA(), spec));
+        this.ed25519KeyPair = new KeyPair(pub, priv);
+        this.pairingId = pairingId;
+        this.accessoryPairingId = accessoryPairingId;
+        this.accessoryLtpk = accessoryLtpk;
+    }
+
+    /**
+     * Pair-Setup M1–M4 then enable control-channel encryption with the SRP session key.
+     * <p>
+     * AirPlay TVs reject plaintext M5 with {@code 470 Connection Authorization Required}
+     * after M4 — skip M5–M6 / pair-verify and encrypt immediately (same as the measured
+     * HKP4 transient path, also required after HKP3 on-screen PIN).
+     */
+    public byte[] perform(HapPairChannel client, String pin) throws Exception {
         if (pin == null || pin.isBlank()) {
             throw new IllegalArgumentException(
-                    "PIN required for HAP pair-setup. Re-run with --pin <code> "
-                            + "(value shown on the TV after pair-pin-start / M1).");
+                    "PIN required for HAP pair-setup (code shown on the TV after pair-pin-start).");
         }
         String normalizedPin = pin.trim().replace("-", "");
         boolean transientPairing = "4".equals(client.getHkpVersion());
         log.info("HAP pair-setup starting (pairingId={}, hkp={}, pinLen={}, transient={})",
                 pairingId, client.getHkpVersion(), normalizedPin.length(), transientPairing);
 
-        // Same TCP session as /pair-pin-start when the PIN was shown — do not
-        // re-call pair-pin-start here (that would mint a new code).
-
-        // HKP 3 + on-screen PIN: M1 is Method+State only (6B), like real iOS senders.
         byte[] m1 = transientPairing
                 ? Tlv8.of(
                 HapTlv.METHOD, HapTlv.METHOD_PAIR_SETUP,
@@ -81,7 +97,6 @@ public final class HapPairing {
         HapSrp6a srp = new HapSrp6a();
         srp.start(salt, serverB, normalizedPin);
 
-        // M3
         byte[] m3 = Tlv8.of(
                 HapTlv.STATE, HapTlv.STATE_M3,
                 HapTlv.PUBLIC_KEY, srp.getPublicA(),
@@ -91,8 +106,6 @@ public final class HapPairing {
         if (Tlv8.requireByte(m4, HapTlv.STATE) != HapTlv.STATE_M4) {
             throw new IllegalStateException("expected pair-setup M4 state");
         }
-        // Transient (HKP 4): M4 may be proof-only; skip M5–M6 / pair-verify.
-        // Non-transient (HKP 3 + display PIN): always continue with M5–M6.
         byte[] serverProof = m4.get(HapTlv.PROOF);
         if (serverProof != null && serverProof.length > 0) {
             srp.verifyServerProof(serverProof);
@@ -102,24 +115,74 @@ public final class HapPairing {
         } else {
             throw new IllegalStateException("pair-setup M4 missing server proof");
         }
-        byte[] srpShared = srp.getSharedSecret();
 
-        // Samsung / AirPlay PIN: after M4 the control channel switches to encrypted
-        // framing. Sending plaintext M5 yields 470 Connection Authorization Required.
-        this.sharedSecret = srpShared;
-        client.enableControlEncryption(srpShared);
+        this.sharedSecret = srp.getSharedSecret();
+        client.enableControlEncryption(this.sharedSecret);
         log.info("HAP pair-setup finished after M4 (control encryption on, skip M5–M6)");
         return sharedSecret;
     }
 
-    @SuppressWarnings("unused")
-    private byte[] finishNonTransient(ControlClient client, byte[] srpShared) throws Exception {
+    /**
+     * Persistable HKP3 pairing: M1–M4, then M5–M6 on <b>plaintext</b> HTTP (only the
+     * TLV {@code encryptedData} is ChaCha), then pair-verify. Control-Salt is enabled
+     * only after verify, with the X25519 shared secret (same as the working sender).
+     * <p>
+     * Do not call {@link #perform} first — that turns on Control-Salt and makes M5 hang.
+     */
+    public byte[] performPersistent(HapPairChannel client, String pin) throws Exception {
+        if (pin == null || pin.isBlank()) {
+            throw new IllegalArgumentException(
+                    "PIN required for HAP pair-setup (code shown on the TV after pair-pin-start).");
+        }
+        String normalizedPin = pin.trim().replace("-", "");
+        if ("4".equals(client.getHkpVersion())) {
+            throw new IllegalArgumentException("performPersistent requires HKP3 (on-screen PIN)");
+        }
+        log.info("HAP persistent pair-setup starting (pairingId={}, pinLen={})",
+                pairingId, normalizedPin.length());
+
+        byte[] m1 = Tlv8.of(
+                HapTlv.METHOD, HapTlv.METHOD_PAIR_SETUP,
+                HapTlv.STATE, HapTlv.STATE_M1);
+        Map<Integer, byte[]> m2 = client.pairSetupTlv(m1);
+        assertNoError(m2, "M2");
+        byte[] salt = Tlv8.require(m2, HapTlv.SALT);
+        byte[] serverB = Tlv8.require(m2, HapTlv.PUBLIC_KEY);
+        log.info("HAP pair-setup M2 ok (salt={}B, B={}B)", salt.length, serverB.length);
+
+        HapSrp6a srp = new HapSrp6a();
+        srp.start(salt, serverB, normalizedPin);
+        byte[] m3 = Tlv8.of(
+                HapTlv.STATE, HapTlv.STATE_M3,
+                HapTlv.PUBLIC_KEY, srp.getPublicA(),
+                HapTlv.PROOF, srp.getClientProof());
+        Map<Integer, byte[]> m4 = client.pairSetupTlv(m3);
+        assertNoError(m4, "M4");
+        byte[] serverProof = m4.get(HapTlv.PROOF);
+        if (serverProof == null || serverProof.length == 0) {
+            throw new IllegalStateException("pair-setup M4 missing server proof");
+        }
+        srp.verifyServerProof(serverProof);
+        byte[] srpShared = srp.getSharedSecret();
+        this.sharedSecret = srpShared;
+        log.info("HAP pair-setup M4 ok (SRP verified, control still plaintext for M5–M6)");
+
+        finishNonTransient(client, srpShared);
+        client.enableControlEncryption(this.sharedSecret);
+        log.info("HAP persistent pairing done (Control-Salt from pair-verify secret)");
+        return sharedSecret;
+    }
+
+    /** M5–M6 on plaintext HTTP, then {@link #pairVerify}. Control cipher must be off. */
+    private byte[] finishNonTransient(HapPairChannel client, byte[] srpShared) throws Exception {
         byte[] sessionKey = HapCrypto.hkdfSha512(srpShared,
-                "Pair-Setup-Encrypt-Salt", "Pair-Setup-Encrypt-Info", 32);
+                AirPlayKeyLabels.PAIR_SETUP_ENCRYPT_SALT, AirPlayKeyLabels.PAIR_SETUP_ENCRYPT_INFO, 32);
         byte[] controllerX = HapCrypto.hkdfSha512(srpShared,
-                "Pair-Setup-Controller-Sign-Salt", "Pair-Setup-Controller-Sign-Info", 32);
+                AirPlayKeyLabels.PAIR_SETUP_CONTROLLER_SIGN_SALT,
+                AirPlayKeyLabels.PAIR_SETUP_CONTROLLER_SIGN_INFO, 32);
         byte[] accessoryX = HapCrypto.hkdfSha512(srpShared,
-                "Pair-Setup-Accessory-Sign-Salt", "Pair-Setup-Accessory-Sign-Info", 32);
+                AirPlayKeyLabels.PAIR_SETUP_ACCESSORY_SIGN_SALT,
+                AirPlayKeyLabels.PAIR_SETUP_ACCESSORY_SIGN_INFO, 32);
 
         byte[] deviceLtpk = ((EdDSAPublicKey) ed25519KeyPair.getPublic()).getAbyte();
         byte[] deviceIdBytes = pairingId.getBytes(StandardCharsets.UTF_8);
@@ -132,7 +195,9 @@ public final class HapPairing {
                 HapTlv.IDENTIFIER, deviceIdBytes,
                 HapTlv.PUBLIC_KEY, deviceLtpk,
                 HapTlv.SIGNATURE, deviceSignature);
-        byte[] m5Encrypted = HapCrypto.chachaEncrypt(sessionKey, HapCrypto.nonce("PS-Msg05"), m5Inner);
+        // PS-Msg* nonces are label-at-offset-4 (same as PV-Msg* / working sender).
+        byte[] m5Encrypted = HapCrypto.chachaEncrypt(
+                sessionKey, HapCrypto.nonceAt4(AirPlayKeyLabels.PS_MSG_05), m5Inner);
         byte[] m5 = Tlv8.of(
                 HapTlv.STATE, HapTlv.STATE_M5,
                 HapTlv.ENCRYPTED_DATA, m5Encrypted);
@@ -141,8 +206,14 @@ public final class HapPairing {
         if (Tlv8.requireByte(m6, HapTlv.STATE) != HapTlv.STATE_M6) {
             throw new IllegalStateException("expected pair-setup M6 state");
         }
-        byte[] m6Plain = HapCrypto.chachaDecrypt(sessionKey, HapCrypto.nonce("PS-Msg06"),
-                Tlv8.require(m6, HapTlv.ENCRYPTED_DATA));
+        byte[] m6Enc = m6.get(HapTlv.ENCRYPTED_DATA);
+        if (m6Enc == null || m6Enc.length == 0) {
+            // Some TVs ACK M6 without accessory TLVs; pair-verify still works.
+            log.info("HAP pair-setup M6 ok (no encrypted payload)");
+            return pairVerify(client);
+        }
+        byte[] m6Plain = HapCrypto.chachaDecrypt(
+                sessionKey, HapCrypto.nonceAt4(AirPlayKeyLabels.PS_MSG_06), m6Enc);
         Map<Integer, byte[]> m6Inner = Tlv8.decode(m6Plain);
         accessoryPairingId = Tlv8.require(m6Inner, HapTlv.IDENTIFIER);
         accessoryLtpk = Tlv8.require(m6Inner, HapTlv.PUBLIC_KEY);
@@ -162,9 +233,17 @@ public final class HapPairing {
         return pairVerify(client);
     }
 
-    /** Pair-Verify M1–M4 using keys from a completed pair-setup. */
-    public byte[] pairVerify(ControlClient client) throws Exception {
-        if (accessoryLtpk == null || accessoryPairingId == null) {
+    public byte[] pairVerify(HapPairChannel client) throws Exception {
+        return pairVerify(client, true);
+    }
+
+    /**
+     * Pair-verify. When {@code verifyAccessory} is false (or accessory LTPK is unknown),
+     * decrypt PV-Msg02 if present but skip accessory Ed25519 check — enough for reconnect
+     * with a saved controller seed.
+     */
+    public byte[] pairVerify(HapPairChannel client, boolean verifyAccessory) throws Exception {
+        if (verifyAccessory && (accessoryLtpk == null || accessoryPairingId == null)) {
             throw new IllegalStateException("pair-verify requires completed pair-setup");
         }
 
@@ -184,20 +263,25 @@ public final class HapPairing {
         sharedSecret = curve.calculateAgreement(theirPublic, curveKeys.getPrivateKey());
 
         byte[] pvSessionKey = HapCrypto.hkdfSha512(sharedSecret,
-                "Pair-Verify-Encrypt-Salt", "Pair-Verify-Encrypt-Info", 32);
-        byte[] v2Plain = HapCrypto.chachaDecrypt(pvSessionKey, HapCrypto.nonce("PV-Msg02"),
-                Tlv8.require(v2, HapTlv.ENCRYPTED_DATA));
-        Map<Integer, byte[]> v2Inner = Tlv8.decode(v2Plain);
-        byte[] claimedAccessoryId = Tlv8.require(v2Inner, HapTlv.IDENTIFIER);
-        byte[] accessorySig = Tlv8.require(v2Inner, HapTlv.SIGNATURE);
-
-        byte[] accessoryMsg = HapCrypto.concat(theirPublic, claimedAccessoryId, ourPublic);
-        EdDSAEngine verify = new EdDSAEngine();
-        EdDSAPublicKey accessoryPub = new EdDSAPublicKey(
-                new EdDSAPublicKeySpec(accessoryLtpk, EdDSANamedCurveTable.getByName(EdDSANamedCurveTable.ED_25519)));
-        verify.initVerify(accessoryPub);
-        if (!verify.verifyOneShot(accessoryMsg, accessorySig)) {
-            throw new IllegalStateException("pair-verify accessory signature invalid");
+                AirPlayKeyLabels.PAIR_VERIFY_ENCRYPT_SALT, AirPlayKeyLabels.PAIR_VERIFY_ENCRYPT_INFO, 32);
+        byte[] enc2 = v2.get(HapTlv.ENCRYPTED_DATA);
+        if (enc2 != null && enc2.length > 0) {
+            byte[] v2Plain = HapCrypto.chachaDecrypt(
+                    pvSessionKey, HapCrypto.nonceAt4(AirPlayKeyLabels.PV_MSG_02), enc2);
+            if (verifyAccessory && accessoryLtpk != null) {
+                Map<Integer, byte[]> v2Inner = Tlv8.decode(v2Plain);
+                byte[] claimedAccessoryId = Tlv8.require(v2Inner, HapTlv.IDENTIFIER);
+                byte[] accessorySig = Tlv8.require(v2Inner, HapTlv.SIGNATURE);
+                byte[] accessoryMsg = HapCrypto.concat(theirPublic, claimedAccessoryId, ourPublic);
+                EdDSAEngine verify = new EdDSAEngine();
+                EdDSAPublicKey accessoryPub = new EdDSAPublicKey(
+                        new EdDSAPublicKeySpec(accessoryLtpk,
+                                EdDSANamedCurveTable.getByName(EdDSANamedCurveTable.ED_25519)));
+                verify.initVerify(accessoryPub);
+                if (!verify.verifyOneShot(accessoryMsg, accessorySig)) {
+                    throw new IllegalStateException("pair-verify accessory signature invalid");
+                }
+            }
         }
 
         byte[] deviceIdBytes = pairingId.getBytes(StandardCharsets.UTF_8);
@@ -209,7 +293,8 @@ public final class HapPairing {
         byte[] v3Inner = Tlv8.of(
                 HapTlv.IDENTIFIER, deviceIdBytes,
                 HapTlv.SIGNATURE, deviceSig);
-        byte[] v3Enc = HapCrypto.chachaEncrypt(pvSessionKey, HapCrypto.nonce("PV-Msg03"), v3Inner);
+        byte[] v3Enc = HapCrypto.chachaEncrypt(
+                pvSessionKey, HapCrypto.nonceAt4(AirPlayKeyLabels.PV_MSG_03), v3Inner);
         byte[] v3 = Tlv8.of(
                 HapTlv.STATE, HapTlv.STATE_M3,
                 HapTlv.ENCRYPTED_DATA, v3Enc);
@@ -223,26 +308,16 @@ public final class HapPairing {
         return sharedSecret;
     }
 
+    /** 32-byte Ed25519 seed for casting credential persistence. */
+    public byte[] ed25519Seed() {
+        return ((EdDSAPrivateKey) ed25519KeyPair.getPrivate()).getSeed();
+    }
+
     private static void assertNoError(Map<Integer, byte[]> tlv, String step) {
         byte[] err = tlv.get(HapTlv.ERROR);
         if (err != null && err.length > 0) {
             int code = err[0] & 0xFF;
             String detail = "HAP " + step + " error=" + HapTlv.errorName(code);
-            byte[] delay = tlv.get(HapTlv.RETRY_DELAY);
-            if (delay != null && delay.length > 0) {
-                int seconds = 0;
-                for (byte b : delay) {
-                    seconds = (seconds << 8) | (b & 0xFF);
-                }
-                // HAP Retry-Delay is often little-endian uint32 seconds.
-                if (delay.length <= 4) {
-                    seconds = 0;
-                    for (int i = delay.length - 1; i >= 0; i--) {
-                        seconds = (seconds << 8) | (delay[i] & 0xFF);
-                    }
-                }
-                detail += " retryDelay=" + seconds + "s";
-            }
             detail += " (wrong PIN / HKP, or pairing rejected)";
             throw new IllegalStateException(detail);
         }
