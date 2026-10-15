@@ -63,9 +63,9 @@ public class AudioControlServer implements Runnable {
 
             channelFuture.channel().closeFuture().sync();
         } catch (InterruptedException e) {
-            log.info("AirPlay audio control server interrupted");
+            log.debug("AirPlay audio control server interrupted");
         } finally {
-            log.info("AirPlay audio control server stopped");
+            log.debug("AirPlay audio control server stopped");
             workerGroup.shutdownGracefully();
         }
     }

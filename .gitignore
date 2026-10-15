@@ -13,3 +13,4 @@ gst.log
 /.cursor/*
 **/build/reports/playback-metrics/
 __pycache__/
+/scripts

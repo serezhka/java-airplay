@@ -147,7 +147,7 @@ public class PropertyListUtil {
         seekableTimeRanges.put("duration", duration);
         seekableTimeRanges.put("start", 0.0);
         response.put("seekableTimeRanges", new NSArray(seekableTimeRanges));
-        log.info("Playback info: duration={} position={} rate={}", duration, position, rate);
+        log.debug("Playback info: duration={} position={} rate={}", duration, position, rate);
         return response.toXMLPropertyList().getBytes(StandardCharsets.UTF_8);
     }
 

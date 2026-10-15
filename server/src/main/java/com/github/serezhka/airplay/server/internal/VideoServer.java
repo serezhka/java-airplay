@@ -50,6 +50,11 @@ public class VideoServer implements Runnable {
         }
     }
 
+    /** True while the accept thread is alive (mirror video path). */
+    public boolean isRunning() {
+        return thread != null && thread.isAlive();
+    }
+
     @Override
     public void run() {
         var serverBootstrap = new ServerBootstrap();
@@ -81,9 +86,9 @@ public class VideoServer implements Runnable {
 
             channelFuture.channel().closeFuture().sync();
         } catch (InterruptedException e) {
-            log.info("AirPlay video server interrupted");
+            log.debug("AirPlay video server interrupted");
         } finally {
-            log.info("AirPlay video server stopped");
+            log.debug("AirPlay video server stopped");
             bossGroup.shutdownGracefully();
             workerGroup.shutdownGracefully();
         }

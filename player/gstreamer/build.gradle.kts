@@ -17,7 +17,7 @@ tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
 }
 
 springBoot {
-    mainClass.set("com.github.serezhka.airplay.app.GstreamerPlayerApp")
+    mainClass.set("com.github.serezhka.airplay.player.gstreamer.app.GstreamerPlayerApp")
 }
 
 tasks.named("bootRun") {

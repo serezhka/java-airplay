@@ -66,11 +66,18 @@ public class HlsPlaylistState {
     /** {@code /scrub} until the seek-picture callback or the closing {@code rate=1}. */
     private volatile boolean scrubGesture;
     /**
-     * {@code rate=0} not yet classified. The playback-info already queued with it does not
-     * decide; the next one does, unless {@code /scrub} cleared this first.
+     * {@code rate=0} not yet classified. YouTube scrub sends {@code rate=0} then {@code /scrub}
+     * up to ~2s later; pause must wait that long or we freeze the timeline before the seek.
      */
     private volatile boolean rateZeroPending;
     private int playbackInfosSinceRateZero;
+    /** {@link System#nanoTime()} when {@link #armRateZero()} ran; 0 if not armed. */
+    private volatile long rateZeroArmedAtNanos;
+    /**
+     * Minimum hold before a bare {@code rate=0} becomes a real pause (YouTube scrub gap).
+     * Verified commercial scrub holds were ~0.2–1.8s before {@code /scrub}.
+     */
+    static final long RATE_ZERO_PAUSE_DELAY_NS = 2_500_000_000L;
     /** True from pipeline start until the first displayed frame is announced. */
     private final AtomicBoolean presentationPending = new AtomicBoolean();
 
@@ -121,20 +128,41 @@ public class HlsPlaylistState {
     public void armRateZero() {
         rateZeroPending = true;
         playbackInfosSinceRateZero = 0;
+        rateZeroArmedAtNanos = System.nanoTime();
+    }
+
+    /** True while a bare {@code rate=0} is held open for a possible following {@code /scrub}. */
+    public boolean isRateZeroPending() {
+        return rateZeroPending;
     }
 
     public void clearRateZero() {
         rateZeroPending = false;
         playbackInfosSinceRateZero = 0;
+        rateZeroArmedAtNanos = 0;
     }
 
-    /** @return true when this poll is the one that commits a pause */
+    /**
+     * @return true when this poll may commit a pause: at least two playback-info probes
+     *         <b>and</b> {@link #RATE_ZERO_PAUSE_DELAY_NS} since arm (scrub window).
+     */
     public boolean notePlaybackInfoForPause() {
         if (!rateZeroPending) {
             return false;
         }
         playbackInfosSinceRateZero++;
-        return playbackInfosSinceRateZero >= 2;
+        if (playbackInfosSinceRateZero < 2) {
+            return false;
+        }
+        long armedAt = rateZeroArmedAtNanos;
+        return armedAt > 0 && System.nanoTime() - armedAt >= RATE_ZERO_PAUSE_DELAY_NS;
+    }
+
+    /** Test helper: pretend {@code elapsedNs} already passed since arm. */
+    void advanceRateZeroArmForTest(long elapsedNs) {
+        if (rateZeroArmedAtNanos > 0) {
+            rateZeroArmedAtNanos = System.nanoTime() - elapsedNs;
+        }
     }
 
     public void setPendingSeekSeconds(Double pendingSeekSeconds) {

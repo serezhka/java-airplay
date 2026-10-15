@@ -17,7 +17,6 @@ class PlayerBoundaryTest {
     static final ArchRule doesNotReachIntoServerOrOtherPlayers = noClasses()
             .should().dependOnClassesThat().resideInAnyPackage(
                     "com.github.serezhka.airplay.server.internal..",
-                    "com.github.serezhka.airplay.player.gstreamer..",
-                    "com.github.serezhka.airplay.player.dump.."
+                    "com.github.serezhka.airplay.player.gstreamer.."
             );
 }

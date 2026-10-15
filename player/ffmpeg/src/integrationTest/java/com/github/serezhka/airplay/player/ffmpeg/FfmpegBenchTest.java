@@ -1,6 +1,6 @@
 package com.github.serezhka.airplay.player.ffmpeg;
 
-import com.github.serezhka.airplay.player.harness.PlaybackBench;
+import com.github.serezhka.airplay.player.common.harness.PlaybackBench;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;

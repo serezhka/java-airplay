@@ -1,7 +1,11 @@
 package com.github.serezhka.airplay.player.gstreamer;
 
+import com.github.serezhka.airplay.player.common.support.NativeProcessLog;
+import com.github.serezhka.airplay.player.gstreamer.display.GstFullscreenWindow;
+import com.github.serezhka.airplay.player.gstreamer.display.GstVideoSinkFactory;
+import com.github.serezhka.airplay.player.gstreamer.hls.GstHlsPipeline;
+import com.github.serezhka.airplay.player.gstreamer.util.GstPlayerUtils;
 import com.github.serezhka.airplay.protocol.media.AudioStreamInfo;
-import com.github.serezhka.airplay.player.support.NativeProcessLog;
 import com.github.serezhka.airplay.protocol.media.EndListDuration;
 import com.github.serezhka.airplay.protocol.media.VideoStreamInfo;
 import com.github.serezhka.airplay.server.Playback;
@@ -38,21 +42,31 @@ public class GstPlayer implements Playback {
     }
 
     /**
-     * Device H.264 decoders drop frames when they have no usable context.
+     * Tune plugin ranks before {@link Gst#init}.
      * <p>
-     * The adaptive demuxer with a built-in HTTP client completes those requests on
-     * whatever thread stops the pipeline. Stopping it from the control thread
-     * aborts the process ({@code playlistRemove}). The other demuxer closes its
-     * HTTP source on that source's own thread.
+     * Device H.264 decoders drop frames when they have no usable context — demote them.
+     * Prefer {@code curlhttpsrc} over {@code souphttpsrc}: even after soft-stop (no
+     * {@code setState(NULL)}), in-flight libsoup completions can still abort the JVM
+     * seconds later. Soft-stop alone is not enough while soup is the HTTP src.
+     * <p>
+     * Do <b>not</b> demote {@code hlsdemux2}: {@code playbin3}/{@code decodebin3} need a
+     * streams-aware adaptive demuxer. Ranking it {@code NONE} forces legacy {@code hlsdemux},
+     * and playbin3 then fails with a misleading "missing a plug-in" (code=12).
      */
     private static void preferSoftwareVideoDecode() {
         String[] demote = {
                 "nvh264dec", "nvh265dec", "nvvp8dec", "nvvp9dec", "nvav1dec",
-                "hlsdemux2"
+                "souphttpsrc"
         };
         String rank = System.getenv("GST_PLUGIN_FEATURE_RANK");
         if (rank == null) {
             rank = "";
+        }
+        if (!rank.contains("curlhttpsrc:")) {
+            if (!rank.isBlank()) {
+                rank = rank + ",";
+            }
+            rank = rank + "curlhttpsrc:300";
         }
         for (String feature : demote) {
             if (rank.contains(feature + ":")) {

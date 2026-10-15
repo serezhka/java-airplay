@@ -73,10 +73,13 @@ class HlsPlaylistStateTest {
     }
 
     @Test
-    void secondPlaybackInfoAfterRateZeroCommitsPause() {
+    void secondPlaybackInfoAfterRateZeroDoesNotCommitUntilScrubWindowElapsed() {
         var hls = new HlsPlaylistState("mlhls://localhost/master.m3u8", "http://localhost/playlist/master.m3u8?session=x");
         hls.armRateZero();
         assertFalse(hls.notePlaybackInfoForPause());
+        // Second probe inside the scrub window must not pause (YouTube /scrub can land ~1.8s later).
+        assertFalse(hls.notePlaybackInfoForPause());
+        hls.advanceRateZeroArmForTest(HlsPlaylistState.RATE_ZERO_PAUSE_DELAY_NS);
         assertTrue(hls.notePlaybackInfoForPause());
         hls.clearRateZero();
         assertFalse(hls.notePlaybackInfoForPause());

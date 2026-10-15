@@ -84,9 +84,11 @@ Best option for video **and** audio (including AAC-ELD mirroring audio).
 
 Install: [GStreamer documentation](https://gstreamer.freedesktop.org/documentation/installing/) · [Downloads](https://gstreamer.freedesktop.org/download/)
 
+On Windows 11 with **Smart App Control** enabled, YouTube HLS in the GStreamer receiver stays black: the official GStreamer runtime ships unsigned plugin DLLs, and SAC blocks them when Java loads them. There is no per-app allowlist. Mirroring audio/video may still work if those plugins are already trusted; for HLS use the FFmpeg receiver, or turn SAC off.
+
 ### FFmpeg
 
-Uses `ffplay` on `PATH`. Video works; **mirroring audio is unreliable** on stock builds (AAC-ELD usually needs a custom ffmpeg with `libfdk-aac`). Prefer GStreamer when you need audio.
+Uses `ffplay` on `PATH`. Video works; **mirroring audio is unreliable** on stock builds (AAC-ELD usually needs a custom ffmpeg with `libfdk-aac`). Prefer GStreamer when you need audio. For YouTube HLS on Windows with Smart App Control on, prefer this receiver over GStreamer.
 
 Install: [FFmpeg download](https://ffmpeg.org/download.html)
 
