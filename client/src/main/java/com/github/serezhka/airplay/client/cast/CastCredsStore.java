@@ -81,7 +81,7 @@ public final class CastCredsStore {
         return Optional.empty();
     }
 
-    /** Prefer exact deviceid; otherwise first entry (dev convenience for a single TV). */
+    /** Prefer exact deviceid; otherwise first entry (dev convenience for a single receiver). */
     public Optional<Entry> findOrAny(String deviceId) {
         Optional<Entry> exact = find(deviceId);
         if (exact.isPresent()) {

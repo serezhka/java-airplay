@@ -5,6 +5,7 @@ import io.lindstrom.m3u8.model.MediaSegment;
 import io.lindstrom.m3u8.parser.MediaPlaylistParser;
 import io.lindstrom.m3u8.parser.ParsingMode;
 import io.lindstrom.m3u8.parser.PlaylistParserException;
+import lombok.AccessLevel;
 import lombok.Getter;
 
 import java.util.ArrayList;
@@ -60,24 +61,22 @@ public class HlsPlaylistState {
     private volatile double playbackRate = 1;
     /**
      * {@code AVPlayerActionAtItemEnd}: 0=advance, 1=pause, 2=none.
-     * YouTube sets pause (1) — on EOS we must pause and wait for the next {@code /play}.
+     * VOD senders typically set pause (1) — on EOS we must pause and wait for the next {@code /play}.
      */
     private volatile int actionAtItemEnd = 1;
     /** {@code /scrub} until the seek-picture callback or the closing {@code rate=1}. */
     private volatile boolean scrubGesture;
     /**
-     * {@code rate=0} not yet classified. YouTube scrub sends {@code rate=0} then {@code /scrub}
+     * {@code rate=0} not yet classified. Scrub often sends {@code rate=0} then {@code /scrub}
      * up to ~2s later; pause must wait that long or we freeze the timeline before the seek.
      */
-    private volatile boolean rateZeroPending;
-    private int playbackInfosSinceRateZero;
-    /** {@link System#nanoTime()} when {@link #armRateZero()} ran; 0 if not armed. */
-    private volatile long rateZeroArmedAtNanos;
+    @Getter(AccessLevel.NONE)
+    private final HlsRateZeroWindow rateZeroWindow = new HlsRateZeroWindow();
     /**
-     * Minimum hold before a bare {@code rate=0} becomes a real pause (YouTube scrub gap).
-     * Verified commercial scrub holds were ~0.2–1.8s before {@code /scrub}.
+     * Minimum hold before a bare {@code rate=0} becomes a real pause (scrub gesture gap).
+     * @see HlsRateZeroWindow#PAUSE_DELAY_NS
      */
-    static final long RATE_ZERO_PAUSE_DELAY_NS = 2_500_000_000L;
+    static final long RATE_ZERO_PAUSE_DELAY_NS = HlsRateZeroWindow.PAUSE_DELAY_NS;
     /** True from pipeline start until the first displayed frame is announced. */
     private final AtomicBoolean presentationPending = new AtomicBoolean();
 
@@ -126,20 +125,16 @@ public class HlsPlaylistState {
     }
 
     public void armRateZero() {
-        rateZeroPending = true;
-        playbackInfosSinceRateZero = 0;
-        rateZeroArmedAtNanos = System.nanoTime();
+        rateZeroWindow.arm();
     }
 
     /** True while a bare {@code rate=0} is held open for a possible following {@code /scrub}. */
     public boolean isRateZeroPending() {
-        return rateZeroPending;
+        return rateZeroWindow.isPending();
     }
 
     public void clearRateZero() {
-        rateZeroPending = false;
-        playbackInfosSinceRateZero = 0;
-        rateZeroArmedAtNanos = 0;
+        rateZeroWindow.clear();
     }
 
     /**
@@ -147,22 +142,12 @@ public class HlsPlaylistState {
      *         <b>and</b> {@link #RATE_ZERO_PAUSE_DELAY_NS} since arm (scrub window).
      */
     public boolean notePlaybackInfoForPause() {
-        if (!rateZeroPending) {
-            return false;
-        }
-        playbackInfosSinceRateZero++;
-        if (playbackInfosSinceRateZero < 2) {
-            return false;
-        }
-        long armedAt = rateZeroArmedAtNanos;
-        return armedAt > 0 && System.nanoTime() - armedAt >= RATE_ZERO_PAUSE_DELAY_NS;
+        return rateZeroWindow.notePlaybackInfoForPause();
     }
 
     /** Test helper: pretend {@code elapsedNs} already passed since arm. */
     void advanceRateZeroArmForTest(long elapsedNs) {
-        if (rateZeroArmedAtNanos > 0) {
-            rateZeroArmedAtNanos = System.nanoTime() - elapsedNs;
-        }
+        rateZeroWindow.advanceForTest(elapsedNs);
     }
 
     public void setPendingSeekSeconds(Double pendingSeekSeconds) {
@@ -297,7 +282,7 @@ public class HlsPlaylistState {
     }
 
     /**
-     * After ad EOS YouTube often keeps the same master URI list and only updates mediadata.
+     * After ad EOS the sender often keeps the same master URI list and only updates mediadata.
      * Re-queue media FCUP so we can detect that and restart.
      */
     public void beginPostEosMediaRefresh(List<String> remoteMediaUris) {
@@ -344,7 +329,7 @@ public class HlsPlaylistState {
 
     /**
      * Count a master-only poll while waiting after EOS. Every {@code everyN} polls (inclusive),
-     * allow another mediadata FCUP sweep — YouTube often keeps the same master and only updates
+     * allow another mediadata FCUP sweep — senders often keep the same master and only update
      * VOD mediadata on ad→content.
      *
      * @param everyN must be &gt;= 1; values &lt;= 0 disable periodic resweep
@@ -396,7 +381,7 @@ public class HlsPlaylistState {
         List<String> audioOrOther = new ArrayList<>();
         for (String uri : remoteMediaUris) {
             String normalized = normalizeUri(uri);
-            if (isLikelyVideoMediaUri(normalized)) {
+            if (HlsMediaUriClassifier.isLikelyVideo(normalized)) {
                 videoMediaUris.add(normalized);
                 pendingMediaUris.add(normalized);
             } else {
@@ -416,7 +401,7 @@ public class HlsPlaylistState {
             }
         }
         for (String key : playlists.keySet()) {
-            if (isLikelyVideoMediaUri(key)) {
+            if (HlsMediaUriClassifier.isLikelyVideo(key)) {
                 return true;
             }
         }
@@ -427,21 +412,9 @@ public class HlsPlaylistState {
         return videoMediaUris.size();
     }
 
-    /**
-     * YouTube audio alternatives use itag 233/234 and/or {@code /xtags/}; STREAM-INF video
-     * playlists use other itags without xtags.
-     */
+    /** @see HlsMediaUriClassifier#isLikelyVideo(String) */
     static boolean isLikelyVideoMediaUri(String uri) {
-        if (uri == null || !uri.contains("mediadata")) {
-            return false;
-        }
-        if (uri.contains("/xtags/")) {
-            return false;
-        }
-        if (uri.contains("/itag/233/") || uri.contains("/itag/234/")) {
-            return false;
-        }
-        return true;
+        return HlsMediaUriClassifier.isLikelyVideo(uri);
     }
 
     public boolean hasMoreMediaUris() {

@@ -18,8 +18,8 @@ import java.util.Arrays;
  * {@code streamConnectionID}. Residual keystream spans packets ({@code og} buffer).
  * <p>
  * CTR is symmetric — {@link #crypt(byte[])} is used for both encrypt and decrypt.
- * Payloads are expected to be at least as long as any pending residual (iPhone / our
- * senders pack that way).
+ * Payloads are expected to be at least as long as any pending residual (senders
+ * pack that way).
  */
 public final class FairPlayVideoCipher {
 

@@ -63,14 +63,14 @@ public final class HapPairing {
     /**
      * Pair-Setup M1–M4 then enable control-channel encryption with the SRP session key.
      * <p>
-     * AirPlay TVs reject plaintext M5 with {@code 470 Connection Authorization Required}
-     * after M4 — skip M5–M6 / pair-verify and encrypt immediately (same as the measured
-     * HKP4 transient path, also required after HKP3 on-screen PIN).
+     * Some receivers reject plaintext M5 with {@code 470 Connection Authorization Required}
+     * after M4 — skip M5–M6 / pair-verify and encrypt immediately (HKP4 transient path;
+     * also required after HKP3 on-screen PIN).
      */
     public byte[] perform(HapPairChannel client, String pin) throws Exception {
         if (pin == null || pin.isBlank()) {
             throw new IllegalArgumentException(
-                    "PIN required for HAP pair-setup (code shown on the TV after pair-pin-start).");
+                    "PIN required for HAP pair-setup (code shown on the receiver after pair-pin-start).");
         }
         String normalizedPin = pin.trim().replace("-", "");
         boolean transientPairing = "4".equals(client.getHkpVersion());
@@ -132,7 +132,7 @@ public final class HapPairing {
     public byte[] performPersistent(HapPairChannel client, String pin) throws Exception {
         if (pin == null || pin.isBlank()) {
             throw new IllegalArgumentException(
-                    "PIN required for HAP pair-setup (code shown on the TV after pair-pin-start).");
+                    "PIN required for HAP pair-setup (code shown on the receiver after pair-pin-start).");
         }
         String normalizedPin = pin.trim().replace("-", "");
         if ("4".equals(client.getHkpVersion())) {
@@ -208,7 +208,7 @@ public final class HapPairing {
         }
         byte[] m6Enc = m6.get(HapTlv.ENCRYPTED_DATA);
         if (m6Enc == null || m6Enc.length == 0) {
-            // Some TVs ACK M6 without accessory TLVs; pair-verify still works.
+            // Some receivers ACK M6 without accessory TLVs; pair-verify still works.
             log.info("HAP pair-setup M6 ok (no encrypted payload)");
             return pairVerify(client);
         }

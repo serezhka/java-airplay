@@ -25,7 +25,7 @@ class Tlv8Test {
     }
 
     @Test
-    void decodeSamsungStyleM2() {
+    void decodeChunkedPublicKeyM2() {
         // State=2, Salt=16, PublicKey chunked as 255+129
         byte[] body = new byte[2 + 1 + 2 + 16 + 2 + 255 + 2 + 129];
         int i = 0;

@@ -1,5 +1,7 @@
 package com.github.serezhka.airplay.client.audio;
 
+import com.github.serezhka.airplay.client.netty.NettyEventLoops;
+
 import com.github.serezhka.airplay.client.crypto.FairPlayAudioEncryptor;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.Unpooled;
@@ -10,8 +12,6 @@ import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.epoll.Epoll;
 import io.netty.channel.epoll.EpollDatagramChannel;
-import io.netty.channel.epoll.EpollEventLoopGroup;
-import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.DatagramChannel;
 import io.netty.channel.socket.DatagramPacket;
 import io.netty.channel.socket.nio.NioDatagramChannel;
@@ -120,7 +120,7 @@ public class AudioClient extends ChannelInboundHandlerAdapter implements Runnabl
     }
 
     private EventLoopGroup eventLoopGroup() {
-        return Epoll.isAvailable() ? new EpollEventLoopGroup() : new NioEventLoopGroup();
+        return NettyEventLoops.create();
     }
 
     private Class<? extends DatagramChannel> datagramChannelClass() {

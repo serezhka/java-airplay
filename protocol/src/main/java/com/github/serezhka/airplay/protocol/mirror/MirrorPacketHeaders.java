@@ -9,7 +9,7 @@ import java.nio.ByteOrder;
  */
 public final class MirrorPacketHeaders {
 
-    /** Type-1 option field seen on measured iPhone codec packets. */
+    /** Type-1 option field observed on sender codec packets. */
     public static final short CODEC_OPTION = 286;
 
     private MirrorPacketHeaders() {
@@ -17,7 +17,7 @@ public final class MirrorPacketHeaders {
 
     /**
      * HKP / DataStream codec (type-1) header: marks a running stream and carries
-     * float32 width/height at several offsets used by TVs.
+     * float32 width/height at several offsets some receivers require.
      */
     public static byte[] codec(int nbytes, long ts, int width, int height) {
         byte[] header = new byte[MirrorPacketLayout.HEADER_BYTES];
@@ -51,7 +51,7 @@ public final class MirrorPacketHeaders {
     }
 
     /**
-     * Legacy FairPlay-style header (iPhone type-1 sets option {@link #CODEC_OPTION}
+     * Legacy FairPlay-style header (type-1 sets option {@link #CODEC_OPTION}
      * and float32 width/height at offset 16; type-0 keeps those zero).
      */
     public static byte[] legacy(int payloadLen, int payloadType, long pts) {

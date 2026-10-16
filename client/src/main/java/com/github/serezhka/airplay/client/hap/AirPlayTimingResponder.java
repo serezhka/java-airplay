@@ -19,7 +19,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <p>
  * Replies use <b>boot-relative</b> time plus the NTP epoch so the receiver can
  * compare them with mirror packet timestamps. Wall-clock replies make every
- * frame look decades late (first picture stuck / black).
+ * frame look decades late relative to the mirror clock.
  */
 @Slf4j
 public final class AirPlayTimingResponder implements AutoCloseable {

@@ -69,7 +69,7 @@ public final class LegacyFairPlayHandshake {
         if (pairSetupResponseBytes.length < 32) {
             throw new LegacyPairingRejectedException(
                     "Receiver rejected legacy POST /pair-setup (got " + pairSetupResponseBytes.length
-                            + " bytes). Modern AirPlay TVs require a PIN / HomeKit-style pairing.");
+                            + " bytes). Modern AirPlay receivers require a PIN / HomeKit-style pairing.");
         }
 
         KeyPair keyPair = new KeyPairGenerator().generateKeyPair();

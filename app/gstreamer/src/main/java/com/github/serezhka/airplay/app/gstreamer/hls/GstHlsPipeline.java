@@ -1,5 +1,6 @@
 package com.github.serezhka.airplay.app.gstreamer.hls;
 
+import com.github.serezhka.airplay.app.common.hls.HlsPlaybackMath;
 import com.github.serezhka.airplay.app.gstreamer.clock.ScrubClock;
 import com.github.serezhka.airplay.app.gstreamer.display.GstFullscreenWindow;
 import com.github.serezhka.airplay.app.gstreamer.display.GstVideoSinkFactory;
@@ -72,7 +73,7 @@ public final class GstHlsPipeline {
     private volatile double playlistDurationSeconds;
     private volatile long lastEndedNotifyNanos;
     private volatile long startedAtNanos;
-    /** Wall-clock position must not run until GST reports a real media clock (avoids black-screen EOS). */
+    /** Wall-clock position must not run until the pipeline reports a real media clock. */
     private volatile boolean mediaClockTrusted;
     private final ScrubClock scrubClock = new ScrubClock();
     private volatile double volumeLinear = 1.0;
@@ -92,7 +93,7 @@ public final class GstHlsPipeline {
                 startedAtNanos = System.nanoTime();
                 lastEndedNotifyNanos = 0;
                 mediaClockTrusted = false;
-                this.volumeLinear = clampVolume(volumeLinear);
+                this.volumeLinear = HlsPlaybackMath.clampVolume(volumeLinear);
                 buildPipeline();
             }
         };
@@ -198,8 +199,7 @@ public final class GstHlsPipeline {
 
         pipeline.play();
         tryPendingSeek("start");
-        // Short VOD ENDLIST ads often never post bus EOS; poll duration vs position
-        // (same idea as the FFmpeg player ENDLIST path).
+        // Short VOD ENDLIST items often never post bus EOS; poll duration vs position.
         endWatch = seekScheduler.scheduleAtFixedRate(this::checkPositionAtEnd, 400, 200, TimeUnit.MILLISECONDS);
         log.info("HLS pipeline started uri={}", uri);
     }
@@ -309,12 +309,10 @@ public final class GstHlsPipeline {
     }
 
     public void seek(double positionSeconds) {
-        if (positionSeconds < 0 || Double.isNaN(positionSeconds) || Double.isInfinite(positionSeconds)) {
-            return;
-        }
-        // Guard against CLOCK_TIME_NONE /overflow-style targets (seen as ~2.5e6 hours in demux).
-        if (positionSeconds > 86_400.0 * 7) {
-            log.warn("Ignoring absurd HLS seek to {}s", positionSeconds);
+        if (HlsPlaybackMath.isAbsurdSeek(positionSeconds)) {
+            if (positionSeconds > HlsPlaybackMath.ABSURD_SEEK_SECONDS) {
+                log.warn("Ignoring absurd HLS seek to {}s", positionSeconds);
+            }
             return;
         }
         ended = false;
@@ -339,7 +337,7 @@ public final class GstHlsPipeline {
     }
 
     public void setVolume(double volumeLinear) {
-        this.volumeLinear = clampVolume(volumeLinear);
+        this.volumeLinear = HlsPlaybackMath.clampVolume(volumeLinear);
         if (pipeline != null) {
             pipeline.set("volume", this.volumeLinear);
         }
@@ -365,7 +363,7 @@ public final class GstHlsPipeline {
     }
 
     public double durationSeconds() {
-        // Playlist ENDLIST sum is the item length YouTube expects. GST duration for HLS ads
+        // Playlist ENDLIST sum is the item length the sender expects. Pipeline duration for HLS ads
         // is often hours (wrong demux timeline) and must not win.
         if (playlistDurationSeconds > 0) {
             return playlistDurationSeconds;
@@ -429,7 +427,7 @@ public final class GstHlsPipeline {
             return gst;
         }
         // Until the demux reports a real position, do not invent progress from wall-clock —
-        // that produced black-screen "playback" and fake EOS on the first YouTube ad.
+        // that falsely advances playback-info and can trip EOS before any picture.
         if (!mediaClockTrusted) {
             return 0;
         }
@@ -456,7 +454,7 @@ public final class GstHlsPipeline {
         }
         // Local player stop at item end.
         // Do not call Playback.onPause — that emits reverse "paused"
-        // and YouTube treats it as a user pause (blocks playlistRemove).
+        // and the sender treats it as a user pause (blocks playlistRemove).
         if (pipeline != null) {
             try {
                 pipeline.pause();
@@ -615,8 +613,5 @@ public final class GstHlsPipeline {
         }
     }
 
-    private static double clampVolume(double volumeLinear) {
-        return Math.max(0.0, Math.min(1.0, volumeLinear));
-    }
 }
 

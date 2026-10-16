@@ -21,13 +21,13 @@ public final class CastAutoConnectSmokeMain {
         devices.forEach(d -> System.out.println(
                 "DEVICE\t" + d + "\tpw=" + d.passwordRequired() + "\tid=" + d.deviceId()));
 
-        ServiceDiscovery.Info tv = devices.stream()
+        ServiceDiscovery.Info target = devices.stream()
                 .filter(d -> d.port() == 7000)
                 .filter(d -> !d.address().startsWith("127."))
                 .findFirst()
                 .orElse(null);
-        if (tv == null) {
-            System.out.println("TV_SKIP (no :7000 device on LAN)");
+        if (target == null) {
+            System.out.println("TARGET_SKIP (no :7000 device on LAN)");
             System.out.println("SMOKE_OK");
             caster.close();
             System.exit(0);
@@ -36,7 +36,7 @@ public final class CastAutoConnectSmokeMain {
 
         AtomicBoolean prompted = new AtomicBoolean();
         try {
-            caster.connect(tv, device -> {
+            caster.connect(target, device -> {
                 prompted.set(true);
                 System.out.println("PIN_PROMPT\t" + device);
                 return null; // cancel if we unexpectedly need a PIN in saved-creds runs

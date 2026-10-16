@@ -1,5 +1,6 @@
 package com.github.serezhka.airplay.app.ffmpeg.hls;
 
+import com.github.serezhka.airplay.app.common.hls.HlsPlaybackMath;
 import com.github.serezhka.airplay.app.ffmpeg.process.FfplayProcess;
 import com.github.serezhka.airplay.app.common.support.NativeProcessLog;
 import lombok.extern.slf4j.Slf4j;
@@ -28,7 +29,7 @@ public final class FfmpegHlsPipeline {
     /** Exits faster than this after start are treated as open failures, not real EOS. */
     private static final long MIN_PLAY_BEFORE_EOS_NS = 2_000_000_000L;
     private static final int MAX_EARLY_EXIT_RETRIES = 4;
-    private static final double ABSURD_SEEK_SECONDS = 86_400.0 * 7;
+    private static final double ABSURD_SEEK_SECONDS = HlsPlaybackMath.ABSURD_SEEK_SECONDS;
 
     private final AtomicBoolean stopRequested = new AtomicBoolean();
     private final AtomicBoolean paused = new AtomicBoolean();
@@ -64,7 +65,7 @@ public final class FfmpegHlsPipeline {
      */
     public void start(String playlistUri, double volume, double initialSeekSeconds) {
         stop();
-        volumeLinear = clampVolume(volume);
+        volumeLinear = HlsPlaybackMath.clampVolume(volume);
         paused.set(false);
         ended.set(false);
         userStopped.set(false);
@@ -74,7 +75,7 @@ public final class FfmpegHlsPipeline {
                 ? initialSeekSeconds : 0;
         positionBaseSeconds = seek;
         // Do not run the sender clock until ffplay prints a real timestamp.
-        // Starting it here put the phone several seconds ahead of the first frame.
+        // Starting it here put the sender timeline several seconds ahead of the first frame.
         positionAnchorNanos = 0;
         lastEndedNotifyNanos = 0;
         pictureAnnounced = false;
@@ -155,11 +156,10 @@ public final class FfmpegHlsPipeline {
     }
 
     public void seek(double positionSeconds) {
-        if (positionSeconds < 0 || Double.isNaN(positionSeconds) || Double.isInfinite(positionSeconds)) {
-            return;
-        }
-        if (positionSeconds > ABSURD_SEEK_SECONDS) {
-            log.warn("Ignoring absurd HLS seek to {}s", positionSeconds);
+        if (HlsPlaybackMath.isAbsurdSeek(positionSeconds)) {
+            if (positionSeconds > ABSURD_SEEK_SECONDS) {
+                log.warn("Ignoring absurd HLS seek to {}s", positionSeconds);
+            }
             return;
         }
         ended.set(false);
@@ -189,7 +189,7 @@ public final class FfmpegHlsPipeline {
     }
 
     public void setVolume(double volume) {
-        double next = clampVolume(volume);
+        double next = HlsPlaybackMath.clampVolume(volume);
         if (Math.abs(next - volumeLinear) < 0.01) {
             return;
         }
@@ -683,10 +683,6 @@ public final class FfmpegHlsPipeline {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
-    }
-
-    private static double clampVolume(double volumeLinear) {
-        return Math.max(0.0, Math.min(1.0, volumeLinear));
     }
 
     private static String withCacheBuster(String playlistUri, long epoch) {

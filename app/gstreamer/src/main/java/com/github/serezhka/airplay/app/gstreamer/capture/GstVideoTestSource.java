@@ -27,7 +27,7 @@ public final class GstVideoTestSource implements CaptureSource {
     private final Pipeline pipeline;
 
     public GstVideoTestSource(Consumer<byte[]> consumer) {
-        // Baseline + no B-frames — matches the measured working Annex-B feeder for TVs.
+        // Baseline + no B-frames — compatible Annex-B for typical AirPlay receivers.
         pipeline = (Pipeline) Gst.parseLaunch(
                 "videotestsrc is-live=true pattern=smpte ! "
                         + "video/x-raw,framerate=30/1,width=1280,height=720 ! "

@@ -6,8 +6,8 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Discover, pick a target (arg or first non-self LAN device / self), legacy-connect
- * videotestsrc for a few seconds, disconnect.
+ * Discover, pick a target (arg or first non-self LAN device / self), connect and
+ * stream capture for a few seconds, disconnect.
  * <pre>
  *   ./gradlew :client:run -PmainClass=...CastConnectSmokeMain --args='--seconds 5'
  *   ./gradlew :client:run -PmainClass=...CastConnectSmokeMain \

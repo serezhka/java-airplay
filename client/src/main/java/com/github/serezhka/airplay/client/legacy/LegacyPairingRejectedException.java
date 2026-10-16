@@ -1,7 +1,7 @@
 package com.github.serezhka.airplay.client.legacy;
 
 /**
- * Receiver refused legacy empty {@code POST /pair-setup} (typical modern TV / HAP path).
+ * Receiver refused legacy empty {@code POST /pair-setup} (typical modern HAP path).
  */
 public final class LegacyPairingRejectedException extends IllegalStateException {
 

@@ -23,6 +23,7 @@ class LayeringTest {
                     "com.github.serezhka.airplay.server..",
                     "com.github.serezhka.airplay.client..",
                     "com.github.serezhka.airplay.app..",
+                    "com.github.serezhka.airplay.player..",
                     "io.netty..",
                     "javax.jmdns.."
             );
@@ -32,6 +33,18 @@ class LayeringTest {
             .that().resideInAPackage("com.github.serezhka.airplay.server..")
             .should().dependOnClassesThat().resideInAnyPackage(
                     "com.github.serezhka.airplay.client..",
-                    "com.github.serezhka.airplay.app.."
+                    "com.github.serezhka.airplay.app..",
+                    "com.github.serezhka.airplay.player.."
+            );
+
+    @ArchTest
+    static final ArchRule protocolAndServerStayFreeOfNativeStacks = noClasses()
+            .that().resideInAnyPackage(
+                    "com.github.serezhka.airplay.protocol..",
+                    "com.github.serezhka.airplay.server.."
+            )
+            .should().dependOnClassesThat().resideInAnyPackage(
+                    "org.freedesktop.gstreamer..",
+                    "org.bytedeco.."
             );
 }

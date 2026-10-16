@@ -33,7 +33,7 @@ public final class CaptureSources {
         }
         if (factory == null) {
             throw new IllegalStateException(
-                    "No CaptureSourceFactory installed. Run the GStreamer or FFmpeg app "
+                    "No CaptureSourceFactory installed. Run a receiver app that registers one "
                             + "(tray / bootRun / fat jar), or call CaptureSources.install(...).");
         }
         return factory.open(onAnnexB);

@@ -18,6 +18,7 @@ class PlayerBoundaryTest {
             .should().dependOnClassesThat().resideInAnyPackage(
                     "com.github.serezhka.airplay.server.internal..",
                     "com.github.serezhka.airplay.app.gstreamer..",
-                    "com.github.serezhka.airplay.app.ffmpeg.."
+                    "com.github.serezhka.airplay.app.ffmpeg..",
+                    "com.github.serezhka.airplay.player.."
             );
 }

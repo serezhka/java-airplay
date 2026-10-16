@@ -13,7 +13,7 @@ public class HapControlCipherVectorTest {
     }
 
     @Test
-    void twoMessagesMatchPythonVector() throws Exception {
+    void twoMessagesMatchReferenceVector() throws Exception {
         byte[] secret = new byte[64];
         for (int i = 0; i < 64; i++) secret[i] = (byte) i;
         HapControlCipher c = HapControlCipher.forClient(secret);

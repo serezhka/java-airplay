@@ -18,7 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Client must encrypt with the same plaintext AES key the receiver unwraps from fixture ekey.
- * A hardcoded AES_KEY constant previously drifted and produced black-screen self-cast.
+ * A hardcoded AES_KEY constant previously drifted and broke decrypt on the receiver.
  */
 class LegacyFairPlayAesKeyTest {
 

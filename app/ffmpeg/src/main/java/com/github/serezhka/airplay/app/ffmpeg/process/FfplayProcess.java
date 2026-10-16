@@ -52,7 +52,7 @@ public final class FfplayProcess {
         // info (not error) so the status line is visible; the log pump keeps only real messages.
         cmd.add("-loglevel");
         cmd.add("info");
-        // FFmpeg 6+/8 default extension_picky rejects YouTube googlevideo URLs (no .ts/.m4s).
+        // FFmpeg 6+/8 default extension_picky rejects HLS segment URLs without .ts/.m4s.
         if (isHlsPlaylistUri(playlistUri)) {
             cmd.add("-extension_picky");
             cmd.add("0");

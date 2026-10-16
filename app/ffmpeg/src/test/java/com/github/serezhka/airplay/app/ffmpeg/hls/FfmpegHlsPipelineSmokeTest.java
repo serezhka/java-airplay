@@ -69,7 +69,7 @@ class FfmpegHlsPipelineSmokeTest {
     }
 
     /**
-     * YouTube scrub (session 20260926-144311): {@code rate=0} then {@code /scrub} 1.84s later.
+     * Observed scrub (session 20260926-144311): {@code rate=0} then {@code /scrub} 1.84s later.
      * The hold must keep the same ffplay pid; the seek then reopens at the new position.
      */
     @Test

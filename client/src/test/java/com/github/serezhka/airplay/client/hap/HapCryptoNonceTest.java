@@ -16,7 +16,7 @@ class HapCryptoNonceTest {
     }
 
     @Test
-    void offset4PvMsgMatchesWorkingSender() {
+    void offset4PvMsgMatchesReferenceVector() {
         byte[] n = HapCrypto.nonceAt4(AirPlayKeyLabels.PV_MSG_02);
         assertEquals(12, n.length);
         assertEquals(0, n[0] & 0xFF);

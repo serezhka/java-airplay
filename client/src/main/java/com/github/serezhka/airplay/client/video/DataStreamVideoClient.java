@@ -1,5 +1,7 @@
 package com.github.serezhka.airplay.client.video;
 
+import com.github.serezhka.airplay.client.netty.NettyEventLoops;
+
 import com.github.serezhka.airplay.client.capture.CaptureSource;
 import com.github.serezhka.airplay.client.capture.CaptureSources;
 import com.github.serezhka.airplay.protocol.crypto.DataStreamCipher;
@@ -16,9 +18,7 @@ import io.netty.channel.ChannelOption;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.epoll.Epoll;
-import io.netty.channel.epoll.EpollEventLoopGroup;
 import io.netty.channel.epoll.EpollSocketChannel;
-import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import lombok.extern.slf4j.Slf4j;
@@ -225,7 +225,7 @@ public final class DataStreamVideoClient extends ChannelInboundHandlerAdapter im
     }
 
     private EventLoopGroup eventLoopGroup() {
-        return Epoll.isAvailable() ? new EpollEventLoopGroup() : new NioEventLoopGroup();
+        return NettyEventLoops.create();
     }
 
     private Class<? extends SocketChannel> socketChannelClass() {

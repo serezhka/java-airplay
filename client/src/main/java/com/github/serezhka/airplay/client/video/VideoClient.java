@@ -1,5 +1,7 @@
 package com.github.serezhka.airplay.client.video;
 
+import com.github.serezhka.airplay.client.netty.NettyEventLoops;
+
 import com.github.serezhka.airplay.client.capture.CaptureSource;
 import com.github.serezhka.airplay.client.capture.CaptureSources;
 import com.github.serezhka.airplay.client.crypto.AesCtrStreamEncryptor;
@@ -18,9 +20,7 @@ import io.netty.channel.ChannelOption;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.epoll.Epoll;
-import io.netty.channel.epoll.EpollEventLoopGroup;
 import io.netty.channel.epoll.EpollSocketChannel;
-import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import lombok.extern.slf4j.Slf4j;
@@ -61,7 +61,7 @@ public class VideoClient extends ChannelInboundHandlerAdapter implements AutoClo
         this(address, port, encryptor, null);
     }
 
-    /** Continuous CTR path used for HAP {@code aes_raw} (matches measured Python feeder). */
+    /** Continuous CTR path used for HAP {@code aes_raw}. */
     public VideoClient(String address, int port, AesCtrStreamEncryptor streamEncryptor) throws InterruptedException {
         this(address, port, null, streamEncryptor);
     }
@@ -150,7 +150,7 @@ public class VideoClient extends ChannelInboundHandlerAdapter implements AutoClo
             } else if (t == 8) {
                 pps = nal.data();
             } else if (t == 6) {
-                // SEI ahead of the next slice (same packing as the measured H.264 feeder).
+                // SEI ahead of the next slice (common sender packing).
                 pending.add(nal);
             } else if (t == 1 || t == 5) {
                 vcl.addAll(pending);
@@ -189,12 +189,12 @@ public class VideoClient extends ChannelInboundHandlerAdapter implements AutoClo
                 return;
             }
         }
-        // ~33.3ms in nanoseconds — matches measured iPhone PTS scale better than 3000 ticks.
+        // ~33.3ms in nanoseconds — 30 fps PTS step used by typical senders.
         long timestamp = pts.getAndAdd(33_333_333L);
         byte[] header = payloadType == MirrorPacketLayout.PAYLOAD_CODEC
                 ? MirrorPacketHeaders.legacy(payload.length, payloadType, timestamp, FRAME_WIDTH, FRAME_HEIGHT)
                 : MirrorPacketHeaders.legacy(payload.length, payloadType, timestamp);
-        // One TCP write: some TVs mis-frame when the 128B header and payload are split.
+        // One TCP write: some receivers mis-frame when the 128B header and payload are split.
         byte[] packet = new byte[header.length + payload.length];
         System.arraycopy(header, 0, packet, 0, header.length);
         System.arraycopy(payload, 0, packet, header.length, payload.length);
@@ -240,7 +240,7 @@ public class VideoClient extends ChannelInboundHandlerAdapter implements AutoClo
     }
 
     private EventLoopGroup eventLoopGroup() {
-        return Epoll.isAvailable() ? new EpollEventLoopGroup() : new NioEventLoopGroup();
+        return NettyEventLoops.create();
     }
 
     private Class<? extends SocketChannel> socketChannelClass() {

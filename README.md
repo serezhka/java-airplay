@@ -24,7 +24,7 @@
 - AirPlay audio + screen mirroring
 - FairPlay decryption for mirrored streams
 - Volume control
-- YouTube HLS playback (not stable, disabled by default `airplay.hls-enabled=false`)
+- HLS video playback (not stable, disabled by default `airplay.hls-enabled=false`)
 - Playbacks: GStreamer, FFmpeg (`ffplay`)
 - Optional session dump (protocol + decrypted media) for debugging
 
@@ -49,7 +49,7 @@ java -jar java-airplay-gstreamer-{version}.jar
 java -jar java-airplay-ffmpeg-{version}.jar
 ```
 
-Open **Screen Mirroring** on the iPhone / iPad / Mac and pick the receiver name (default from config, e.g. `srzhka`).
+Open **Screen Mirroring** on the iPhone / iPad / Mac and pick the receiver name (default from config: `JavaAirPlay`).
 
 ## Configuration
 
@@ -58,7 +58,7 @@ Override by placing `application.properties` in the working directory:
 
 ```properties
 # airplay
-airplay.serverName=srzhka
+airplay.serverName=JavaAirPlay
 airplay.width=1920
 airplay.height=1080
 airplay.fps=60
@@ -87,11 +87,11 @@ Best option for video **and** audio (including AAC-ELD mirroring audio).
 
 Install: [GStreamer documentation](https://gstreamer.freedesktop.org/documentation/installing/) · [Downloads](https://gstreamer.freedesktop.org/download/)
 
-On Windows 11 with **Smart App Control** enabled, YouTube HLS in the GStreamer receiver stays black: the official GStreamer runtime ships unsigned plugin DLLs, and SAC blocks them when Java loads them. There is no per-app allowlist. Mirroring audio/video may still work if those plugins are already trusted; for HLS use the FFmpeg receiver, or turn SAC off.
+On Windows 11 with **Smart App Control** enabled, HLS in the GStreamer receiver may fail to decode: the official GStreamer runtime ships unsigned plugin DLLs, and SAC blocks them when Java loads them. There is no per-app allowlist. Mirroring audio/video may still work if those plugins are already trusted; for HLS use the FFmpeg receiver, or turn SAC off.
 
 ### FFmpeg
 
-Uses `ffplay` on `PATH`. Video works; **mirroring audio is unreliable** on stock builds (AAC-ELD usually needs a custom ffmpeg with `libfdk-aac`). Prefer GStreamer when you need audio. For YouTube HLS on Windows with Smart App Control on, prefer this receiver over GStreamer.
+Uses `ffplay` on `PATH`. Video works; **mirroring audio is unreliable** on stock builds (AAC-ELD usually needs a custom ffmpeg with `libfdk-aac`). Prefer GStreamer when you need audio. For HLS on Windows with Smart App Control on, prefer this receiver over GStreamer.
 
 Install: [FFmpeg download](https://ffmpeg.org/download.html)
 
@@ -105,7 +105,7 @@ Set `dump.enabled=true` to record beside the live player under `dumps/<timestamp
 
 ## Known issues
 
-- YouTube sometimes shows an empty black window on the phone while its interface is drawn on the receiver. That happens when screen mirroring is already on and the receiver advertises video. `airplay.hls-enabled=false` leaves mirroring and audio without that video advertisement.
+- Some video-capable senders blank their own UI while mirroring chrome when the receiver advertises video features and screen mirroring is already on. `airplay.hls-enabled=false` leaves mirroring and audio without that video advertisement.
 
 ## Related projects
 

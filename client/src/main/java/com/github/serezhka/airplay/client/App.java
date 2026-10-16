@@ -18,7 +18,7 @@ import java.util.Scanner;
 
 /**
  * Smoke client: legacy pair + FairPlay + mirror video, optional AAC audio.
- * For a TV-targeted video-only entry, see {@link com.github.serezhka.airplay.client.legacy.LegacyMirrorApp}.
+ * For a video-only legacy entry, see {@link com.github.serezhka.airplay.client.legacy.LegacyMirrorApp}.
  * For HAP TLV (PIN / {@code X-Apple-HKP}) receivers, see {@link com.github.serezhka.airplay.client.hap.HapMirrorApp}.
  *
  * <pre>

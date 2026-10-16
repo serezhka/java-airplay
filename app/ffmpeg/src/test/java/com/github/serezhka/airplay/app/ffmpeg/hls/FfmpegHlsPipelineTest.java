@@ -87,7 +87,7 @@ class FfmpegHlsPipelineTest {
 
     @Test
     void scrubJumpFixtureDocumentsHistoricalDemuxPtsResets() throws Exception {
-        // Seed from Kali dump 20260917-074700 — offline proof of the scrubber jumps.
+        // Seed from captured scrub dump 20260917-074700 — offline proof of demux PTS jumps.
         try (var in = FfmpegHlsPipelineTest.class.getResourceAsStream(
                 "/fixtures/scrub-jump-20260917.json")) {
             assertTrue(in != null, "missing fixtures/scrub-jump-20260917.json");

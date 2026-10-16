@@ -29,7 +29,7 @@ public final class AudioSources {
         }
         if (factory == null) {
             throw new IllegalStateException(
-                    "No AudioSourceFactory installed. Run the GStreamer or FFmpeg app, "
+                    "No AudioSourceFactory installed. Run a receiver app that registers one, "
                             + "or call AudioSources.install(...).");
         }
         return factory.open(onAdtsFrame);

@@ -27,7 +27,7 @@ public final class FfmpegVideoTestSource implements CaptureSource {
                 "-re",
                 "-f", "lavfi",
                 "-i", "testsrc=size=1280x720:rate=30",
-                // testsrc is rgb24; baseline libx264 needs 4:2:0 or encode opens fail → empty stdout / black TV.
+                // lavfi testsrc is rgb24; baseline libx264 requires 4:2:0 or the encoder fails to open.
                 "-pix_fmt", "yuv420p",
                 "-c:v", "libx264",
                 "-tune", "zerolatency",

@@ -12,7 +12,7 @@ public final class HapFairPlayHandshake {
     }
 
     /**
-     * @param pin TV on-screen pairing code (required)
+     * @param pin receiver on-screen pairing code (required)
      * @return SRP session key used for control-channel encryption
      */
     public static byte[] perform(HapPairChannel control, String pin) throws Exception {

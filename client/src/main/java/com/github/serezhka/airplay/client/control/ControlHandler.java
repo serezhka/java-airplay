@@ -48,7 +48,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
 
     /**
      * Send already-framed RTSP bytes (bypasses {@code RtspEncoder}). Used when the encoder's
-     * header formatting is rejected by a receiver that accepts Python-style raw RTSP.
+     * header formatting is rejected by a receiver that accepts raw RTSP as written.
      */
     public void sendRaw(byte[] rtspMessage) {
         awaitActive();

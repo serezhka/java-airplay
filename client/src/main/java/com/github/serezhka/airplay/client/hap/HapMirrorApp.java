@@ -5,7 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import java.util.concurrent.TimeUnit;
 
 /**
- * CLI: HKP3 persistent pair + DataStream videotestsrc mirror.
+ * CLI: HKP3 persistent pair + DataStream mirror from the installed CaptureSource.
  * <pre>
  *   ./gradlew :client:run -PmainClass=com.github.serezhka.airplay.client.hap.HapMirrorApp \
  *       --args='--host &lt;receiver-ip&gt; --port 7000 --pin &lt;pin&gt; --duration 15'
@@ -33,7 +33,7 @@ public final class HapMirrorApp {
                 cli.durationSeconds > 0 ? cli.durationSeconds : "until Ctrl+C");
 
         if (cli.pin == null || cli.pin.isBlank()) {
-            throw new IllegalArgumentException("--pin is required (on-screen code from the TV)");
+            throw new IllegalArgumentException("--pin is required (on-screen code from the receiver)");
         }
 
         String pin = cli.pin.trim().replace("-", "");
@@ -50,10 +50,10 @@ public final class HapMirrorApp {
         try (HapMirrorSession session = HapMirrorSession.startDataStream(
                 control, cli.host, cli.port, shared)) {
             if (cli.durationSeconds > 0) {
-                log.info("Streaming videotestsrc H.264 for {}s", cli.durationSeconds);
+                log.info("Streaming H.264 capture for {}s", cli.durationSeconds);
                 TimeUnit.SECONDS.sleep(cli.durationSeconds);
             } else {
-                log.info("Streaming videotestsrc H.264; Ctrl+C to stop");
+                log.info("Streaming H.264 capture; Ctrl+C to stop");
                 Thread.currentThread().join();
             }
         }

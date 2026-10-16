@@ -4,7 +4,7 @@ import java.util.function.Consumer;
 
 /**
  * Opens a {@link CaptureSource} that pushes Annex-B access units to {@code onAnnexB}.
- * Provided by the runnable app module (GStreamer or FFmpeg), not by {@code client}.
+ * Provided by the runnable app module, not by {@code client}.
  */
 @FunctionalInterface
 public interface CaptureSourceFactory {

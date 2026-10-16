@@ -12,7 +12,7 @@ import java.util.concurrent.TimeUnit;
  * HKP3 pair-setup through M6, write {@code dt-creds.json} for pair-verify / DataStream.
  * <pre>
  *   ./gradlew :client:run -PmainClass=com.github.serezhka.airplay.client.hap.PairDumpCredsApp \
- *       --args='--host &lt;receiver-ip&gt; --pin &lt;pin&gt; --tv-id &lt;device-id&gt; --out /path/to/dt-creds.json'
+ *       --args='--host &lt;receiver-ip&gt; --pin &lt;pin&gt; --device-id &lt;device-id&gt; --out /path/to/dt-creds.json'
  * </pre>
  */
 public final class PairDumpCredsApp {
@@ -24,7 +24,7 @@ public final class PairDumpCredsApp {
         String host = null;
         int port = 7000;
         String pin = null;
-        String tvId = null;
+        String deviceId = null;
         Path out = null;
         Path pinFile = null;
         boolean pinStart = true;
@@ -34,7 +34,7 @@ public final class PairDumpCredsApp {
                 case "--port" -> port = Integer.parseInt(args[++i]);
                 case "--pin" -> pin = args[++i];
                 case "--pin-file" -> pinFile = Path.of(args[++i]);
-                case "--tv-id" -> tvId = args[++i];
+                case "--device-id" -> deviceId = args[++i];
                 case "--out" -> out = Path.of(args[++i]);
                 case "--no-pin-start" -> pinStart = false;
                 default -> throw new IllegalArgumentException("unknown arg: " + args[i]);
@@ -43,8 +43,8 @@ public final class PairDumpCredsApp {
         if (host == null || host.isBlank()) {
             throw new IllegalArgumentException("--host is required");
         }
-        if (tvId == null || tvId.isBlank()) {
-            throw new IllegalArgumentException("--tv-id is required (creds JSON key, e.g. deviceid)");
+        if (deviceId == null || deviceId.isBlank()) {
+            throw new IllegalArgumentException("--device-id is required (creds JSON key, e.g. deviceid)");
         }
         if (out == null) {
             throw new IllegalArgumentException("--out is required");
@@ -96,7 +96,7 @@ public final class PairDumpCredsApp {
                 ? ""
                 : Base64.getEncoder().encodeToString(pairing.getAccessoryLtpk());
 
-        String json = "{\n  \"" + tvId + "\": {\n"
+        String json = "{\n  \"" + deviceId + "\": {\n"
                 + "    \"pairing_id\": \"" + pairing.getPairingId() + "\",\n"
                 + "    \"ed25519_seed\": \"" + Base64.getEncoder().encodeToString(seed) + "\",\n"
                 + "    \"accessory_pairing_id\": \"" + accessoryId + "\",\n"

@@ -16,7 +16,7 @@ import java.util.function.Consumer;
 
 /**
  * Sine tone as AAC-LC ADTS frames for AirPlay audio smoke tests.
- * Real iPhone mirror audio is AAC-ELD ({@code ct=8}); this LC stream exercises
+ * Real mirror audio is often AAC-ELD ({@code ct=8}); this LC stream exercises
  * SETUP type=96, FairPlay audio crypto, and AAC playback paths ({@code ct=4}).
  */
 @Slf4j
@@ -31,7 +31,7 @@ public final class GstAudioTestSource implements AudioSource {
     private final Pipeline pipeline;
 
     public GstAudioTestSource(Consumer<byte[]> consumer) {
-        // ADTS so stock ffplay (-f aac) and aacparse can find frame boundaries after decrypt padding.
+        // ADTS so generic AAC demuxers can find frame boundaries after decrypt padding.
         pipeline = (Pipeline) Gst.parseLaunch(
                 "audiotestsrc wave=sine freq=440 is-live=true ! "
                         + "audio/x-raw,rate=44100,channels=2 ! "

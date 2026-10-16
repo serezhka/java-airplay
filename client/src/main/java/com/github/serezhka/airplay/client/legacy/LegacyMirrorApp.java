@@ -13,9 +13,9 @@ import java.util.concurrent.TimeUnit;
 /**
  * Targeted legacy FairPlay mirror client for AirPlay receivers that still accept
  * pair-setup / pair-verify / fp-setup (older “old protocol” path). Streams
- * GStreamer {@code videotestsrc} H.264 via {@link VideoClient}.
+ * H.264 from the installed {@code CaptureSource} via {@link VideoClient}.
  *
- * <p>No HomeKit / TLV pairing fallback — if the TV rejects legacy pair-setup,
+ * <p>No HomeKit / TLV pairing fallback — if the receiver rejects legacy pair-setup,
  * this process fails with a clear error.
  *
  * <pre>
@@ -75,7 +75,7 @@ public final class LegacyMirrorApp {
         rtspSetupVideo.put("streams", videoStreams);
         NSDictionary videoSetupResponse = controlClient.rtspSetup(rtspSetupVideo);
         if (videoSetupResponse == null || !videoSetupResponse.containsKey("streams")) {
-            throw new IllegalStateException("Video SETUP returned no streams; cannot start videotestsrc mirror.");
+            throw new IllegalStateException("Video SETUP returned no streams; cannot start mirror capture.");
         }
         log.info("video SETUP ok");
 
@@ -88,12 +88,12 @@ public final class LegacyMirrorApp {
         new VideoClient(cli.host, videoPort, videoEncryptor);
 
         if (cli.durationSeconds > 0) {
-            log.info("Streaming videotestsrc H.264 for {}s", cli.durationSeconds);
+            log.info("Streaming H.264 capture for {}s", cli.durationSeconds);
             TimeUnit.SECONDS.sleep(cli.durationSeconds);
             log.info("Duration elapsed; exiting");
             System.exit(0);
         }
-        log.info("Streaming videotestsrc H.264; Ctrl+C to stop");
+        log.info("Streaming H.264 capture; Ctrl+C to stop");
         Thread.currentThread().join();
     }
 

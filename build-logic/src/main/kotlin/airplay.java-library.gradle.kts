@@ -15,6 +15,7 @@ java {
 
 tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
+    options.compilerArgs.add("-Xlint:deprecation")
 }
 
 tasks.withType<Test>().configureEach {

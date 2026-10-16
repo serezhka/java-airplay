@@ -20,3 +20,4 @@ __pycache__/
 # local pairing secrets
 **/.dt-creds*.json
 **/dt-creds.json
+/runs

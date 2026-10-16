@@ -1,5 +1,7 @@
 package com.github.serezhka.airplay.client.control;
 
+import com.github.serezhka.airplay.client.netty.NettyEventLoops;
+
 import com.dd.plist.BinaryPropertyListParser;
 import com.dd.plist.BinaryPropertyListWriter;
 import com.dd.plist.NSDictionary;
@@ -14,9 +16,7 @@ import io.netty.channel.ChannelOption;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.epoll.Epoll;
-import io.netty.channel.epoll.EpollEventLoopGroup;
 import io.netty.channel.epoll.EpollSocketChannel;
-import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.codec.http.*;
@@ -142,7 +142,7 @@ public class ControlClient implements Runnable, AutoCloseable, HapPairChannel {
         if (status.code() >= 400) {
             throw new IllegalStateException("POST /pair-pin-start → " + status);
         }
-        log.info("POST /pair-pin-start → {} (look for PIN on the TV)", status);
+        log.info("POST /pair-pin-start → {} (look for PIN on the receiver)", status);
     }
 
     /**
@@ -191,7 +191,7 @@ public class ControlClient implements Runnable, AutoCloseable, HapPairChannel {
         if (status.code() >= 400) {
             throw new IllegalStateException(
                     "POST " + path + " → " + status + " (body " + responseBytes.length + " bytes). "
-                            + "Modern TVs need HAP TLV + X-Apple-HKP; legacy empty pair-setup gets 400.");
+                            + "Modern receivers need HAP TLV + X-Apple-HKP; legacy empty pair-setup gets 400.");
         }
         if (responseBytes.length == 0) {
             throw new IllegalStateException("POST " + path + " → " + status + " with empty body");
@@ -289,7 +289,7 @@ public class ControlClient implements Runnable, AutoCloseable, HapPairChannel {
     }
 
     private EventLoopGroup eventLoopGroup() {
-        return Epoll.isAvailable() ? new EpollEventLoopGroup() : new NioEventLoopGroup();
+        return NettyEventLoops.create();
     }
 
     private Class<? extends SocketChannel> socketChannelClass() {

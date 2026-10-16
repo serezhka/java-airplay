@@ -14,6 +14,8 @@ public final class RecordingConsumer implements Playback {
     private final AtomicReference<AudioStreamInfo> audioFormat = new AtomicReference<>();
     private final AtomicInteger videoFrames = new AtomicInteger();
     private final AtomicInteger audioFrames = new AtomicInteger();
+    private final AtomicReference<Double> volumeLinear = new AtomicReference<>(1.0);
+    private final AtomicReference<Playback.Observer> observer = new AtomicReference<>(Playback.Observer.NONE);
 
     @Override
     public void onVideoFormat(VideoStreamInfo videoStreamInfo) {
@@ -41,6 +43,26 @@ public final class RecordingConsumer implements Playback {
 
     @Override
     public void onAudioSrcDisconnect() {
+    }
+
+    @Override
+    public void onVolume(double volumeLinear) {
+        this.volumeLinear.set(Math.max(0.0, Math.min(1.0, volumeLinear)));
+    }
+
+    @Override
+    public double volume() {
+        return volumeLinear.get();
+    }
+
+    @Override
+    public void setObserver(Observer observer) {
+        this.observer.set(observer == null ? Observer.NONE : observer);
+    }
+
+    /** Test helper: fire {@link Observer#onEnded()} if one was registered. */
+    public void fireEnded() {
+        observer.get().onEnded();
     }
 
     public VideoStreamInfo videoFormat() {
