@@ -4,7 +4,8 @@
   <!-- markdownlint-disable-next-line -->
   # Java AirPlay
 
-  Open-source AirPlay audio + screen-mirroring receiver in Java.
+  Open-source AirPlay server in Java — receive audio, screen mirroring, and HLS video,
+  and cast a local stream to other AirPlay devices.
 
   [![CI][badge-ci]][ci]&nbsp;
   [![GitHub release][badge-release]][releases]&nbsp;
@@ -21,12 +22,18 @@
 
 ## Features
 
-- AirPlay audio + screen mirroring
-- FairPlay decryption for mirrored streams
+- AirPlay audio and screen mirroring (FairPlay decrypt)
+- HLS video playback
 - Volume control
-- HLS video playback (not stable, disabled by default `airplay.hls-enabled=false`)
-- Playbacks: GStreamer, FFmpeg (`ffplay`)
+- Two native playback backends: GStreamer and FFmpeg (`ffplay`)
 - Optional session dump (protocol + decrypted media) for debugging
+- System tray with cast picker (discover LAN receivers and send a stream)
+
+## Experimental features
+
+- Cast a synthetic test video pattern (`client.src=videotest`) to another AirPlay
+  receiver from the tray menu — useful for end-to-end send-path checks without a
+  camera or screen capture
 
 ## Quick start
 
@@ -38,18 +45,20 @@ cd java-airplay
 ./gradlew :app:gstreamer:bootRun
 ```
 
-FFmpeg receiver: `./gradlew :app:ffmpeg:bootRun`. `./gradlew bootJar` builds both jars.
+FFmpeg backend: `./gradlew :app:ffmpeg:bootRun`.  
+`./gradlew bootJar` builds both fat jars.
 
 ### Pre-built jar
 
-Download the [latest release](https://github.com/serezhka/java-airplay/releases/latest), then run one receiver:
+Download the [latest release](https://github.com/serezhka/java-airplay/releases/latest), then run one backend:
 
 ```shell
 java -jar java-airplay-gstreamer-{version}.jar
 java -jar java-airplay-ffmpeg-{version}.jar
 ```
 
-Open **Screen Mirroring** on the iPhone / iPad / Mac and pick the receiver name (default from config: `JavaAirPlay`).
+On the phone, tablet, or Mac, open **Screen Mirroring** (or AirPlay from a video app)
+and pick the advertised name (default: `JavaAirPlay`).
 
 ## Configuration
 
@@ -62,7 +71,7 @@ airplay.serverName=JavaAirPlay
 airplay.width=1920
 airplay.height=1080
 airplay.fps=60
-airplay.hls-enabled=false
+airplay.hls-enabled=true
 player.tray.enabled=true
 # cast capture: videotest | screencapture
 client.src=videotest
@@ -77,35 +86,36 @@ dump.artwork=true
 dump.videoFps=60
 ```
 
-## Playback
+## Playback backends
 
-GStreamer and FFmpeg are separate receivers. Install the native player that matches the jar or `bootRun` task you start.
+GStreamer and FFmpeg are separate apps. Install the native stack that matches the jar
+or `bootRun` task you start.
 
-### GStreamer (recommended)
-
-Best option for video **and** audio (including AAC-ELD mirroring audio).
+### GStreamer
 
 Install: [GStreamer documentation](https://gstreamer.freedesktop.org/documentation/installing/) · [Downloads](https://gstreamer.freedesktop.org/download/)
 
-On Windows 11 with **Smart App Control** enabled, HLS in the GStreamer receiver may fail to decode: the official GStreamer runtime ships unsigned plugin DLLs, and SAC blocks them when Java loads them. There is no per-app allowlist. Mirroring audio/video may still work if those plugins are already trusted; for HLS use the FFmpeg receiver, or turn SAC off.
+#### Known issues
+
+On Windows 11 with **Smart App Control** enabled, HLS may fail to decode: the official
+GStreamer runtime ships unsigned plugin DLLs, and SAC blocks them when Java loads them.
+There is no per-app allowlist. Mirroring may still work if those plugins are already
+trusted; for HLS on Windows use the FFmpeg backend, turn SAC off or disable hls with `airplay.hls-enabled=false`
 
 ### FFmpeg
 
-Uses `ffplay` on `PATH`. Video works; **mirroring audio is unreliable** on stock builds (AAC-ELD usually needs a custom ffmpeg with `libfdk-aac`). Prefer GStreamer when you need audio. For HLS on Windows with Smart App Control on, prefer this receiver over GStreamer.
+Uses `ffplay` on `PATH`.
 
 Install: [FFmpeg download](https://ffmpeg.org/download.html)
 
 ## Session dump
 
-Set `dump.enabled=true` to record beside the live player under `dumps/<timestamp>_<sessionId>/`:
+Set `dump.enabled=true` to record beside the live player under
+`dumps/<timestamp>_<sessionId>/`:
 
 - `protocol/` — RTSP/HTTP captures
 - `media/` — decrypted `.h264` / remuxed `.mp4`, audio `.caf` / `.aac`
 - `extras/` — HLS playlists, artwork, DMAP metadata when present
-
-## Known issues
-
-- Some video-capable senders blank their own UI while mirroring chrome when the receiver advertises video features and screen mirroring is already on. `airplay.hls-enabled=false` leaves mirroring and audio without that video advertisement.
 
 ## Related projects
 
