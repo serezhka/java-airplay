@@ -87,7 +87,7 @@ public final class FairPlaySession {
      */
     public Optional<MediaStreamInfo> rtspSetup(InputStream in) throws Exception {
         Optional<MediaStreamInfo> mediaStreamInfo = rtsp.setup(in);
-        // YouTube ads / next item send a new type-110 stream with a new streamConnectionID.
+        // A new type-110 stream comes with a new streamConnectionID (e.g. next HLS item).
         // Reusing the previous AES-CTR decryptor yields garbage NALs for the new stream.
         if (mediaStreamInfo.isPresent() && mediaStreamInfo.get() instanceof VideoStreamInfo) {
             fairPlayVideoDecryptor = null;

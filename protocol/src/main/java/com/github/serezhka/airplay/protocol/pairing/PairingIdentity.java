@@ -7,8 +7,11 @@ import java.security.KeyPair;
 import java.util.HexFormat;
 
 /**
- * Ed25519 identity for one receiver process.
+ * Receiver Ed25519 identity for one AirPlay process (legacy FairPlay pair-setup / pair-verify).
  * The public key is what mDNS advertises as {@code pk} and what {@code /pair-setup} returns.
+ * <p>
+ * Not the HKP controller identity saved by the cast client ({@code pairing_id} + seed) —
+ * that lives in the client credential store.
  */
 public final class PairingIdentity {
 

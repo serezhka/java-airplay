@@ -1,6 +1,7 @@
 package com.github.serezhka.airplay.server.internal.handler.video;
 
 import com.github.serezhka.airplay.protocol.FairPlaySession;
+import com.github.serezhka.airplay.protocol.mirror.MirrorPacketLayout;
 import com.github.serezhka.airplay.server.Playback;
 import com.github.serezhka.airplay.server.internal.packet.VideoPacket;
 import io.netty.buffer.ByteBuf;
@@ -23,16 +24,17 @@ public class VideoHandler extends ChannelInboundHandlerAdapter {
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
         VideoPacket packet = (VideoPacket) msg;
         try {
-            if (packet.getPayloadType() == 0) {
-                // Type 0 only: type 5 is an unencrypted streaming-report plist; decrypting it
-                // advances AES-CTR and corrupts subsequent video frames.
+            if (packet.getPayloadType() == MirrorPacketLayout.PAYLOAD_VIDEO) {
+                // Type 0 only: type 1 codec config is not AES-CTR-encrypted on the wire;
+                // decrypting it advances the CTR counter and corrupts every later frame.
+                // Type 5 is an unencrypted streaming-report plist — same trap.
                 airPlay.decryptVideo(packet.getPayload());
                 // Never feed partial/corrupt Annex-B to the consumer.
                 if (!toAnnexB(packet.getPayload())) {
                     return;
                 }
                 dataConsumer.onVideo(packet.getPayload());
-            } else if (packet.getPayloadType() == 1) {
+            } else if (packet.getPayloadType() == MirrorPacketLayout.PAYLOAD_CODEC) {
                 byte[] spsPps = prepareSpsPpsNALUnits(packet.getPayload());
                 dataConsumer.onVideo(spsPps);
             }

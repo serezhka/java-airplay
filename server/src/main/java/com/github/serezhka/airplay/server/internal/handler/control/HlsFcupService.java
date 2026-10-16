@@ -28,7 +28,7 @@ public class HlsFcupService {
     private static final long MASTER_POLL_INTERVAL_MS = 2000;
     /**
      * After the first post-EOS mediadata sweep, re-FCUP all mediadata every N master polls.
-     * YouTube ad→content often keeps the same master URI list and only swaps VOD bodies.
+     * Ad→content often keeps the same master URI list and only swaps VOD bodies.
      * N=3 (~6s) balances freshness vs reverse /event channel load (playlistRemove / next /play).
      */
     private static final int MEDIA_RESWEEP_EVERY_MASTER_POLLS = 3;
@@ -247,7 +247,7 @@ public class HlsFcupService {
 
     /**
      * Start the player but keep the sender on {@code loading} until a frame is visible.
-     * Announcing {@code playing} at {@code pipeline.play()} makes the phone run ahead of the display.
+     * Announcing {@code playing} at player start makes the sender timeline run ahead of the display.
      */
     public void beginDisplayedPlayback(Session session) {
         var hls = session.getHlsPlaylistState();

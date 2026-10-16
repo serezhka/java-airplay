@@ -47,13 +47,13 @@ public final class HlsUriRewrite {
     }
 
     /**
-     * Keep H.264 ({@code avc1}) variants only. YouTube masters mix AVC + VP9/AV1; a single
+     * Keep H.264 ({@code avc1}) variants only. Some masters mix AVC + VP9/AV1; a single
      * HLS consumer cannot switch video codecs mid-playlist.
      * <p>
      * Drops subtitles and every audio rendition except one default per {@code GROUP-ID}
      * referenced by the remaining variant ({@code DEFAULT=YES}, else the first). Keeps a
-     * single AVC video variant (highest bandwidth). Extra renditions make ffplay probe
-     * every playlist before the first frame — about five seconds on a full YouTube master.
+     * single AVC video variant (highest bandwidth). Extra renditions make some
+     * demuxers probe every playlist before the first frame on a full master.
      */
     public static String preferAvcVariants(String masterPlaylist) {
         String[] lines = masterPlaylist.split("\\R", -1);

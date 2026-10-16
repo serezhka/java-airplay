@@ -2,6 +2,7 @@ package com.github.serezhka.airplay.protocol.rtsp;
 
 import com.dd.plist.BinaryPropertyListParser;
 import com.dd.plist.NSDictionary;
+import com.github.serezhka.airplay.protocol.media.AirPlayStreamType;
 import com.github.serezhka.airplay.protocol.media.AudioStreamInfo;
 import com.github.serezhka.airplay.protocol.media.MediaStreamInfo;
 import com.github.serezhka.airplay.protocol.media.VideoStreamInfo;
@@ -66,8 +67,8 @@ public class RtspMediaSetup {
         int type = (int) stream.get("type");
         switch (type) {
 
-            // video stream
-            case 110 -> {
+            // video stream (screen mirroring)
+            case AirPlayStreamType.SCREEN -> {
                 if (stream.containsKey("streamConnectionID")) {
                     Object rawId = stream.get("streamConnectionID");
                     long id = rawId instanceof Number n ? n.longValue() : Long.parseLong(rawId.toString());
@@ -76,8 +77,8 @@ public class RtspMediaSetup {
                 return new VideoStreamInfo(streamConnectionID);
             }
 
-            // audio stream
-            case 96 -> {
+            // realtime audio
+            case AirPlayStreamType.AUDIO_REALTIME -> {
                 AudioStreamInfo.AudioStreamInfoBuilder builder = new AudioStreamInfo.AudioStreamInfoBuilder();
                 if (stream.containsKey("ct")) {
                     int compressionType = (int) stream.get("ct");
