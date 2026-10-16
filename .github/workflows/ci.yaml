@@ -3,6 +3,8 @@ name: ci
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
     inputs:
       bench:
@@ -13,7 +15,8 @@ on:
         options: ['false', 'true']
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # PR runs use refs/pull/N/merge; keep them from cancelling main pushes.
+  group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
