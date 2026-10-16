@@ -17,17 +17,21 @@ import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 class LayeringTest {
 
     @ArchTest
-    static final ArchRule protocolStaysFreeOfReceiverAndPlayers = noClasses()
+    static final ArchRule protocolStaysFreeOfReceiverClientAndApps = noClasses()
             .that().resideInAPackage("com.github.serezhka.airplay.protocol..")
             .should().dependOnClassesThat().resideInAnyPackage(
                     "com.github.serezhka.airplay.server..",
-                    "com.github.serezhka.airplay.player..",
+                    "com.github.serezhka.airplay.client..",
+                    "com.github.serezhka.airplay.app..",
                     "io.netty..",
                     "javax.jmdns.."
             );
 
     @ArchTest
-    static final ArchRule serverDoesNotDependOnPlayers = noClasses()
+    static final ArchRule serverDoesNotDependOnClientOrApps = noClasses()
             .that().resideInAPackage("com.github.serezhka.airplay.server..")
-            .should().dependOnClassesThat().resideInAPackage("com.github.serezhka.airplay.player..");
+            .should().dependOnClassesThat().resideInAnyPackage(
+                    "com.github.serezhka.airplay.client..",
+                    "com.github.serezhka.airplay.app.."
+            );
 }

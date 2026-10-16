@@ -1,6 +1,5 @@
 package com.github.serezhka.airplay.client.audio;
 
-import com.github.serezhka.airplay.client.audio.source.GstAudioTestSource;
 import com.github.serezhka.airplay.client.crypto.FairPlayAudioEncryptor;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.Unpooled;
@@ -28,7 +27,7 @@ public class AudioClient extends ChannelInboundHandlerAdapter implements Runnabl
     private final int port;
     private final FairPlayAudioEncryptor encryptor;
 
-    private GstAudioTestSource audioSource;
+    private AudioSource audioSource;
     private ChannelHandlerContext ctx;
     private int sequenceNumber;
     private long timestamp;
@@ -67,9 +66,7 @@ public class AudioClient extends ChannelInboundHandlerAdapter implements Runnabl
             throw new RuntimeException(e);
         } finally {
             log.info("Audio client stopped");
-            if (audioSource != null) {
-                audioSource.stop();
-            }
+            stopAudio();
             workerGroup.shutdownGracefully();
         }
     }
@@ -78,7 +75,19 @@ public class AudioClient extends ChannelInboundHandlerAdapter implements Runnabl
     public void channelActive(ChannelHandlerContext ctx) {
         this.ctx = ctx;
         log.info("Audio client connected");
-        audioSource = new GstAudioTestSource(this::send);
+        audioSource = AudioSources.open(this::send);
+    }
+
+    private void stopAudio() {
+        AudioSource src = audioSource;
+        audioSource = null;
+        if (src != null) {
+            try {
+                src.close();
+            } catch (Exception e) {
+                log.debug("AudioSource stop: {}", e.toString());
+            }
+        }
     }
 
     private void send(byte[] frame) {

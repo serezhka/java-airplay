@@ -1,0 +1,30 @@
+plugins {
+    id("airplay.spring-boot")
+    id("airplay.integration-test")
+}
+
+dependencies {
+    implementation(projects.app.common)
+    implementation(libs.javacv)
+    implementation(libs.ffmpeg.platform)
+
+    testImplementation(libs.archunit.junit6)
+    "integrationTestImplementation"(testFixtures(projects.app.common))
+}
+
+tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
+    archiveBaseName.set("java-airplay-ffmpeg")
+}
+
+springBoot {
+    mainClass.set("com.github.serezhka.airplay.app.ffmpeg.app.FfmpegPlayerApp")
+}
+
+tasks.named("bootRun") {
+    description = "Run the FFmpeg AirPlay receiver."
+}
+
+extra["integrationTestTags"] = mapOf(
+    "ffmpeg" to "Runs the FFmpeg playback smoke test.",
+    "bench" to "Runs the FFmpeg playback benchmark."
+)

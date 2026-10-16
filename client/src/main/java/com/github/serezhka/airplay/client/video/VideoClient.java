@@ -1,8 +1,9 @@
 package com.github.serezhka.airplay.client.video;
 
+import com.github.serezhka.airplay.client.capture.CaptureSource;
+import com.github.serezhka.airplay.client.capture.CaptureSources;
 import com.github.serezhka.airplay.client.crypto.AesCtrStreamEncryptor;
 import com.github.serezhka.airplay.client.crypto.FairPlayVideoEncryptor;
-import com.github.serezhka.airplay.client.video.source.GstTestSource;
 import com.github.serezhka.airplay.protocol.mirror.MirrorPacketHeaders;
 import com.github.serezhka.airplay.protocol.mirror.MirrorPacketLayout;
 import com.github.serezhka.airplay.protocol.mirror.MirrorVideoFraming;
@@ -47,7 +48,7 @@ public class VideoClient extends ChannelInboundHandlerAdapter implements AutoClo
     private volatile EventLoopGroup workerGroup;
     private volatile Channel channel;
     private volatile ChannelHandlerContext ctx;
-    private volatile GstTestSource gstTestSource;
+    private volatile CaptureSource captureSource;
     private volatile boolean sentCodecConfig;
     private volatile boolean closed;
     private final AtomicLong packetsSent = new AtomicLong();
@@ -119,14 +120,14 @@ public class VideoClient extends ChannelInboundHandlerAdapter implements AutoClo
         super.channelActive(ctx);
         this.ctx = ctx;
         log.info("Video client connected");
-        gstTestSource = new GstTestSource(this::onAnnexBAccessUnit);
+        captureSource = CaptureSources.open(this::onAnnexBAccessUnit);
     }
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
         super.channelInactive(ctx);
         log.info("Video client disconnected");
-        stopGst();
+        stopCapture();
     }
 
     private void onAnnexBAccessUnit(byte[] annexB) {
@@ -207,7 +208,7 @@ public class VideoClient extends ChannelInboundHandlerAdapter implements AutoClo
     @Override
     public void close() {
         closed = true;
-        stopGst();
+        stopCapture();
         Channel ch = channel;
         if (ch != null) {
             ch.close();
@@ -226,11 +227,15 @@ public class VideoClient extends ChannelInboundHandlerAdapter implements AutoClo
         }
     }
 
-    private void stopGst() {
-        GstTestSource src = gstTestSource;
-        gstTestSource = null;
+    private void stopCapture() {
+        CaptureSource src = captureSource;
+        captureSource = null;
         if (src != null) {
-            src.close();
+            try {
+                src.close();
+            } catch (Exception e) {
+                log.debug("CaptureSource stop: {}", e.toString());
+            }
         }
     }
 

@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 /**
- * Discover AirPlay receivers and stream GStreamer {@code videotestsrc} H.264.
+ * Discover AirPlay receivers and stream H.264 from the installed {@code CaptureSource}.
  * Path selection is capability-based (mDNS flags / features + handshake probes),
  * not tied to a particular receiver implementation.
  */
@@ -84,7 +84,7 @@ public final class MirrorCaster implements AutoCloseable {
         } else {
             session.set(connectWithPin(device, normalized));
         }
-        log.info("Casting videotestsrc → {}", device);
+        log.info("Casting → {}", device);
     }
 
     /**
@@ -94,7 +94,7 @@ public final class MirrorCaster implements AutoCloseable {
     public synchronized void connect(ServiceDiscovery.Info device, PinPrompt pinPrompt) throws Exception {
         disconnect();
         session.set(connectAuto(device, pinPrompt));
-        log.info("Casting videotestsrc → {}", device);
+        log.info("Casting → {}", device);
     }
 
     public synchronized void disconnect() {

@@ -16,7 +16,5 @@ dependencies {
     implementation(libs.netty.all)
     implementation(libs.eddsa)
     implementation(libs.curve25519)
-    implementation(libs.bundles.jna.full)
-    implementation(libs.bundles.gstreamer)
     implementation(libs.bundles.logging)
 }

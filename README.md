@@ -35,10 +35,10 @@
 ```shell
 git clone https://github.com/serezhka/java-airplay.git
 cd java-airplay
-./gradlew :player:gstreamer:bootRun
+./gradlew :app:gstreamer:bootRun
 ```
 
-FFmpeg receiver: `./gradlew :player:ffmpeg:bootRun`. `./gradlew bootJar` builds both jars.
+FFmpeg receiver: `./gradlew :app:ffmpeg:bootRun`. `./gradlew bootJar` builds both jars.
 
 ### Pre-built jar
 
@@ -53,7 +53,8 @@ Open **Screen Mirroring** on the iPhone / iPad / Mac and pick the receiver name 
 
 ## Configuration
 
-Create `application.properties` in the working directory:
+Each fat jar ships its own `application.properties` (`app/gstreamer`, `app/ffmpeg`).
+Override by placing `application.properties` in the working directory:
 
 ```properties
 # airplay
@@ -63,6 +64,8 @@ airplay.height=1080
 airplay.fps=60
 airplay.hls-enabled=false
 player.tray.enabled=true
+# cast capture: videotest | screencapture
+client.src=videotest
 # dump (optional sidecar)
 dump.enabled=false
 dump.directory=dumps
