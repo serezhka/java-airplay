@@ -25,7 +25,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 /**
- * Browse {@code _airplay._tcp} on up, non-loopback IPv4 interfaces.
+ * Browse {@code _airplay._tcp} on up IPv4 interfaces.
+ * Loopback only when constructed with {@code includeLoopback=true} (self-cast / CI).
  * Supports one-shot {@link #discover()} and a continuous {@link #start(Consumer)} watch.
  */
 @Slf4j
@@ -33,11 +34,20 @@ public class ServiceDiscovery implements AutoCloseable {
 
     private static final String AIRPLAY_SERVICE_TYPE = "_airplay._tcp.local.";
 
+    private final boolean includeLoopback;
     private final AtomicBoolean watching = new AtomicBoolean();
     private final List<JmDNS> jmdnsHandles = new CopyOnWriteArrayList<>();
     private final Map<String, Info> devices = new LinkedHashMap<>();
     private volatile Consumer<List<Info>> listener;
     private ScheduledExecutorService refresher;
+
+    public ServiceDiscovery() {
+        this(false);
+    }
+
+    public ServiceDiscovery(boolean includeLoopback) {
+        this.includeLoopback = includeLoopback;
+    }
 
     public List<Info> discover() {
         return discover(Duration.ofSeconds(3));
@@ -46,7 +56,7 @@ public class ServiceDiscovery implements AutoCloseable {
     public List<Info> discover(Duration timeout) {
         long waitMs = Math.max(500, timeout.toMillis());
         Map<String, Info> byKey = new LinkedHashMap<>();
-        List<InetAddress> binds = ipv4Binds();
+        List<InetAddress> binds = ipv4Binds(includeLoopback);
         if (binds.isEmpty()) {
             log.warn("No IPv4 interfaces for AirPlay browse");
             return List.of();
@@ -57,7 +67,7 @@ public class ServiceDiscovery implements AutoCloseable {
                 TimeUnit.MILLISECONDS.sleep(Math.min(waitMs, 1500));
                 ServiceInfo[] found = jmdns.list(AIRPLAY_SERVICE_TYPE, waitMs);
                 for (ServiceInfo serviceInfo : found) {
-                    mergeInto(byKey, serviceInfo);
+                    mergeInto(byKey, serviceInfo, includeLoopback);
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -76,7 +86,7 @@ public class ServiceDiscovery implements AutoCloseable {
             return;
         }
         this.listener = onChange;
-        List<InetAddress> binds = ipv4Binds();
+        List<InetAddress> binds = ipv4Binds(includeLoopback);
         if (binds.isEmpty()) {
             log.warn("No IPv4 interfaces for AirPlay watch");
             publish();
@@ -139,7 +149,7 @@ public class ServiceDiscovery implements AutoCloseable {
         }
         synchronized (devices) {
             Map<String, Info> scratch = new LinkedHashMap<>();
-            mergeInto(scratch, serviceInfo);
+            mergeInto(scratch, serviceInfo, includeLoopback);
             if (scratch.isEmpty()) {
                 return;
             }
@@ -205,7 +215,7 @@ public class ServiceDiscovery implements AutoCloseable {
         }
     }
 
-    private static void mergeInto(Map<String, Info> byKey, ServiceInfo serviceInfo) {
+    private static void mergeInto(Map<String, Info> byKey, ServiceInfo serviceInfo, boolean includeLoopback) {
         if (serviceInfo == null) {
             return;
         }
@@ -217,7 +227,10 @@ public class ServiceDiscovery implements AutoCloseable {
                 || AirPlayStatusFlags.passwordRequired(flags)
                 || AirPlayStatusFlags.pinRequired(flags);
         for (InetAddress addr : serviceInfo.getInetAddresses()) {
-            if (!(addr instanceof Inet4Address) || addr.isLoopbackAddress()) {
+            if (!(addr instanceof Inet4Address)) {
+                continue;
+            }
+            if (addr.isLoopbackAddress() && !includeLoopback) {
                 continue;
             }
             Info info = new Info(
@@ -252,19 +265,26 @@ public class ServiceDiscovery implements AutoCloseable {
         return List.copyOf(out);
     }
 
-    private static List<InetAddress> ipv4Binds() {
+    private static List<InetAddress> ipv4Binds(boolean includeLoopback) {
         List<InetAddress> out = new ArrayList<>();
         try {
             NetworkInterface.networkInterfaces()
                     .filter(ni -> {
                         try {
-                            return ni.isUp() && !ni.isLoopback() && !ni.isVirtual();
+                            if (!ni.isUp() || ni.isVirtual()) {
+                                return false;
+                            }
+                            if (ni.isLoopback()) {
+                                return includeLoopback;
+                            }
+                            return true;
                         } catch (Exception e) {
                             return false;
                         }
                     })
                     .flatMap(NetworkInterface::inetAddresses)
-                    .filter(a -> a instanceof Inet4Address && !a.isLoopbackAddress())
+                    .filter(a -> a instanceof Inet4Address)
+                    .filter(a -> includeLoopback || !a.isLoopbackAddress())
                     .forEach(out::add);
         } catch (Exception e) {
             log.warn("Enumerating interfaces failed: {}", e.toString());

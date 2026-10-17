@@ -28,8 +28,8 @@ public class PlayerConfig {
     }
 
     @Bean(destroyMethod = "close")
-    public MirrorCaster mirrorCaster() {
-        return new MirrorCaster();
+    public MirrorCaster mirrorCaster(AirPlayConfig airPlayConfig) {
+        return new MirrorCaster(airPlayConfig.isMdnsLoopback());
     }
 
     @Bean
