@@ -9,4 +9,5 @@ public class AirPlayConfig {
     private int height;
     private int fps;
     private boolean hlsEnabled;
+    private boolean mdnsLoopback;
 }

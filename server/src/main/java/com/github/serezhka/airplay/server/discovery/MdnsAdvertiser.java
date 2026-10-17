@@ -29,6 +29,7 @@ public class MdnsAdvertiser {
     private final String serverName;
     private final boolean hlsEnabled;
     private final String pairingPublicKey;
+    private final boolean mdnsLoopback;
 
     private final List<JmDNS> jmDNSList = new ArrayList<>();
 
@@ -115,7 +116,13 @@ public class MdnsAdvertiser {
     private Predicate<NetworkInterface> networkInterfaceFilter() {
         return networkInterface -> {
             try {
-                return /*!networkInterface.isLoopback() &&*/ !networkInterface.isPointToPoint() && networkInterface.isUp();
+                if (!networkInterface.isUp() || networkInterface.isPointToPoint()) {
+                    return false;
+                }
+                if (networkInterface.isLoopback()) {
+                    return mdnsLoopback;
+                }
+                return true;
             } catch (SocketException e) {
                 return false;
             }

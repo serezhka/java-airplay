@@ -12,7 +12,7 @@ public class AirPlayServer {
     public AirPlayServer(AirPlayConfig airPlayConfig, Playback airPlayConsumer) {
         PairingIdentity identity = PairingIdentity.generate();
         airPlayBonjour = new MdnsAdvertiser(airPlayConfig.getServerName(), airPlayConfig.isHlsEnabled(),
-                identity.publicKeyHex());
+                identity.publicKeyHex(), airPlayConfig.isMdnsLoopback());
         controlServer = new ControlServer(airPlayConfig, airPlayConsumer, identity);
     }
 

@@ -44,16 +44,26 @@ public final class MirrorCaster implements AutoCloseable {
     /** Fixture stream id paired with {@link LegacyFairPlayHandshake#FIXTURE_EKEY}. */
     private static final long STREAM_CONNECTION_ID = -3907568444900622110L;
 
-    private final ServiceDiscovery discovery = new ServiceDiscovery();
+    private final ServiceDiscovery discovery;
     private final CastCredsStore credsStore;
     private final AtomicReference<Session> session = new AtomicReference<>();
 
     public MirrorCaster() {
-        this.credsStore = new CastCredsStore();
+        this(false);
+    }
+
+    /** @param mdnsLoopback include loopback in discovery (self-cast / CI) */
+    public MirrorCaster(boolean mdnsLoopback) {
+        this(new CastCredsStore(), mdnsLoopback);
     }
 
     public MirrorCaster(CastCredsStore credsStore) {
+        this(credsStore, false);
+    }
+
+    public MirrorCaster(CastCredsStore credsStore, boolean mdnsLoopback) {
         this.credsStore = credsStore;
+        this.discovery = new ServiceDiscovery(mdnsLoopback);
     }
 
     public List<ServiceDiscovery.Info> discover() {
