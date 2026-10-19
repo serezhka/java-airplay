@@ -419,7 +419,19 @@ public final class FfmpegHlsPipeline {
                         heldFrame = null;
                     }
                     log.debug("HLS previous frame dropped (replacement picture={})", shown);
+                } else if (Boolean.parseBoolean(System.getProperty("airplay.ffmpeg.hls.headless", "false"))) {
+                    // Brief wait for a real status-line latch before the headless fallback.
+                    long deadline = System.nanoTime() + 2_000_000_000L;
+                    while (System.nanoTime() < deadline && positionAnchorNanos == 0
+                            && process.isAlive()
+                            && epoch.get() == myEpoch
+                            && !stopRequested.get()) {
+                        sleepQuiet(40);
+                    }
                 }
+                // Some Windows -nodisp builds never print fd=/vq= lines; still advance the
+                // wall clock so /playback-info and headless CI are not stuck at 0 forever.
+                latchHeadlessWallClockIfNeeded(startAt, process);
             }
 
             try {
@@ -637,6 +649,23 @@ public final class FfmpegHlsPipeline {
 
     public void setOnSeekDisplayed(Runnable onSeekDisplayed) {
         this.onSeekDisplayed = onSeekDisplayed == null ? () -> {} : onSeekDisplayed;
+    }
+
+    /**
+     * Headless CI / some Windows builds never emit ffplay status lines. Once the
+     * process is alive, start the wall clock so pause/resume/seek tests (and
+     * {@code /playback-info}) are not stuck at position 0.
+     */
+    private void latchHeadlessWallClockIfNeeded(double startAt, Process process) {
+        boolean headless = Boolean.parseBoolean(System.getProperty("airplay.ffmpeg.hls.headless", "false"));
+        if (!headless || positionAnchorNanos != 0 || process == null || !process.isAlive()) {
+            return;
+        }
+        log.info("HLS headless: wall-clock latch without ffplay status line (ss={})",
+                startAt > 0.05 ? String.format(Locale.US, "%.3f", startAt) : "0");
+        positionBaseSeconds = Math.max(0, startAt);
+        positionAnchorNanos = System.nanoTime();
+        notePicture();
     }
 
     /** First real ffplay clock. Until then the reported position does not advance. */
