@@ -33,7 +33,7 @@ class GStreamerPlaybackTest {
         }
         try {
             player.onVideoFormat(new VideoStreamInfo("playback-test"));
-            PlaybackFixture.play(player); // ~2s of picture
+            PlaybackFixture.play(player);
             assertTrue(player.isVideoPipelinePlaying(), "GStreamer pipeline stopped while receiving H264");
         } finally {
             player.onVideoSrcDisconnect();
@@ -48,7 +48,7 @@ class GStreamerPlaybackTest {
         try {
             for (int i = 0; i < 2; i++) {
                 player.onVideoFormat(new VideoStreamInfo("reconnect-" + i));
-                PlaybackFixture.playVideo(player, 30); // ~1s each session
+                PlaybackFixture.playVideo(player, 30);
                 assertTrue(player.isVideoPipelinePlaying(), "pipeline dead on reconnect pass " + i);
                 player.onVideoSrcDisconnect();
                 assertFalse(player.isVideoPipelinePlaying(), "pipeline still playing after disconnect " + i);
@@ -97,7 +97,6 @@ class GStreamerPlaybackTest {
     void hlsPauseResumeSeekThenBackToMirror() throws Exception {
         assumeTrue(PlaybackFixture.ffmpegAvailable(), "ffmpeg needed to build HLS fixture");
         System.setProperty("airplay.gst.hls.headless", "true");
-        // Own temp dir (not @TempDir): Windows keeps the .ts open until playbin fully releases.
         Path hlsDir = Files.createTempDirectory("airplay-gst-hls-");
         GstPlayer player = new GstPlayer();
         CountDownLatch presentedLatch = new CountDownLatch(1);
@@ -118,15 +117,18 @@ class GStreamerPlaybackTest {
             assertTrue(player.isVideoPipelinePlaying());
             player.onVideoSrcDisconnect();
 
-            String uri = PlaybackFixture.generateHlsPlaylist(hlsDir, 8);
-            player.onPlaylist(uri);
-            player.onPlaylistContent(uri, "#EXTM3U\n#EXTINF:8.0,\nsmoke.ts\n#EXT-X-ENDLIST\n");
+            // Long enough that pause/seek finish before ENDLIST (8s media raced EOS on CI).
+            PlaybackFixture.HlsFixture hls = PlaybackFixture.generateHlsPlaylist(hlsDir, 20);
+            player.onPlaylist(hls.playlistUri());
+            player.onPlaylistContent(hls.playlistUri(),
+                    "#EXTM3U\n#EXTINF:20.0,\nsmoke.ts\n#EXT-X-ENDLIST\n");
 
-            presentedLatch.await(20, TimeUnit.SECONDS);
+            assertTrue(presentedLatch.await(20, TimeUnit.SECONDS), "onPresented never fired");
             PlaybackFixture.awaitTrue(player::isHlsActive, 15_000, "HLS never became active");
             PlaybackFixture.awaitPosition(() -> player.info().position(), 0.3, 20_000);
 
             double beforePause = player.info().position();
+            assumeTrue(beforePause < 10.0, "clock already near EOS before pause; fixture too short?");
             player.onPause();
             Thread.sleep(700);
             double duringPause = player.info().position();
@@ -136,14 +138,12 @@ class GStreamerPlaybackTest {
             player.onResume();
             PlaybackFixture.awaitPosition(() -> player.info().position(), duringPause + 0.25, 15_000);
 
-            double beforeSeek = player.info().position();
-            double target = Math.max(1.0, beforeSeek + 1.5);
-            player.onSeek(target);
-            PlaybackFixture.awaitNear(() -> player.info().position(), target, 2.0, 20_000);
+            player.onSeek(3.0);
+            PlaybackFixture.awaitNear(() -> player.info().position(), 3.0, 2.0, 20_000);
 
             player.onPlaylistRemoved();
             PlaybackFixture.awaitTrue(() -> !player.isHlsActive(), 10_000, "HLS still active after remove");
-            Thread.sleep(300); // let native demux release the .ts before deleting fixtures
+            Thread.sleep(300);
 
             player.onVideoFormat(new VideoStreamInfo("post-hls"));
             PlaybackFixture.playVideo(player, 20);

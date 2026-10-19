@@ -74,12 +74,11 @@ public final class PlaybackFixture {
     }
 
     /**
-     * Short MPEG-TS + media playlist via {@code ffmpeg} lavfi (needs ffmpeg on PATH).
-     * Segment entry uses an absolute {@code file:} URI so Windows/CI runners resolve it.
+     * Local VOD fixture: MPEG-TS + {@code mediadata.m3u8} (needs {@code ffmpeg} on PATH).
      *
-     * @return absolute {@code file:} URI of the {@code .m3u8}
+     * @param seconds media duration; use ≥15 so pause/seek tests do not race ENDLIST
      */
-    public static String generateHlsPlaylist(Path dir, int seconds) throws Exception {
+    public static HlsFixture generateHlsPlaylist(Path dir, int seconds) throws Exception {
         Files.createDirectories(dir);
         Path media = dir.resolve("smoke.ts").toAbsolutePath().normalize();
         Path playlist = dir.resolve("mediadata.m3u8").toAbsolutePath().normalize();
@@ -96,7 +95,6 @@ public final class PlaybackFixture {
         if (!finished || p.exitValue() != 0) {
             throw new IllegalStateException("ffmpeg failed generating HLS fixture: " + output);
         }
-        // Relative segment name (resolved against the playlist directory).
         Files.writeString(playlist, """
                 #EXTM3U
                 #EXT-X-VERSION:3
@@ -105,7 +103,11 @@ public final class PlaybackFixture {
                 smoke.ts
                 #EXT-X-ENDLIST
                 """.formatted(seconds + 1, seconds));
-        return playlist.toUri().toString();
+        return new HlsFixture(playlist.toUri().toString(), media.toUri().toString(), seconds);
+    }
+
+    /** {@link #generateHlsPlaylist} result — playlist for GST; media URI is a reliable ffplay latch. */
+    public record HlsFixture(String playlistUri, String mediaUri, int durationSeconds) {
     }
 
     public static boolean ffmpegAvailable() {

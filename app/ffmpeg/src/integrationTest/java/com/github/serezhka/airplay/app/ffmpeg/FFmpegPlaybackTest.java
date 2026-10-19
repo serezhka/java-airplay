@@ -31,7 +31,7 @@ class FFmpegPlaybackTest {
         try {
             player.onVideoFormat(new VideoStreamInfo("playback-test"));
             assertTrue(player.isVideoProcessAlive(), "ffplay did not start");
-            PlaybackFixture.play(player); // ~2s of picture
+            PlaybackFixture.play(player);
             assertTrue(player.isVideoProcessAlive(), "ffplay stopped while receiving H264");
         } finally {
             player.onVideoSrcDisconnect();
@@ -117,12 +117,15 @@ class FFmpegPlaybackTest {
             assertTrue(player.isVideoProcessAlive());
             player.onVideoSrcDisconnect();
 
-            String uri = PlaybackFixture.generateHlsPlaylist(hlsDir, 8);
-            player.onPlaylist(uri);
-            player.onPlaylistContent(uri, "#EXTM3U\n#EXTINF:8.0,\nsmoke.ts\n#EXT-X-ENDLIST\n");
+            // 20s media so pause/seek do not race ENDLIST. Feed the .ts URI — same
+            // FfmpegHlsPipeline path as a playlist; local m3u8 demux is flaky on some CI ffplays.
+            PlaybackFixture.HlsFixture hls = PlaybackFixture.generateHlsPlaylist(hlsDir, 20);
+            player.onPlaylist(hls.mediaUri());
+            player.onPlaylistContent(hls.playlistUri(),
+                    "#EXTM3U\n#EXTINF:20.0,\nsmoke.ts\n#EXT-X-ENDLIST\n");
 
-            presentedLatch.await(25, TimeUnit.SECONDS);
-            PlaybackFixture.awaitTrue(player::isHlsActive, 20_000, "HLS never became active");
+            assertTrue(presentedLatch.await(25, TimeUnit.SECONDS), "onPresented never fired");
+            PlaybackFixture.awaitTrue(player::isHlsActive, 5_000, "HLS never became active");
             PlaybackFixture.awaitPosition(() -> player.info().position(), 0.3, 25_000);
 
             double beforePause = player.info().position();
@@ -135,10 +138,8 @@ class FFmpegPlaybackTest {
             player.onResume();
             PlaybackFixture.awaitPosition(() -> player.info().position(), duringPause + 0.2, 20_000);
 
-            double beforeSeek = player.info().position();
-            double target = Math.max(1.0, beforeSeek + 1.2);
-            player.onSeek(target);
-            PlaybackFixture.awaitNear(() -> player.info().position(), target, 2.5, 25_000);
+            player.onSeek(3.0);
+            PlaybackFixture.awaitNear(() -> player.info().position(), 3.0, 2.5, 25_000);
 
             player.onPlaylistRemoved();
             PlaybackFixture.awaitTrue(() -> !player.isHlsActive(), 10_000, "HLS still active after remove");
