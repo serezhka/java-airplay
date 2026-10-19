@@ -7,8 +7,10 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -117,10 +119,11 @@ class FFmpegPlaybackTest {
             assertTrue(player.isVideoProcessAlive());
             player.onVideoSrcDisconnect();
 
-            // 20s media so pause/seek do not race ENDLIST. Feed the .ts URI — same
+            // 20s media so pause/seek do not race ENDLIST. Feed the .ts — same
             // FfmpegHlsPipeline path as a playlist; local m3u8 demux is flaky on some CI ffplays.
+            // Windows ffplay often fails to open file:// URIs; pass a native path there.
             PlaybackFixture.HlsFixture hls = PlaybackFixture.generateHlsPlaylist(hlsDir, 20);
-            player.onPlaylist(hls.mediaUri());
+            player.onPlaylist(ffplayMediaArg(hls.mediaUri()));
             player.onPlaylistContent(hls.playlistUri(),
                     "#EXTM3U\n#EXTINF:20.0,\nsmoke.ts\n#EXT-X-ENDLIST\n");
 
@@ -155,6 +158,19 @@ class FFmpegPlaybackTest {
             player.onVideoSrcDisconnect();
             System.clearProperty("airplay.ffmpeg.hls.headless");
             deleteQuietly(hlsDir);
+        }
+    }
+
+    /** Native path on Windows; {@code file:} URI elsewhere. */
+    private static String ffplayMediaArg(String mediaUri) {
+        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+        if (!os.contains("win")) {
+            return mediaUri;
+        }
+        try {
+            return Path.of(URI.create(mediaUri)).toAbsolutePath().toString();
+        } catch (Exception e) {
+            return mediaUri;
         }
     }
 
