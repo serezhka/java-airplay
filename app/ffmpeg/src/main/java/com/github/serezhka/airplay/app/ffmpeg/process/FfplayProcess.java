@@ -83,10 +83,13 @@ public final class FfplayProcess {
 
         ProcessBuilder pb = new ProcessBuilder(cmd);
         // Keep an audio graph (do not use -an): ffplay -nodisp needs it for the clock /
-        // status line. Headless CI has no device — force SDL dummy instead of Pulse.
+        // status line. Linux CI often has no Pulse — SDL dummy. Windows keeps the default
+        // device (dummy breaks status-line latching on some BtbN builds).
         if (headless) {
             applyDisplayEnv(pb);
-            pb.environment().put("SDL_AUDIODRIVER", "dummy");
+            if (isLinux()) {
+                pb.environment().put("SDL_AUDIODRIVER", "dummy");
+            }
         } else {
             applyPulseAudioEnv(pb);
         }
