@@ -229,6 +229,12 @@ public class FFmpegPlayer implements Playback {
         }
     }
 
+    boolean isAudioSinkAlive() {
+        synchronized (audioLock) {
+            return pcmSink != null && pcmSink.isAlive();
+        }
+    }
+
     /** PID of the ffplay video process, or {@code -1} if not running. */
     public long videoProcessPid() {
         synchronized (videoLock) {

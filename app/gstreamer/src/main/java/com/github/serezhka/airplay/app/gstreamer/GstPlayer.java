@@ -127,8 +127,13 @@ public class GstPlayer implements Playback {
         } else {
             sinkLaunch = " ! appsink name=sink sync=false";
         }
-        log.info("GStreamer video sink: {}",
-                forceAppsink ? "fakesink(forced)" : useD3d11 ? "d3d11videosink" : useXimage ? "ximagesink" : "appsink");
+        // Headless CI (appsink/fakesink video) has no usable audio device either.
+        String audioSink = forceAppsink
+                ? "fakesink sync=false async=false"
+                : "autoaudiosink sync=false";
+        log.info("GStreamer video sink: {}; audio sink: {}",
+                forceAppsink ? "fakesink(forced)" : useD3d11 ? "d3d11videosink" : useXimage ? "ximagesink" : "appsink",
+                forceAppsink ? "fakesink(forced)" : "autoaudiosink");
         // Never leaky before avdec — mid-GOP drops freeze / ghost the picture.
         // Cap display latency after decode; videoflip kept for orientation.
         h264Pipeline = (Pipeline) Gst.parseLaunch(
@@ -153,7 +158,7 @@ public class GstPlayer implements Playback {
         alacPipeline = (Pipeline) Gst.parseLaunch(
                 "appsrc name=alac-src ! queue max-size-buffers=8 leaky=downstream"
                         + " ! avdec_alac ! audioconvert ! audioresample"
-                        + " ! volume name=alac-vol ! autoaudiosink sync=false");
+                        + " ! volume name=alac-vol ! " + audioSink);
         alacSrc = (AppSrc) alacPipeline.getElementByName("alac-src");
         alacSrc.setStreamType(AppSrc.StreamType.STREAM);
         alacSrc.setCaps(Caps.fromString("audio/x-alac,mpegversion=(int)4,channels=(int)2,rate=(int)44100,stream-format=raw,codec_data=(buffer)00000024616c616300000000000001600010280a0e0200ff00000000000000000000ac44"));
@@ -165,7 +170,7 @@ public class GstPlayer implements Playback {
         aacEldPipeline = (Pipeline) Gst.parseLaunch(
                 "appsrc name=aac-eld-src ! queue max-size-buffers=8 leaky=downstream"
                         + " ! avdec_aac ! audioconvert ! audioresample"
-                        + " ! volume name=aac-eld-vol ! autoaudiosink sync=false");
+                        + " ! volume name=aac-eld-vol ! " + audioSink);
         aacEldSrc = (AppSrc) aacEldPipeline.getElementByName("aac-eld-src");
         aacEldSrc.setStreamType(AppSrc.StreamType.STREAM);
         aacEldSrc.setCaps(Caps.fromString("audio/mpeg,mpegversion=(int)4,channels=(int)2,rate=(int)44100,stream-format=raw,codec_data=(buffer)f8e85000"));
@@ -177,7 +182,7 @@ public class GstPlayer implements Playback {
         aacLcPipeline = (Pipeline) Gst.parseLaunch(
                 "appsrc name=aac-lc-src ! queue max-size-buffers=8 leaky=downstream"
                         + " ! aacparse ! avdec_aac ! audioconvert ! audioresample"
-                        + " ! volume name=aac-lc-vol ! autoaudiosink sync=false");
+                        + " ! volume name=aac-lc-vol ! " + audioSink);
         aacLcSrc = (AppSrc) aacLcPipeline.getElementByName("aac-lc-src");
         aacLcSrc.setStreamType(AppSrc.StreamType.STREAM);
         aacLcSrc.setCaps(Caps.fromString("audio/mpeg,mpegversion=(int)4,stream-format=adts,channels=(int)2,rate=(int)44100"));
@@ -368,6 +373,14 @@ public class GstPlayer implements Playback {
 
     boolean isVideoPipelinePlaying() {
         return h264Pipeline.isPlaying();
+    }
+
+    boolean isAudioPipelinePlaying() {
+        return alacPipeline.isPlaying() || aacEldPipeline.isPlaying() || aacLcPipeline.isPlaying();
+    }
+
+    boolean isHlsActive() {
+        return hls.isActive();
     }
 
     boolean isFullscreenConfigured() {
