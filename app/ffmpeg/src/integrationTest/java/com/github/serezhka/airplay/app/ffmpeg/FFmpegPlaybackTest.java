@@ -6,24 +6,23 @@ import com.github.serezhka.airplay.server.Playback;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
-import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
- * Exercises the production {@link FFmpegPlayer} path (ffplay + libav audio), matching the release jar.
+ * Production {@link FFmpegPlayer} lifecycle. Timeline diagram:
+ * {@code app/common/src/testFixtures/docs/playback-lifecycle.md}.
  */
 @Tag("ffmpeg")
 class FFmpegPlaybackTest {
-
-    @TempDir
-    Path temp;
 
     @Test
     @Timeout(60)
@@ -32,7 +31,7 @@ class FFmpegPlaybackTest {
         try {
             player.onVideoFormat(new VideoStreamInfo("playback-test"));
             assertTrue(player.isVideoProcessAlive(), "ffplay did not start");
-            PlaybackFixture.play(player);
+            PlaybackFixture.play(player); // ~2s of picture
             assertTrue(player.isVideoProcessAlive(), "ffplay stopped while receiving H264");
         } finally {
             player.onVideoSrcDisconnect();
@@ -98,6 +97,7 @@ class FFmpegPlaybackTest {
     void hlsPauseResumeSeekThenBackToMirror() throws Exception {
         assumeTrue(PlaybackFixture.ffmpegAvailable(), "ffmpeg needed to build HLS fixture");
         System.setProperty("airplay.ffmpeg.hls.headless", "true");
+        Path hlsDir = Files.createTempDirectory("airplay-ffmpeg-hls-");
         FFmpegPlayer player = new FFmpegPlayer();
         CountDownLatch presentedLatch = new CountDownLatch(1);
         player.setObserver(new Playback.Observer() {
@@ -117,7 +117,7 @@ class FFmpegPlaybackTest {
             assertTrue(player.isVideoProcessAlive());
             player.onVideoSrcDisconnect();
 
-            String uri = PlaybackFixture.generateHlsPlaylist(temp.resolve("hls"), 8);
+            String uri = PlaybackFixture.generateHlsPlaylist(hlsDir, 8);
             player.onPlaylist(uri);
             player.onPlaylistContent(uri, "#EXTM3U\n#EXTINF:8.0,\nsmoke.ts\n#EXT-X-ENDLIST\n");
 
@@ -142,6 +142,7 @@ class FFmpegPlaybackTest {
 
             player.onPlaylistRemoved();
             PlaybackFixture.awaitTrue(() -> !player.isHlsActive(), 10_000, "HLS still active after remove");
+            Thread.sleep(300);
 
             player.onVideoFormat(new VideoStreamInfo("post-hls"));
             PlaybackFixture.playVideo(player, 20);
@@ -150,6 +151,24 @@ class FFmpegPlaybackTest {
             player.onPlaylistRemoved();
             player.onVideoSrcDisconnect();
             System.clearProperty("airplay.ffmpeg.hls.headless");
+            deleteQuietly(hlsDir);
+        }
+    }
+
+    private static void deleteQuietly(Path dir) {
+        try {
+            if (dir == null || !Files.exists(dir)) {
+                return;
+            }
+            try (var walk = Files.walk(dir)) {
+                walk.sorted((a, b) -> b.getNameCount() - a.getNameCount()).forEach(p -> {
+                    try {
+                        Files.deleteIfExists(p);
+                    } catch (Exception ignored) {
+                    }
+                });
+            }
+        } catch (Exception ignored) {
         }
     }
 }

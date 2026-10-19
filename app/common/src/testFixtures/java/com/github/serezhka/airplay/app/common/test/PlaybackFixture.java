@@ -75,26 +75,28 @@ public final class PlaybackFixture {
 
     /**
      * Short MPEG-TS + media playlist via {@code ffmpeg} lavfi (needs ffmpeg on PATH).
+     * Segment entry uses an absolute {@code file:} URI so Windows/CI runners resolve it.
      *
      * @return absolute {@code file:} URI of the {@code .m3u8}
      */
     public static String generateHlsPlaylist(Path dir, int seconds) throws Exception {
         Files.createDirectories(dir);
-        Path media = dir.resolve("smoke.ts");
-        Path playlist = dir.resolve("mediadata.m3u8");
+        Path media = dir.resolve("smoke.ts").toAbsolutePath().normalize();
+        Path playlist = dir.resolve("mediadata.m3u8").toAbsolutePath().normalize();
         Process p = new ProcessBuilder(
                 "ffmpeg", "-y",
                 "-f", "lavfi", "-i", "testsrc=duration=" + seconds + ":size=320x240:rate=30",
                 "-f", "lavfi", "-i", "sine=frequency=440:duration=" + seconds,
                 "-c:v", "libx264", "-pix_fmt", "yuv420p", "-tune", "zerolatency",
                 "-c:a", "aac", "-ac", "2", "-ar", "44100",
-                "-shortest", "-f", "mpegts", media.toAbsolutePath().toString()
+                "-shortest", "-f", "mpegts", media.toString()
         ).redirectErrorStream(true).start();
         String output = new String(p.getInputStream().readAllBytes());
         boolean finished = p.waitFor(45, TimeUnit.SECONDS);
         if (!finished || p.exitValue() != 0) {
             throw new IllegalStateException("ffmpeg failed generating HLS fixture: " + output);
         }
+        // Relative segment name (resolved against the playlist directory).
         Files.writeString(playlist, """
                 #EXTM3U
                 #EXT-X-VERSION:3

@@ -82,7 +82,14 @@ public final class FfplayProcess {
         cmd.add(playlistUri);
 
         ProcessBuilder pb = new ProcessBuilder(cmd);
-        applyPulseAudioEnv(pb);
+        // Keep an audio graph (do not use -an): ffplay -nodisp needs it for the clock /
+        // status line. Headless CI has no device — force SDL dummy instead of Pulse.
+        if (headless) {
+            applyDisplayEnv(pb);
+            pb.environment().put("SDL_AUDIODRIVER", "dummy");
+        } else {
+            applyPulseAudioEnv(pb);
+        }
         if (isHlsPlaylistUri(playlistUri)) {
             Ipv4Getaddrinfo.apply(pb);
         }

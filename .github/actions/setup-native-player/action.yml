@@ -18,11 +18,15 @@ runs:
         sudo apt-get update
         case "${{ inputs.player }}" in
           ffmpeg)
-            sudo apt-get install -y ffmpeg xvfb
+            # pulse null sink: ffplay PCM (mirror audio) needs SDL_AUDIODRIVER=pulse
+            sudo apt-get install -y ffmpeg xvfb pulseaudio
+            pulseaudio --check || pulseaudio --start --exit-idle-time=-1
+            pactl load-module module-null-sink sink_name=ci_null 2>/dev/null || true
+            pactl set-default-sink ci_null 2>/dev/null || true
             ;;
           gstreamer)
             # libav = avdec_h264 (same soft decode as the app); x11 = ximagesink under xvfb;
-            # pulse null sink so autoaudiosink has somewhere to go on headless runners.
+            # pulse null sink so autoaudiosink has somewhere to go when not using appsink.
             sudo apt-get install -y \
               gstreamer1.0-tools \
               gstreamer1.0-plugins-base \

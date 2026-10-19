@@ -59,12 +59,9 @@ jobs:
           TASK=":app:${{ matrix.player }}:${{ matrix.player }}IntegrationTest"
           EXTRA=()
           if [ -n "${GSTREAMER_BIN:-}" ]; then EXTRA+=("-Dgstreamer.path=$GSTREAMER_BIN"); fi
-          # Windows runners have no usable display for d3d11videosink; Linux uses xvfb + ximagesink.
-          if [ "${{ matrix.player }}" = "gstreamer" ] && [ "${{ runner.os }}" = "Windows" ]; then
+          # Headless runners: fakesink A/V (appsink) + HLS without a window. Not product defaults.
+          if [ "${{ matrix.player }}" = "gstreamer" ]; then
             EXTRA+=("-Dairplay.gst.appsink=true" "-Dairplay.gst.hls.headless=true")
-          fi
-          if [ "${{ matrix.player }}" = "gstreamer" ] && [ "${{ runner.os }}" = "Linux" ]; then
-            EXTRA+=("-Dairplay.gst.hls.headless=true")
           fi
           if [ "${{ matrix.player }}" = "ffmpeg" ]; then
             EXTRA+=("-Dairplay.ffmpeg.hls.headless=true")
