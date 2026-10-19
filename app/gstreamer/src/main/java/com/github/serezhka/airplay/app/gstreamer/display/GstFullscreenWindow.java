@@ -32,9 +32,15 @@ public final class GstFullscreenWindow {
         onEdt(() -> {
             GraphicsDevice screen = defaultScreen();
             if (screen.getFullScreenWindow() == window) {
-                screen.setFullScreenWindow(null);
+                try {
+                    // Some displays reject exclusive fullscreen teardown; still hide.
+                    screen.setFullScreenWindow(null);
+                } catch (IllegalArgumentException ignored) {
+                    // fall through to setVisible(false)
+                }
             }
             window.setVisible(false);
+            window.toBack();
         });
     }
 

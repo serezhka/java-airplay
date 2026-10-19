@@ -8,8 +8,6 @@ import io.netty.channel.ChannelInboundHandlerAdapter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
-import java.util.Arrays;
-
 @Slf4j
 @RequiredArgsConstructor
 public class AudioHandler extends ChannelInboundHandlerAdapter {
@@ -44,8 +42,10 @@ public class AudioHandler extends ChannelInboundHandlerAdapter {
         if (curSeqNo - prevSeqNum == 1 || prevSeqNum == 0) {
             AudioPacket audioPacket = buffer[curSeqNo % buffer.length];
             if (audioPacket != null && audioPacket.isAvailable()) {
-                airPlay.decryptAudio(audioPacket.getEncodedAudio(), audioPacket.getEncodedAudioSize());
-                dataConsumer.onAudio(Arrays.copyOfRange(audioPacket.getEncodedAudio(), 0, audioPacket.getEncodedAudioSize()));
+                int size = audioPacket.getEncodedAudioSize();
+                airPlay.decryptAudio(audioPacket.getEncodedAudio(), size);
+                // Pass offset/length so consumers can avoid an extra full-buffer copy.
+                dataConsumer.onAudio(audioPacket.getEncodedAudio(), 0, size);
                 audioPacket.available(false);
                 prevSeqNum = curSeqNo;
                 packetsInBuffer--;

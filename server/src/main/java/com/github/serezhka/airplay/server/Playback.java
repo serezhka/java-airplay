@@ -15,6 +15,23 @@ public interface Playback {
 
     void onAudio(byte[] bytes);
 
+    /**
+     * Audio AU with an explicit range. Default copies into a tight array and calls {@link #onAudio(byte[])}.
+     * Hot-path players should override to avoid the copy when they can consume a slice.
+     */
+    default void onAudio(byte[] bytes, int offset, int length) {
+        if (bytes == null || length <= 0) {
+            return;
+        }
+        if (offset == 0 && length == bytes.length) {
+            onAudio(bytes);
+            return;
+        }
+        byte[] copy = new byte[length];
+        System.arraycopy(bytes, offset, copy, 0, length);
+        onAudio(copy);
+    }
+
     void onAudioSrcDisconnect();
 
     default void onPlaylist(String playlistUri) {

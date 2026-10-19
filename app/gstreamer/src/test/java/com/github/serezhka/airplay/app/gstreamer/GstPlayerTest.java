@@ -13,7 +13,7 @@ class GstPlayerTest {
     static {
         GstPlayerUtils.configurePaths();
         GLib.setEnv("GST_DEBUG", "3", true);
-        Gst.init(Version.of(1, 10), "BasicPipeline");
+        Gst.init(Version.of(1, 10), "java-airplay");
     }
 
     public static void main(String[] args) {
