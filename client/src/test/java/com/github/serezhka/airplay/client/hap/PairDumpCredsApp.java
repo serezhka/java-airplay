@@ -11,7 +11,7 @@ import java.util.concurrent.TimeUnit;
 /**
  * HKP3 pair-setup through M6, write {@code dt-creds.json} for pair-verify / DataStream.
  * <pre>
- *   ./gradlew :client:run -PmainClass=com.github.serezhka.airplay.client.hap.PairDumpCredsApp \
+ *   ./gradlew :client:pairDumpCreds \
  *       --args='--host &lt;receiver-ip&gt; --pin &lt;pin&gt; --device-id &lt;device-id&gt; --out /path/to/dt-creds.json'
  * </pre>
  */

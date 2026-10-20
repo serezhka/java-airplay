@@ -3,7 +3,7 @@ plugins {
 }
 
 application {
-    // Override: -PmainClass=com.github.serezhka.airplay.client.legacy.LegacyMirrorApp
+    // Manual tools (HapMirrorApp, LegacyMirrorApp, PairDumpCredsApp) live under src/test.
     mainClass = providers.gradleProperty("mainClass")
         .orElse("com.github.serezhka.airplay.client.App")
 }
@@ -42,4 +42,19 @@ tasks.register<JavaExec>("castAutoConnectSmoke") {
 tasks.register<JavaExec>("castDiscoverSmoke") {
     configureCastSmoke("com.github.serezhka.airplay.client.cast.CastDiscoverMain")
     description = "LAN AirPlay discovery smoke (manual)"
+}
+
+tasks.register<JavaExec>("hapMirror") {
+    configureCastSmoke("com.github.serezhka.airplay.client.hap.HapMirrorApp")
+    description = "HAP mirror client (manual; test classpath)"
+}
+
+tasks.register<JavaExec>("legacyMirror") {
+    configureCastSmoke("com.github.serezhka.airplay.client.legacy.LegacyMirrorApp")
+    description = "Legacy FairPlay mirror client (manual; test classpath)"
+}
+
+tasks.register<JavaExec>("pairDumpCreds") {
+    configureCastSmoke("com.github.serezhka.airplay.client.hap.PairDumpCredsApp")
+    description = "Dump HAP pairing credentials (manual; test classpath)"
 }

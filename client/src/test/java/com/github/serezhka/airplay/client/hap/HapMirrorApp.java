@@ -7,7 +7,7 @@ import java.util.concurrent.TimeUnit;
 /**
  * CLI: HKP3 persistent pair + DataStream mirror from the installed CaptureSource.
  * <pre>
- *   ./gradlew :client:run -PmainClass=com.github.serezhka.airplay.client.hap.HapMirrorApp \
+ *   ./gradlew :client:hapMirror \
  *       --args='--host &lt;receiver-ip&gt; --port 7000 --pin &lt;pin&gt; --duration 15'
  * </pre>
  */

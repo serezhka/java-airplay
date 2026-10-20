@@ -19,11 +19,8 @@ import java.util.concurrent.TimeUnit;
  * this process fails with a clear error.
  *
  * <pre>
- *   ./gradlew :client:run -PmainClass=com.github.serezhka.airplay.client.legacy.LegacyMirrorApp \
- *       --args='--host &lt;receiver-ip&gt; --port 7000'
- *
- *   ./gradlew :client:run -PmainClass=com.github.serezhka.airplay.client.legacy.LegacyMirrorApp \
- *       --args='--host &lt;receiver-ip&gt; --port 7000 --duration 15'
+ *   ./gradlew :client:legacyMirror --args='--host &lt;receiver-ip&gt; --port 7000'
+ *   ./gradlew :client:legacyMirror --args='--host &lt;receiver-ip&gt; --port 7000 --duration 15'
  * </pre>
  */
 @Slf4j

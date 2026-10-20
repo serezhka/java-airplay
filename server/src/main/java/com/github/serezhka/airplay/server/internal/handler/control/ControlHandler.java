@@ -214,11 +214,6 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         sendResponse(ctx, request, response);
     }
 
-    /*private void handleFairPlaySetup2(ChannelHandlerContext ctx, FullHttpRequest request) {
-        var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
-        sendResponse(ctx, request, response);
-    }*/
-
     private void handleRtspSetup(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
         var session = resolveSession(request);
         var response = createRtspResponse(request);
