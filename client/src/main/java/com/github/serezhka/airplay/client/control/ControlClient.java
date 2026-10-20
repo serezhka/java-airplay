@@ -134,19 +134,6 @@ public class ControlClient implements Runnable, AutoCloseable, HapPairChannel {
     }
 
     /**
-     * Asks the receiver to show an on-screen pairing PIN. Best-effort.
-     */
-    public void pairPinStart() throws InterruptedException {
-        FullHttpResponse response = exchangeRaw("POST", "/pair-pin-start",
-                Map.of("X-Apple-HKP", hkpVersion), new byte[0]);
-        HttpResponseStatus status = response.status();
-        if (status.code() >= 400) {
-            throw new IllegalStateException("POST /pair-pin-start → " + status);
-        }
-        log.info("POST /pair-pin-start → {} (look for PIN on the receiver)", status);
-    }
-
-    /**
      * HAP TLV {@code POST /pair-setup} with {@code X-Apple-HKP} + {@code application/pairing+tlv8}.
      */
     public Map<Integer, byte[]> pairSetupTlv(byte[] tlvBody) throws InterruptedException {
