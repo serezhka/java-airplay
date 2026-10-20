@@ -1,6 +1,7 @@
 package com.github.serezhka.airplay.app.gstreamer;
 
 import com.github.serezhka.airplay.app.common.test.PlaybackFixture;
+import com.github.serezhka.airplay.app.common.test.PlaybackLifecycleHarness;
 import com.github.serezhka.airplay.protocol.media.VideoStreamInfo;
 import com.github.serezhka.airplay.server.Playback;
 import org.junit.jupiter.api.Tag;
@@ -11,6 +12,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
+import java.util.function.DoubleSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -93,6 +96,46 @@ class GStreamerPlaybackTest {
     }
 
     @Test
+    @Timeout(60)
+    void audioOnlyThenDisconnect() throws Exception {
+        PlaybackLifecycleHarness.audioOnlyThenDisconnect(probe(new GstPlayer()));
+    }
+
+    @Test
+    @Timeout(90)
+    void audioReconnectWhileMirroring() throws Exception {
+        PlaybackLifecycleHarness.audioReconnectWhileMirroring(probe(new GstPlayer()));
+    }
+
+    @Test
+    @Timeout(30)
+    void volumeClamp() {
+        PlaybackLifecycleHarness.volumeClamp(probe(new GstPlayer()));
+    }
+
+    @Test
+    @Timeout(60)
+    void idempotentDoubleDisconnect() throws Exception {
+        PlaybackLifecycleHarness.idempotentDoubleDisconnect(probe(new GstPlayer()));
+    }
+
+    @Test
+    @Timeout(120)
+    void hlsVolumeStopMidPlayThenMirror() throws Exception {
+        Path hlsDir = Files.createTempDirectory("airplay-gst-hls-vol-");
+        PlaybackLifecycleHarness.hlsVolumeStopMidPlayThenMirror(
+                probe(new GstPlayer()), hlsDir, "airplay.gst.hls.headless");
+    }
+
+    @Test
+    @Timeout(120)
+    void mirrorTearsActiveHls() throws Exception {
+        Path hlsDir = Files.createTempDirectory("airplay-gst-hls-tear-");
+        PlaybackLifecycleHarness.mirrorTearsActiveHls(
+                probe(new GstPlayer()), hlsDir, "airplay.gst.hls.headless");
+    }
+
+    @Test
     @Timeout(120)
     void hlsPauseResumeSeekThenBackToMirror() throws Exception {
         assumeTrue(PlaybackFixture.ffmpegAvailable(), "ffmpeg needed to build HLS fixture");
@@ -155,29 +198,41 @@ class GStreamerPlaybackTest {
             player.onPlaylistRemoved();
             player.onVideoSrcDisconnect();
             System.clearProperty("airplay.gst.hls.headless");
-            deleteQuietly(hlsDir);
+            PlaybackLifecycleHarness.deleteQuietly(hlsDir);
         }
+    }
+
+    private static PlaybackLifecycleHarness.Probe probe(GstPlayer player) {
+        return new PlaybackLifecycleHarness.Probe() {
+            @Override
+            public Playback player() {
+                return player;
+            }
+
+            @Override
+            public BooleanSupplier videoAlive() {
+                return player::isVideoPipelinePlaying;
+            }
+
+            @Override
+            public BooleanSupplier audioAlive() {
+                return player::isAudioPipelinePlaying;
+            }
+
+            @Override
+            public BooleanSupplier hlsActive() {
+                return player::isHlsActive;
+            }
+
+            @Override
+            public DoubleSupplier position() {
+                return () -> player.info().position();
+            }
+        };
     }
 
     private static boolean forceAppsink() {
         return Boolean.parseBoolean(System.getProperty("airplay.gst.appsink", "false"))
                 || Boolean.parseBoolean(System.getenv().getOrDefault("AIRPLAY_GST_APPSINK", "false"));
-    }
-
-    private static void deleteQuietly(Path dir) {
-        try {
-            if (dir == null || !Files.exists(dir)) {
-                return;
-            }
-            try (var walk = Files.walk(dir)) {
-                walk.sorted((a, b) -> b.getNameCount() - a.getNameCount()).forEach(p -> {
-                    try {
-                        Files.deleteIfExists(p);
-                    } catch (Exception ignored) {
-                    }
-                });
-            }
-        } catch (Exception ignored) {
-        }
     }
 }

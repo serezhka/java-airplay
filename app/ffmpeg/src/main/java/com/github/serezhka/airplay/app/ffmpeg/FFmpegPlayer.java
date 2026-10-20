@@ -50,6 +50,8 @@ public class FFmpegPlayer implements Playback {
 
     @Override
     public void onVideoFormat(VideoStreamInfo videoStreamInfo) {
+        // Release HLS before starting the mirror ffplay (shared display).
+        hls.stop();
         synchronized (videoLock) {
             stopVideoProcessLocked();
             try {

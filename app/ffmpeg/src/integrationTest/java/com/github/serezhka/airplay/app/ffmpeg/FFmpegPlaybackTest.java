@@ -1,18 +1,19 @@
 package com.github.serezhka.airplay.app.ffmpeg;
 
 import com.github.serezhka.airplay.app.common.test.PlaybackFixture;
+import com.github.serezhka.airplay.app.common.test.PlaybackLifecycleHarness;
 import com.github.serezhka.airplay.protocol.media.VideoStreamInfo;
 import com.github.serezhka.airplay.server.Playback;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
-import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
+import java.util.function.DoubleSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -95,6 +96,46 @@ class FFmpegPlaybackTest {
     }
 
     @Test
+    @Timeout(60)
+    void audioOnlyThenDisconnect() throws Exception {
+        PlaybackLifecycleHarness.audioOnlyThenDisconnect(probe(new FFmpegPlayer()));
+    }
+
+    @Test
+    @Timeout(90)
+    void audioReconnectWhileMirroring() throws Exception {
+        PlaybackLifecycleHarness.audioReconnectWhileMirroring(probe(new FFmpegPlayer()));
+    }
+
+    @Test
+    @Timeout(30)
+    void volumeClamp() {
+        PlaybackLifecycleHarness.volumeClamp(probe(new FFmpegPlayer()));
+    }
+
+    @Test
+    @Timeout(60)
+    void idempotentDoubleDisconnect() throws Exception {
+        PlaybackLifecycleHarness.idempotentDoubleDisconnect(probe(new FFmpegPlayer()));
+    }
+
+    @Test
+    @Timeout(120)
+    void hlsVolumeStopMidPlayThenMirror() throws Exception {
+        Path hlsDir = Files.createTempDirectory("airplay-ffmpeg-hls-vol-");
+        PlaybackLifecycleHarness.hlsVolumeStopMidPlayThenMirror(
+                probe(new FFmpegPlayer()), hlsDir, "airplay.ffmpeg.hls.headless");
+    }
+
+    @Test
+    @Timeout(120)
+    void mirrorTearsActiveHls() throws Exception {
+        Path hlsDir = Files.createTempDirectory("airplay-ffmpeg-hls-tear-");
+        PlaybackLifecycleHarness.mirrorTearsActiveHls(
+                probe(new FFmpegPlayer()), hlsDir, "airplay.ffmpeg.hls.headless");
+    }
+
+    @Test
     @Timeout(120)
     void hlsPauseResumeSeekThenBackToMirror() throws Exception {
         assumeTrue(PlaybackFixture.ffmpegAvailable(), "ffmpeg needed to build HLS fixture");
@@ -123,7 +164,7 @@ class FFmpegPlaybackTest {
             // FfmpegHlsPipeline path as a playlist; local m3u8 demux is flaky on some CI ffplays.
             // Windows ffplay often fails to open file:// URIs; pass a native path there.
             PlaybackFixture.HlsFixture hls = PlaybackFixture.generateHlsPlaylist(hlsDir, 20);
-            player.onPlaylist(ffplayMediaArg(hls.mediaUri()));
+            player.onPlaylist(PlaybackLifecycleHarness.ffplayMediaArg(hls.mediaUri()));
             player.onPlaylistContent(hls.playlistUri(),
                     "#EXTM3U\n#EXTINF:20.0,\nsmoke.ts\n#EXT-X-ENDLIST\n");
 
@@ -157,37 +198,41 @@ class FFmpegPlaybackTest {
             player.onPlaylistRemoved();
             player.onVideoSrcDisconnect();
             System.clearProperty("airplay.ffmpeg.hls.headless");
-            deleteQuietly(hlsDir);
+            PlaybackLifecycleHarness.deleteQuietly(hlsDir);
         }
     }
 
-    /** Native path on Windows; {@code file:} URI elsewhere. */
-    private static String ffplayMediaArg(String mediaUri) {
-        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
-        if (!os.contains("win")) {
-            return mediaUri;
-        }
-        try {
-            return Path.of(URI.create(mediaUri)).toAbsolutePath().toString();
-        } catch (Exception e) {
-            return mediaUri;
-        }
-    }
+    private static PlaybackLifecycleHarness.Probe probe(FFmpegPlayer player) {
+        return new PlaybackLifecycleHarness.Probe() {
+            @Override
+            public Playback player() {
+                return player;
+            }
 
-    private static void deleteQuietly(Path dir) {
-        try {
-            if (dir == null || !Files.exists(dir)) {
-                return;
+            @Override
+            public BooleanSupplier videoAlive() {
+                return player::isVideoProcessAlive;
             }
-            try (var walk = Files.walk(dir)) {
-                walk.sorted((a, b) -> b.getNameCount() - a.getNameCount()).forEach(p -> {
-                    try {
-                        Files.deleteIfExists(p);
-                    } catch (Exception ignored) {
-                    }
-                });
+
+            @Override
+            public BooleanSupplier audioAlive() {
+                return player::isAudioSinkAlive;
             }
-        } catch (Exception ignored) {
-        }
+
+            @Override
+            public BooleanSupplier hlsActive() {
+                return player::isHlsActive;
+            }
+
+            @Override
+            public DoubleSupplier position() {
+                return () -> player.info().position();
+            }
+
+            @Override
+            public String playlistArg(PlaybackFixture.HlsFixture hls) {
+                return PlaybackLifecycleHarness.ffplayMediaArg(hls.mediaUri());
+            }
+        };
     }
 }

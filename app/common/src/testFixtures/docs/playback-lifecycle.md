@@ -1,7 +1,7 @@
 # Playback lifecycle integration tests
 
-Shared by `app/gstreamer` and `app/ffmpeg` (`*PlaybackTest`). Each case drives the
-**production** `Playback` implementation (same code as the release fat jar).
+Shared by `app/gstreamer` and `app/ffmpeg` (`*PlaybackTest` + `PlaybackLifecycleHarness`).
+Each case drives the **production** `Playback` implementation (same code as the release fat jar).
 
 Wall-clock delays below are intentional — they mimic a user who watches for a bit,
 then changes mode — not “as fast as the JVM can push buffers”.
@@ -45,6 +45,28 @@ sequenceDiagram
     Phone->>App: onPlaylistRemoved
     Phone->>App: Mirror again ~0.7s
     App-->>User: Back on mirror sink
+
+    Note over User,App: Case E — Audio-only (Music)
+    Phone->>App: onAudioFormat(AAC-LC) + AUs + volume
+    Phone->>App: onAudioSrcDisconnect
+
+    Note over User,App: Case F — Audio reconnect while mirroring
+    Phone->>App: Mirror + audio
+    Phone->>App: onAudioSrcDisconnect (picture stays)
+    Phone->>App: onAudioFormat + AUs again
+
+    Note over User,App: Case G/H — Volume clamp + idempotent disconnect
+    Phone->>App: onVolume(-0.5→1.5→0.25)
+    Phone->>App: disconnect ×2 (no throw)
+
+    Note over User,App: Case I — HLS volume + mid-play stop → mirror
+    Phone->>App: onPlaylist + volume while clock moves
+    Phone->>App: onPlaylistRemoved (idle info)
+    Phone->>App: Mirror again
+
+    Note over User,App: Case J — Mirror tears active HLS
+    Phone->>App: onPlaylist (playing)
+    Phone->>App: onVideoFormat (HLS must stop)
 ```
 
 ## Timing cheat-sheet
