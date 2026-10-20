@@ -139,8 +139,9 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                     handleGetServerInfo(ctx, request);
                 } else if (HttpMethod.POST.equals(request.method())
                         && (decoder.path().equals("/fp-setup") || decoder.path().equals("/fp-setup2"))) {
-                    // Same FairPlay binary handshake as RTSP /fp-setup; YouTube uses HTTP/1.1 here.
-                    handleFairPlaySetup(ctx, request);
+                    // YouTube posts FairPlay *version 1* here; we only implement v3 on RTSP.
+                    // Acknowledge so the client is not 404'd / reset — do not run fairPlaySetup.
+                    handleHttpFairPlaySetupAck(ctx, request);
                 } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/reverse")) {
                     handleReverse(ctx, request);
                 } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/play")) {
@@ -208,7 +209,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
 
     private void handleFairPlaySetup(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
         var session = resolveSession(request);
-        var response = createControlResponse(request);
+        var response = createRtspResponse(request);
         session.getAirPlay().fairPlaySetup(new ByteBufInputStream(request.content()),
                 new ByteBufOutputStream(response.content()));
         sendResponse(ctx, request, response);
@@ -350,10 +351,20 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     }
 
     private void handleGetServerInfo(ChannelHandlerContext ctx, FullHttpRequest request) {
-        var serverInfo = PropertyListUtil.prepareServerInfoResponse(airPlayConfig.isHlsEnabled());
+        var serverInfo = PropertyListUtil.prepareServerInfoResponse();
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
         response.headers().add(HttpHeaderNames.CONTENT_TYPE, "text/x-apple-plist+xml");
         response.content().writeBytes(serverInfo);
+        sendResponse(ctx, request, response);
+    }
+
+    /**
+     * HTTP {@code /fp-setup} and {@code /fp-setup2}: return 200 with empty body.
+     * Must not 404 (phone aborts YouTube HLS) and must not run RTSP FairPlay v3
+     * against the v1 payload YouTube sends (logs "version 1 is not supported" and resets).
+     */
+    private void handleHttpFairPlaySetupAck(ChannelHandlerContext ctx, FullHttpRequest request) {
+        var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
         sendResponse(ctx, request, response);
     }
 
@@ -837,13 +848,6 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             return "mlhls://localhost" + bare.substring(playlistIdx + "/playlist".length());
         }
         return bare;
-    }
-
-    private DefaultFullHttpResponse createControlResponse(FullHttpRequest request) {
-        if (HttpVersion.HTTP_1_1.equals(request.protocolVersion())) {
-            return new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
-        }
-        return createRtspResponse(request);
     }
 
     private DefaultFullHttpResponse createRtspResponse(FullHttpRequest request) {

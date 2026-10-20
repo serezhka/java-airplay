@@ -101,12 +101,16 @@ public class PropertyListUtil {
         return BinaryPropertyListWriter.writeToArray(response);
     }
 
-    public static byte[] prepareServerInfoResponse(boolean hlsEnabled) {
+    /**
+     * {@code GET /server-info} body. Keep this profile stable: aligning it with
+     * {@link AdvertisedReceiver} accidentally pushed clients onto HTTP FairPlay v1
+     * paths that abort YouTube HLS. mDNS / {@code GET /info} use AdvertisedReceiver.
+     */
+    public static byte[] prepareServerInfoResponse() {
         NSDictionary response = new NSDictionary();
-        response.put("features", AdvertisedReceiver.features(hlsEnabled));
-        response.put("model", AdvertisedReceiver.MODEL);
+        response.put("features", 119);
         response.put("protovers", 1.0);
-        response.put("srcvers", AdvertisedReceiver.SOURCE_VERSION);
+        response.put("srcvers", 101.28);
         return response.toXMLPropertyList().getBytes(StandardCharsets.UTF_8);
     }
 
