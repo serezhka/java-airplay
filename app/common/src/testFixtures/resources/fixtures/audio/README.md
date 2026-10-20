@@ -6,7 +6,7 @@ Committed binaries (do not generate on CI runners):
 |------|--------|-----|
 | `sine-44100-aac-lc.adts` | AAC-LC ADTS | Mirror + Music AAC path |
 | `sine-44100-alac.lp` | `u32 BE` length + raw ALAC AU | Music ALAC |
-| `sine-44100-aac-eld.lp` | `u32 BE` length + raw AAC-ELD AU | AAC-ELD |
+| `sine-44100-aac-eld.lp` | `u32 BE` length + raw AAC-ELD AU | AAC-ELD pipeline smoke (CAF `aace`; production ASC stays `f8e85000`) |
 | `sine-44100-alac.caf` / `sine-44100-aac-eld.caf` | Source CAF (regen only) | Rebuild `.lp` |
 
 ## Regenerate (macOS)

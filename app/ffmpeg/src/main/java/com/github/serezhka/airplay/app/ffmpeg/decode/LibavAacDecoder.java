@@ -49,8 +49,8 @@ public final class LibavAacDecoder implements AutoCloseable {
     private static final int INPUT_PADDING = 64;
     private static final int AVERROR_EAGAIN = -11;
 
-    /** Same ASC as GStreamer aac-eld appsrc / Apple CAF {@code aace} ({@code codec_data=f8e84000}). */
-    private static final byte[] ASC_ELD_44100_2 = hex("f8e84000");
+    /** Same ASC as GStreamer aac-eld appsrc / iOS AirPlay mirror ({@code codec_data=f8e85000}). */
+    private static final byte[] ASC_ELD_44100_2 = hex("f8e85000");
     private static final byte[] ASC_LC_44100_2 = hex("1210");
 
     private final int sampleRate;
