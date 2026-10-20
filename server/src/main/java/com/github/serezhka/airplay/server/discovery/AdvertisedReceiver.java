@@ -44,6 +44,26 @@ public final class AdvertisedReceiver {
     public static final String MDNS_FLAGS = "0x44";
     public static final int VV = 2;
 
+    /**
+     * Compact profile for {@code GET /server-info} only (not mDNS / {@code GET /info}).
+     * Historic mask {@code 119}: video + HLS + FairPlay, without FPSAP / screen / RAOP.
+     * Using {@link #ADVERTISED} here pushed some clients onto HTTP FairPlay v1 and
+     * aborted YouTube HLS.
+     */
+    private static final Set<AirPlayFeature> SERVER_INFO = EnumSet.of(
+            AirPlayFeature.VIDEO,
+            AirPlayFeature.PHOTO,
+            AirPlayFeature.VIDEO_FAIRPLAY,
+            AirPlayFeature.VIDEO_HTTP_LIVE_STREAMS,
+            AirPlayFeature.SLIDESHOW,
+            AirPlayFeature.UNASSIGNED_6);
+
+    /** Feature mask for {@link #SERVER_INFO} ({@code 119} / {@code 0x77}). */
+    public static final long SERVER_INFO_FEATURES = AirPlayFeature.maskOf(SERVER_INFO);
+
+    /** {@code srcvers} on {@code GET /server-info} (kept distinct from {@link #SOURCE_VERSION}). */
+    public static final String SERVER_INFO_SOURCE_VERSION = "101.28";
+
     private AdvertisedReceiver() {
     }
 

@@ -102,15 +102,14 @@ public class PropertyListUtil {
     }
 
     /**
-     * {@code GET /server-info} body. Keep this profile stable: aligning it with
-     * {@link AdvertisedReceiver} accidentally pushed clients onto HTTP FairPlay v1
-     * paths that abort YouTube HLS. mDNS / {@code GET /info} use AdvertisedReceiver.
+     * {@code GET /server-info} body. Uses {@link AdvertisedReceiver#SERVER_INFO_FEATURES},
+     * not the full mDNS / {@code GET /info} mask — see that constant's javadoc.
      */
     public static byte[] prepareServerInfoResponse() {
         NSDictionary response = new NSDictionary();
-        response.put("features", 119);
+        response.put("features", AdvertisedReceiver.SERVER_INFO_FEATURES);
         response.put("protovers", 1.0);
-        response.put("srcvers", 101.28);
+        response.put("srcvers", Double.parseDouble(AdvertisedReceiver.SERVER_INFO_SOURCE_VERSION));
         return response.toXMLPropertyList().getBytes(StandardCharsets.UTF_8);
     }
 

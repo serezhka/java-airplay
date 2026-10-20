@@ -1,6 +1,7 @@
 package com.github.serezhka.airplay.server.internal.handler.control;
 
 import com.github.serezhka.airplay.server.AirPlayConfig;
+import com.github.serezhka.airplay.server.discovery.AdvertisedReceiver;
 import com.github.serezhka.airplay.server.internal.handler.session.SessionManager;
 import com.github.serezhka.airplay.server.internal.handler.util.PropertyListUtil;
 import io.netty.buffer.Unpooled;
@@ -12,7 +13,6 @@ import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpVersion;
-import io.netty.handler.codec.rtsp.RtspMethods;
 import io.netty.handler.codec.rtsp.RtspVersions;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -99,13 +99,15 @@ class ControlHandlerHttpFairPlayTest {
     @Test
     void serverInfoKeepsStableYoutubeFriendlyFeatures() {
         String xml = new String(PropertyListUtil.prepareServerInfoResponse(), StandardCharsets.UTF_8);
-        assertTrue(xml.contains("<integer>119</integer>") || xml.contains(">119<"), xml);
-        assertTrue(xml.contains("101.28") || xml.contains("101.280"), xml);
-        assertFalse(xml.contains("220.68"), "must not advertise full mDNS srcvers on /server-info");
+        String features = Long.toString(AdvertisedReceiver.SERVER_INFO_FEATURES);
+        assertTrue(xml.contains(features), xml);
+        assertTrue(xml.contains(AdvertisedReceiver.SERVER_INFO_SOURCE_VERSION), xml);
+        assertFalse(xml.contains(AdvertisedReceiver.SOURCE_VERSION),
+                "must not advertise full mDNS srcvers on /server-info");
     }
 
     @Test
-    void getServerInfoReturnsOkWithFeatures119() {
+    void getServerInfoReturnsOkWithServerInfoProfile() {
         FullHttpRequest req = new DefaultFullHttpRequest(
                 HttpVersion.HTTP_1_1, HttpMethod.GET, "/server-info");
         req.headers().set("X-Apple-Session-ID", SESSION);
@@ -115,7 +117,7 @@ class ControlHandlerHttpFairPlayTest {
         assertEquals(HttpResponseStatus.OK, response.status());
         String body = response.content().toString(StandardCharsets.UTF_8);
         response.release();
-        assertTrue(body.contains("119"), body);
+        assertTrue(body.contains(Long.toString(AdvertisedReceiver.SERVER_INFO_FEATURES)), body);
     }
 
     private FullHttpResponse postHttp(String path, byte[] body) {
