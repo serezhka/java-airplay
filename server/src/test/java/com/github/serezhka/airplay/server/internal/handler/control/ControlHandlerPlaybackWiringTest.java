@@ -1,7 +1,9 @@
 package com.github.serezhka.airplay.server.internal.handler.control;
 
 import com.dd.plist.BinaryPropertyListWriter;
+import com.dd.plist.NSArray;
 import com.dd.plist.NSDictionary;
+import com.github.serezhka.airplay.protocol.media.AirPlayStreamType;
 import com.github.serezhka.airplay.server.AirPlayConfig;
 import com.github.serezhka.airplay.server.internal.handler.session.HlsPlaylistState;
 import com.github.serezhka.airplay.server.internal.handler.session.Session;
@@ -26,6 +28,7 @@ import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -156,6 +159,60 @@ class ControlHandlerPlaybackWiringTest {
         writeInbound(req);
 
         assertTrue(playback.eventsContainInOrder("playlistRemoved"));
+    }
+
+    @Test
+    void rtspTeardownVideoDisconnectsVideoOnly() throws Exception {
+        seedHlsStarted();
+        writeInbound(rtspTeardownWithStream(AirPlayStreamType.SCREEN));
+        assertTrue(playback.eventsContainInOrder("videoDisconnect"));
+        assertFalse(playback.events().contains("audioDisconnect"));
+        assertFalse(playback.events().contains("playlistRemoved"),
+                "stream TEARDOWN must not stop HLS");
+        assertTrue(sessions.getSession(SESSION).getHlsPlaylistState() != null);
+    }
+
+    @Test
+    void rtspTeardownAudioDisconnectsAudioOnly() throws Exception {
+        writeInbound(rtspTeardownWithStream(AirPlayStreamType.AUDIO_REALTIME));
+        assertTrue(playback.eventsContainInOrder("audioDisconnect"));
+        assertFalse(playback.events().contains("videoDisconnect"));
+    }
+
+    @Test
+    void rtspTeardownFullStopsMirrorAudioAndHls() throws Exception {
+        seedHlsStarted();
+        // Plist without "streams" → full session teardown (audio + video + HLS).
+        byte[] body = BinaryPropertyListWriter.writeToArray(new NSDictionary());
+        FullHttpRequest req = new DefaultFullHttpRequest(
+                RtspVersions.RTSP_1_0, RtspMethods.TEARDOWN, "/",
+                Unpooled.wrappedBuffer(body));
+        req.headers().set("Active-Remote", SESSION);
+        req.headers().set(HttpHeaderNames.CONTENT_LENGTH, body.length);
+
+        writeInbound(req);
+
+        assertTrue(playback.eventsContainInOrder("audioDisconnect"));
+        assertTrue(playback.eventsContainInOrder("videoDisconnect"));
+        assertTrue(playback.eventsContainInOrder("playlistRemoved"));
+        assertNull(sessions.getSession(SESSION).getHlsPlaylistState());
+    }
+
+    private FullHttpRequest rtspTeardownWithStream(int streamType) throws Exception {
+        NSDictionary stream = new NSDictionary();
+        stream.put("type", streamType);
+        NSArray streams = new NSArray(1);
+        streams.setValue(0, stream);
+        NSDictionary teardown = new NSDictionary();
+        teardown.put("streams", streams);
+        byte[] body = BinaryPropertyListWriter.writeToArray(teardown);
+
+        FullHttpRequest req = new DefaultFullHttpRequest(
+                RtspVersions.RTSP_1_0, RtspMethods.TEARDOWN, "/",
+                Unpooled.wrappedBuffer(body));
+        req.headers().set("Active-Remote", SESSION);
+        req.headers().set(HttpHeaderNames.CONTENT_LENGTH, body.length);
+        return req;
     }
 
     private HlsPlaylistState seedHlsStarted() {

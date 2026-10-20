@@ -102,6 +102,18 @@ class FFmpegPlaybackTest {
     }
 
     @Test
+    @Timeout(60)
+    void alacOnlyThenDisconnect() throws Exception {
+        PlaybackLifecycleHarness.alacOnlyThenDisconnect(probe(new FFmpegPlayer()));
+    }
+
+    @Test
+    @Timeout(60)
+    void aacEldOnlyThenDisconnect() throws Exception {
+        PlaybackLifecycleHarness.aacEldOnlyThenDisconnect(probe(new FFmpegPlayer()));
+    }
+
+    @Test
     @Timeout(90)
     void audioReconnectWhileMirroring() throws Exception {
         PlaybackLifecycleHarness.audioReconnectWhileMirroring(probe(new FFmpegPlayer()));

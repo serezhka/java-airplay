@@ -56,6 +56,46 @@ public final class PlaybackLifecycleHarness {
         assertFalse(probe.audioAlive().getAsBoolean(), "audio still alive after disconnect");
     }
 
+    /** Case K — ALAC audio-only (Music / speaker) then disconnect. */
+    public static void alacOnlyThenDisconnect(Probe probe) throws Exception {
+        audioCodecOnlyThenDisconnect(probe, PlaybackFixture.alacStreamInfo(), () -> {
+            try {
+                PlaybackFixture.playAlac(probe.player());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError(e);
+            }
+        });
+    }
+
+    /** Case L — AAC-ELD audio-only then disconnect. */
+    public static void aacEldOnlyThenDisconnect(Probe probe) throws Exception {
+        audioCodecOnlyThenDisconnect(probe, PlaybackFixture.aacEldStreamInfo(), () -> {
+            try {
+                PlaybackFixture.playAacEld(probe.player());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError(e);
+            }
+        });
+    }
+
+    private static void audioCodecOnlyThenDisconnect(
+            Probe probe, com.github.serezhka.airplay.protocol.media.AudioStreamInfo format, Runnable feed)
+            throws Exception {
+        Playback player = probe.player();
+        try {
+            player.onAudioFormat(format);
+            player.onVolume(0.6);
+            feed.run();
+            assertTrue(probe.audioAlive().getAsBoolean(),
+                    "audio sink never alive for " + format.getCompressionType());
+        } finally {
+            player.onAudioSrcDisconnect();
+        }
+        assertFalse(probe.audioAlive().getAsBoolean(), "audio still alive after disconnect");
+    }
+
     /** Case F — drop audio mid-mirror, reconnect AAC-LC, picture stays up. */
     public static void audioReconnectWhileMirroring(Probe probe) throws Exception {
         Playback player = probe.player();

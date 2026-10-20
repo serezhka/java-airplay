@@ -6,15 +6,20 @@ import com.github.serezhka.airplay.server.Playback;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import java.util.function.DoubleSupplier;
 
 /**
- * Shared Annex-B / AAC fixtures and feed helpers for player integration tests.
+ * Shared Annex-B / audio fixtures and feed helpers for player integration tests.
+ * Audio regen notes: {@code fixtures/audio/README.md}.
  */
 public final class PlaybackFixture {
 
@@ -30,11 +35,42 @@ public final class PlaybackFixture {
         return resourceBytes("/fixtures/audio/sine-44100-aac-lc.adts");
     }
 
+    /**
+     * Length-prefixed ({@code u32 BE} + payload) raw ALAC frames
+     * ({@code fixtures/audio/sine-44100-alac.lp}).
+     */
+    public static List<byte[]> alacFrames() {
+        return lengthPrefixedFrames("/fixtures/audio/sine-44100-alac.lp");
+    }
+
+    /**
+     * Length-prefixed raw AAC-ELD frames ({@code fixtures/audio/sine-44100-aac-eld.lp}).
+     */
+    public static List<byte[]> aacEldFrames() {
+        return lengthPrefixedFrames("/fixtures/audio/sine-44100-aac-eld.lp");
+    }
+
     public static AudioStreamInfo aacLcStreamInfo() {
         return new AudioStreamInfo.AudioStreamInfoBuilder()
                 .compressionType(AudioStreamInfo.CompressionType.AAC)
                 .audioFormat(AudioStreamInfo.AudioFormat.AAC_LC_44100_2)
                 .samplesPerFrame(1024)
+                .build();
+    }
+
+    public static AudioStreamInfo alacStreamInfo() {
+        return new AudioStreamInfo.AudioStreamInfoBuilder()
+                .compressionType(AudioStreamInfo.CompressionType.ALAC)
+                .audioFormat(AudioStreamInfo.AudioFormat.ALAC_44100_16_2)
+                .samplesPerFrame(4096)
+                .build();
+    }
+
+    public static AudioStreamInfo aacEldStreamInfo() {
+        return new AudioStreamInfo.AudioStreamInfoBuilder()
+                .compressionType(AudioStreamInfo.CompressionType.AAC_ELD)
+                .audioFormat(AudioStreamInfo.AudioFormat.AAC_ELD_44100_2)
+                .samplesPerFrame(480)
                 .build();
     }
 
@@ -63,6 +99,44 @@ public final class PlaybackFixture {
             player.onAudio(audio, offset, length);
             Thread.sleep(20);
         }
+    }
+
+    /** Push raw ALAC AUs (~frame duration at 44.1 kHz / 4096). */
+    public static void playAlac(Playback player) throws InterruptedException {
+        playRawAudioFrames(player, alacFrames(), 90);
+    }
+
+    /** Push raw AAC-ELD AUs (~11 ms at 44.1 kHz / 480). */
+    public static void playAacEld(Playback player) throws InterruptedException {
+        playRawAudioFrames(player, aacEldFrames(), 11);
+    }
+
+    private static void playRawAudioFrames(Playback player, List<byte[]> frames, long delayMs)
+            throws InterruptedException {
+        for (byte[] frame : frames) {
+            player.onAudio(frame);
+            Thread.sleep(delayMs);
+        }
+    }
+
+    private static List<byte[]> lengthPrefixedFrames(String path) {
+        byte[] blob = resourceBytes(path);
+        ByteBuffer buf = ByteBuffer.wrap(blob).order(ByteOrder.BIG_ENDIAN);
+        List<byte[]> frames = new ArrayList<>();
+        while (buf.remaining() >= 4) {
+            int len = buf.getInt();
+            if (len <= 0 || len > buf.remaining()) {
+                throw new IllegalStateException("Corrupt length-prefixed fixture " + path
+                        + " at " + buf.position() + " len=" + len);
+            }
+            byte[] frame = new byte[len];
+            buf.get(frame);
+            frames.add(frame);
+        }
+        if (frames.isEmpty()) {
+            throw new IllegalStateException("Empty length-prefixed fixture " + path);
+        }
+        return frames;
     }
 
     public static void startMirror(Playback player) {
