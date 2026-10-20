@@ -10,7 +10,7 @@ set -euo pipefail
 
 REPO_URL="${CURSOR_CLOUD_REPO_URL:-https://github.com/serezhka/java-airplay}"
 REF="${CURSOR_CLOUD_REF:-main}"
-MODEL_ID="${CURSOR_CLOUD_MODEL:-composer-2}"
+MODEL_ID="${CURSOR_CLOUD_MODEL:-composer-2.5}"
 AUTO_PR="${CURSOR_CLOUD_AUTO_PR:-true}"
 
 if [[ "${1:-}" == "--ref" ]]; then
