@@ -21,7 +21,6 @@ import org.junit.jupiter.api.Test;
 import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -97,17 +96,15 @@ class ControlHandlerHttpFairPlayTest {
     }
 
     @Test
-    void serverInfoKeepsStableYoutubeFriendlyFeatures() {
-        String xml = new String(PropertyListUtil.prepareServerInfoResponse(), StandardCharsets.UTF_8);
-        String features = Long.toString(AdvertisedReceiver.SERVER_INFO_FEATURES);
-        assertTrue(xml.contains(features), xml);
-        assertTrue(xml.contains(AdvertisedReceiver.SERVER_INFO_SOURCE_VERSION), xml);
-        assertFalse(xml.contains(AdvertisedReceiver.SOURCE_VERSION),
-                "must not advertise full mDNS srcvers on /server-info");
+    void serverInfoMatchesMdnsFeatureProfile() {
+        String xml = new String(PropertyListUtil.prepareServerInfoResponse(true), StandardCharsets.UTF_8);
+        assertTrue(xml.contains(Long.toString(AdvertisedReceiver.FEATURES)), xml);
+        assertTrue(xml.contains(AdvertisedReceiver.SOURCE_VERSION), xml);
+        assertTrue(xml.contains(AdvertisedReceiver.MODEL), xml);
     }
 
     @Test
-    void getServerInfoReturnsOkWithServerInfoProfile() {
+    void getServerInfoReturnsOkWithAdvertisedFeatures() {
         FullHttpRequest req = new DefaultFullHttpRequest(
                 HttpVersion.HTTP_1_1, HttpMethod.GET, "/server-info");
         req.headers().set("X-Apple-Session-ID", SESSION);
@@ -117,7 +114,8 @@ class ControlHandlerHttpFairPlayTest {
         assertEquals(HttpResponseStatus.OK, response.status());
         String body = response.content().toString(StandardCharsets.UTF_8);
         response.release();
-        assertTrue(body.contains(Long.toString(AdvertisedReceiver.SERVER_INFO_FEATURES)), body);
+        assertTrue(body.contains(Long.toString(AdvertisedReceiver.FEATURES)), body);
+        assertTrue(body.contains(AdvertisedReceiver.SOURCE_VERSION), body);
     }
 
     private FullHttpResponse postHttp(String path, byte[] body) {

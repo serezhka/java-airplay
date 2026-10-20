@@ -3,7 +3,6 @@ package com.github.serezhka.airplay.server.discovery;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ReceiverProfileTest {
 
@@ -30,15 +29,5 @@ class ReceiverProfileTest {
         assertEquals(AirPlayFeature.SCREEN.mask(), off & AirPlayFeature.SCREEN.mask());
         assertEquals(AirPlayFeature.AUDIO.mask(), off & AirPlayFeature.AUDIO.mask());
         assertEquals(AirPlayFeature.VIDEO_FAIRPLAY.mask(), off & AirPlayFeature.VIDEO_FAIRPLAY.mask());
-    }
-
-    @Test
-    void serverInfoProfileIsCompactVideoHlsMask() {
-        assertEquals(0x77, AdvertisedReceiver.SERVER_INFO_FEATURES);
-        assertEquals("101.28", AdvertisedReceiver.SERVER_INFO_SOURCE_VERSION);
-        // Must stay distinct from the full mDNS / GET /info advertisement.
-        assertTrue(AdvertisedReceiver.SERVER_INFO_FEATURES != AdvertisedReceiver.FEATURES);
-        assertTrue((AdvertisedReceiver.SERVER_INFO_FEATURES & AirPlayFeature.FPSAP_V2_5_AES_GCM.mask()) == 0);
-        assertTrue((AdvertisedReceiver.SERVER_INFO_FEATURES & AirPlayFeature.VIDEO_HTTP_LIVE_STREAMS.mask()) != 0);
     }
 }
