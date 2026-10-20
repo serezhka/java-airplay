@@ -98,3 +98,43 @@ When a short VOD item ends (ads, ENDLIST):
   At item end: empty=true / full=false.
 - Live sliding windows are a different path (`loading` + FCUP until the body
   swaps).
+
+## Cursor Cloud
+
+Cloud Agents run on Ubuntu VMs (see `.cursor/environment.json` + `.cursor/Dockerfile`).
+They are for **async JVM / CI / refactor / PR** work — not phone AirPlay or
+Windows-only native sinks.
+
+### When to use Cloud vs local
+
+| Prefer Cloud | Prefer local (this machine / phone) |
+|--------------|-------------------------------------|
+| Gradle compile/test, CI yaml, fixtures | Phone mirroring / YouTube / mDNS |
+| Parallel PR polish, docs, layering | Debugging with local GST/FFmpeg GUI |
+| Long integration suites under xvfb | Kali/lab host experiments |
+
+### Cloud-only test commands
+
+```bash
+# Headless playback suites (same knobs as CI)
+xvfb-run -a ./gradlew :app:ffmpeg:ffmpegIntegrationTest --no-daemon -Dairplay.ffmpeg.hls.headless=true
+xvfb-run -a ./gradlew :app:gstreamer:gstreamerIntegrationTest --no-daemon \
+  -Dairplay.gst.appsink=true -Dairplay.gst.hls.headless=true
+./gradlew test --no-daemon
+```
+
+### Launch from API (for local agents / automation)
+
+1. Connect GitHub for the Cursor account that owns this repo.
+2. Create an API key: [Dashboard → API Keys](https://cursor.com/dashboard?tab=api-keys).
+3. Set a Cloud Agents spend limit in the dashboard.
+4. Export the key only in your shell (never commit it):
+
+```bash
+export CURSOR_API_KEY=...   # from the dashboard
+./tools/cloud/launch-agent.sh --ref main "Your task; open a draft PR"
+```
+
+Local IDE agents with `CURSOR_API_KEY` in the environment may call the same
+script to delegate parallel work. Always open a **draft PR**; a human reviews
+before merge.
