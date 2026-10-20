@@ -5,7 +5,6 @@ import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelPipeline;
-import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.FullHttpResponse;
 import lombok.extern.slf4j.Slf4j;
 
@@ -39,11 +38,6 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
         responseQueue.put((FullHttpResponse) msg);
-    }
-
-    public void send(FullHttpRequest request) {
-        awaitActive();
-        this.ctx.writeAndFlush(request);
     }
 
     /**

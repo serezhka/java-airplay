@@ -78,7 +78,8 @@ public class ControlClient implements Runnable, AutoCloseable, HapPairChannel {
                     ChannelPipeline p = ch.pipeline();
                     // Encrypt/decrypt are added only after pair-setup M4 — keeping them
                     // in the pipeline during plaintext pairing breaks M3/M4.
-                    p.addLast("encoder", new RtspEncoder());
+                    // Outbound uses framed bytes via sendRaw (RtspEncoder header quirks
+                    // are rejected by some receivers). Decoder still parses responses.
                     p.addLast("decoder", new RtspDecoder());
                     p.addLast("logger", new LoggingHandler(LogLevel.DEBUG, ByteBufFormat.SIMPLE));
                     p.addLast("aggregator", new HttpObjectAggregator(64 * 1024));
@@ -232,16 +233,6 @@ public class ControlClient implements Runnable, AutoCloseable, HapPairChannel {
         return null;
     }
 
-    /** Starts media after streams SETUP. */
-    public void rtspRecord() throws InterruptedException {
-        FullHttpResponse response = exchangeRaw("RECORD", "rtsp://" + address + "/stream",
-                Map.of("X-Apple-ProtocolVersion", "1"), new byte[0]);
-        HttpResponseStatus status = response.status();
-        if (status.code() >= 400) {
-            throw new IllegalStateException("RECORD → " + status);
-        }
-    }
-
     /**
      * Raw RTSP framing for every method. Avoids Netty {@code RtspEncoder} header quirks
      * that some receivers reject on streams SETUP.
@@ -272,19 +263,6 @@ public class ControlClient implements Runnable, AutoCloseable, HapPairChannel {
             System.arraycopy(body, 0, msg, head.length, body.length);
         }
         controlHandler.sendRaw(msg);
-        return controlHandler.receive();
-    }
-
-    @SuppressWarnings("unused")
-    private FullHttpResponse exchange(FullHttpRequest request) throws InterruptedException {
-        // Legacy Netty-encoder path kept for reference; prefer exchangeRaw.
-        request.headers().add(RtspHeaderNames.CSEQ, ++cseqIdx);
-        request.headers().add("DACP-ID", "184F380D0A5B7139");
-        request.headers().add("Active-Remote", "1589992423");
-        request.headers().add(RtspHeaderNames.USER_AGENT, "AirPlay/670.6.2");
-        request.headers().add(HttpHeaderNames.CONNECTION, HttpHeaderValues.KEEP_ALIVE);
-        request.headers().add(HttpHeaderNames.CONTENT_LENGTH, request.content().readableBytes());
-        controlHandler.send(request);
         return controlHandler.receive();
     }
 
