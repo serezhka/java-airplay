@@ -3,9 +3,14 @@ plugins {
 }
 
 application {
-    // Manual tools (HapMirrorApp, LegacyMirrorApp, PairDumpCredsApp) live under src/test.
+    // Manual tools (HapMirrorApp, LegacyMirror*, PairDumpCredsApp) live under src/test.
+    // Prefer dedicated tasks below; -PmainClass=… still works with test classpath via run.
     mainClass = providers.gradleProperty("mainClass")
-        .orElse("com.github.serezhka.airplay.client.App")
+        .orElse("com.github.serezhka.airplay.client.legacy.LegacyMirrorAudioApp")
+}
+
+tasks.named<JavaExec>("run") {
+    classpath = sourceSets["test"].runtimeClasspath
 }
 
 dependencies {
@@ -52,6 +57,11 @@ tasks.register<JavaExec>("hapMirror") {
 tasks.register<JavaExec>("legacyMirror") {
     configureCastSmoke("com.github.serezhka.airplay.client.legacy.LegacyMirrorApp")
     description = "Legacy FairPlay mirror client (manual; test classpath)"
+}
+
+tasks.register<JavaExec>("legacyMirrorAudio") {
+    configureCastSmoke("com.github.serezhka.airplay.client.legacy.LegacyMirrorAudioApp")
+    description = "Legacy FairPlay mirror + AAC audio client (manual; test classpath)"
 }
 
 tasks.register<JavaExec>("pairDumpCreds") {

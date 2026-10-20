@@ -1,4 +1,4 @@
-package com.github.serezhka.airplay.client;
+package com.github.serezhka.airplay.client.legacy;
 
 import com.dd.plist.NSArray;
 import com.dd.plist.NSDictionary;
@@ -7,7 +7,6 @@ import com.github.serezhka.airplay.client.control.ControlClient;
 import com.github.serezhka.airplay.client.crypto.FairPlayAudioEncryptor;
 import com.github.serezhka.airplay.client.crypto.FairPlayVideoEncryptor;
 import com.github.serezhka.airplay.client.discovery.ServiceDiscovery;
-import com.github.serezhka.airplay.client.legacy.LegacyFairPlayHandshake;
 import com.github.serezhka.airplay.client.video.VideoClient;
 import lombok.extern.slf4j.Slf4j;
 
@@ -17,17 +16,21 @@ import java.util.Map;
 import java.util.Scanner;
 
 /**
- * Smoke client: legacy pair + FairPlay + mirror video, optional AAC audio.
- * For a video-only legacy entry, see {@link com.github.serezhka.airplay.client.legacy.LegacyMirrorApp}.
- * For HAP TLV (PIN / {@code X-Apple-HKP}) receivers, see {@link com.github.serezhka.airplay.client.hap.HapMirrorApp}.
+ * Smoke client: legacy pair + FairPlay + mirror video and AAC audio.
+ * For video-only, see {@link LegacyMirrorApp}.
+ * For HAP TLV (PIN / {@code X-Apple-HKP}) receivers, see
+ * {@link com.github.serezhka.airplay.client.hap.HapMirrorApp}.
  *
  * <pre>
- *   ./gradlew :client:run
- *   ./gradlew :client:run --args='--host &lt;receiver-ip&gt; --port 7000'
+ *   ./gradlew :client:legacyMirrorAudio
+ *   ./gradlew :client:legacyMirrorAudio --args='--host &lt;receiver-ip&gt; --port 7000'
  * </pre>
  */
 @Slf4j
-public class App {
+public final class LegacyMirrorAudioApp {
+
+    private LegacyMirrorAudioApp() {
+    }
 
     public static void main(String[] args) throws Exception {
         Cli cli = Cli.parse(args);

@@ -101,11 +101,12 @@ public class PropertyListUtil {
         return BinaryPropertyListWriter.writeToArray(response);
     }
 
-    public static byte[] prepareServerInfoResponse() {
+    public static byte[] prepareServerInfoResponse(boolean hlsEnabled) {
         NSDictionary response = new NSDictionary();
-        response.put("features", 119); // 130367356919L -> leads to HTTP fp-setup, fp-setup2
+        response.put("features", AdvertisedReceiver.features(hlsEnabled));
+        response.put("model", AdvertisedReceiver.MODEL);
         response.put("protovers", 1.0);
-        response.put("srcvers", 101.28);
+        response.put("srcvers", AdvertisedReceiver.SOURCE_VERSION);
         return response.toXMLPropertyList().getBytes(StandardCharsets.UTF_8);
     }
 

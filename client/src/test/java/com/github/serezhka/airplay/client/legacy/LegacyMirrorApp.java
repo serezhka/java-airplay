@@ -21,6 +21,7 @@ import java.util.concurrent.TimeUnit;
  * <pre>
  *   ./gradlew :client:legacyMirror --args='--host &lt;receiver-ip&gt; --port 7000'
  *   ./gradlew :client:legacyMirror --args='--host &lt;receiver-ip&gt; --port 7000 --duration 15'
+ *   Video+audio: {@code ./gradlew :client:legacyMirrorAudio}
  * </pre>
  */
 @Slf4j

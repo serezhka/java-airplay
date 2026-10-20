@@ -47,10 +47,6 @@ public final class AdvertisedReceiver {
     private AdvertisedReceiver() {
     }
 
-    public static String airTunesServerHeader() {
-        return "AirTunes/" + SOURCE_VERSION;
-    }
-
     public static Set<AirPlayFeature> selected(boolean hlsEnabled) {
         EnumSet<AirPlayFeature> selected = EnumSet.copyOf(ADVERTISED);
         if (!hlsEnabled) {
@@ -59,19 +55,12 @@ public final class AdvertisedReceiver {
         return selected;
     }
 
-    public static int featuresLo(boolean hlsEnabled) {
-        return (int) features(hlsEnabled);
-    }
-
-    public static int featuresHi(boolean hlsEnabled) {
-        return (int) (features(hlsEnabled) >>> 32);
-    }
-
     public static long features(boolean hlsEnabled) {
         return AirPlayFeature.maskOf(selected(hlsEnabled));
     }
 
     public static String featuresTxt(boolean hlsEnabled) {
-        return String.format("0x%X,0x%X", featuresLo(hlsEnabled), featuresHi(hlsEnabled));
+        long mask = features(hlsEnabled);
+        return String.format("0x%X,0x%X", (int) mask, (int) (mask >>> 32));
     }
 }

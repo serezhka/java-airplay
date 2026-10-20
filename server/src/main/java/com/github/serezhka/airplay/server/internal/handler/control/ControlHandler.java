@@ -137,10 +137,6 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 var decoder = new QueryStringDecoder(request.uri());
                 if (HttpMethod.GET.equals(request.method()) && decoder.path().equals("/server-info")) {
                     handleGetServerInfo(ctx, request);
-                } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/fp-setup")) {
-                    // TODO handleFairPlaySetup(ctx, request);
-                } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/fp-setup2")) {
-                    // TODO handleFairPlaySetup2(ctx, request);
                 } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/reverse")) {
                     handleReverse(ctx, request);
                 } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/play")) {
@@ -350,7 +346,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     }
 
     private void handleGetServerInfo(ChannelHandlerContext ctx, FullHttpRequest request) {
-        var serverInfo = PropertyListUtil.prepareServerInfoResponse();
+        var serverInfo = PropertyListUtil.prepareServerInfoResponse(airPlayConfig.isHlsEnabled());
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
         response.headers().add(HttpHeaderNames.CONTENT_TYPE, "text/x-apple-plist+xml");
         response.content().writeBytes(serverInfo);
