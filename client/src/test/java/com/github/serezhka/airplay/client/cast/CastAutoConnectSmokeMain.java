@@ -8,6 +8,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Prefer saved pair-verify (no PIN). If credentials are missing, expect a PIN prompt path.
+ * Test sources only — {@code ./gradlew :client:castAutoConnectSmoke}.
  */
 public final class CastAutoConnectSmokeMain {
 

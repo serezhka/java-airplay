@@ -27,3 +27,11 @@ extra["integrationTestTags"] = mapOf(
     "loopback" to "Runs localhost playback callbacks without a native player.",
     "dump" to "Runs the dump sidecar recording smoke test."
 )
+
+tasks.register<JavaExec>("trayCastMenuSmoke") {
+    group = "verification"
+    description = "DISPLAY tray cast submenu smoke (manual; not a CI test)"
+    classpath = sourceSets["integrationTest"].runtimeClasspath
+    mainClass.set("com.github.serezhka.airplay.app.common.app.menu.TrayCastMenuSmokeMain")
+    standardInput = System.`in`
+}

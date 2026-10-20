@@ -12,10 +12,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * DISPLAY-required smoke: rebuild Cast submenu twice after discovery.
- * <pre>
- *   DISPLAY=:10 java -cp … TrayCastMenuSmokeMain
- * </pre>
+ * DISPLAY-required smoke under {@code integrationTest} (not packaged into release fat jars).
+ * <pre>./gradlew :app:common:trayCastMenuSmoke</pre>
  */
 public final class TrayCastMenuSmokeMain {
 

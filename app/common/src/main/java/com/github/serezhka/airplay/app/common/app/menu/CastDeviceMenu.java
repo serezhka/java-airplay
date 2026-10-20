@@ -93,7 +93,8 @@ public final class CastDeviceMenu {
         return castMenu;
     }
 
-    public static int childCount(Menu menu) {
+    /** Same-package smoke / integration helpers. */
+    static int childCount(Menu menu) {
         return menu == null ? -1 : menu.getEntries().size();
     }
 

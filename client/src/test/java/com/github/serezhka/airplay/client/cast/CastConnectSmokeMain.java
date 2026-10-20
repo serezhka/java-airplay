@@ -6,12 +6,10 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Discover, pick a target (arg or first non-self LAN device / self), connect and
- * stream capture for a few seconds, disconnect.
+ * Manual LAN smoke (test sources — not packaged in release jars).
  * <pre>
- *   ./gradlew :client:run -PmainClass=...CastConnectSmokeMain --args='--seconds 5'
- *   ./gradlew :client:run -PmainClass=...CastConnectSmokeMain \
- *       --args='--host &lt;receiver-ip&gt; --port 7000 --seconds 5'
+ *   ./gradlew :client:castConnectSmoke --args='--seconds 5'
+ *   ./gradlew :client:castConnectSmoke --args='--host &lt;receiver-ip&gt; --port 7000 --seconds 5'
  * </pre>
  */
 public final class CastConnectSmokeMain {

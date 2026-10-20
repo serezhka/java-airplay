@@ -6,7 +6,8 @@ import java.util.List;
 
 /**
  * Headless smoke: print discovered AirPlay receivers and exit non-zero if none.
- * <pre>./gradlew :client:run -PmainClass=com.github.serezhka.airplay.client.cast.CastDiscoverMain</pre>
+ * Test sources only (not in release jars).
+ * <pre>./gradlew :client:castDiscoverSmoke</pre>
  */
 public final class CastDiscoverMain {
 
