@@ -351,7 +351,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     }
 
     private void handleGetServerInfo(ChannelHandlerContext ctx, FullHttpRequest request) {
-        var serverInfo = PropertyListUtil.prepareServerInfoResponse(airPlayConfig.isHlsEnabled());
+        var serverInfo = PropertyListUtil.prepareServerInfoResponse();
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
         response.headers().add(HttpHeaderNames.CONTENT_TYPE, "text/x-apple-plist+xml");
         response.content().writeBytes(serverInfo);

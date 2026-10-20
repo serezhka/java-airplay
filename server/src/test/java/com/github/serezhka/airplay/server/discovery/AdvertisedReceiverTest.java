@@ -2,7 +2,10 @@ package com.github.serezhka.airplay.server.discovery;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.EnumSet;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
 class ReceiverProfileTest {
 
@@ -29,5 +32,21 @@ class ReceiverProfileTest {
         assertEquals(AirPlayFeature.SCREEN.mask(), off & AirPlayFeature.SCREEN.mask());
         assertEquals(AirPlayFeature.AUDIO.mask(), off & AirPlayFeature.AUDIO.mask());
         assertEquals(AirPlayFeature.VIDEO_FAIRPLAY.mask(), off & AirPlayFeature.VIDEO_FAIRPLAY.mask());
+    }
+
+    @Test
+    void serverInfoProfileStaysDistinctFromMdns() {
+        long expected = AirPlayFeature.maskOf(EnumSet.of(
+                AirPlayFeature.VIDEO,
+                AirPlayFeature.PHOTO,
+                AirPlayFeature.VIDEO_FAIRPLAY,
+                AirPlayFeature.VIDEO_HTTP_LIVE_STREAMS,
+                AirPlayFeature.SLIDESHOW,
+                AirPlayFeature.UNASSIGNED_6));
+        assertEquals(expected, AdvertisedReceiver.SERVER_INFO_FEATURES);
+        assertEquals("101.28", AdvertisedReceiver.SERVER_INFO_SOURCE_VERSION);
+        // Must not accidentally share the full receiver mask / srcvers.
+        assertNotEquals(AdvertisedReceiver.FEATURES, AdvertisedReceiver.SERVER_INFO_FEATURES);
+        assertNotEquals(AdvertisedReceiver.SOURCE_VERSION, AdvertisedReceiver.SERVER_INFO_SOURCE_VERSION);
     }
 }

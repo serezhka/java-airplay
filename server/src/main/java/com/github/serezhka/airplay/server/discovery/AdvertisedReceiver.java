@@ -4,11 +4,12 @@ import java.util.EnumSet;
 import java.util.Set;
 
 /**
- * Receiver advertisement profile (mDNS TXT + {@code GET /info}).
+ * Receiver advertisement profiles.
  * <p>
- * {@link #ADVERTISED} is only what this server implements.
- * With HLS off, {@link AirPlayFeature#VIDEO_PLAYBACK} is removed.
- * FairPlay video decrypt stays: that is the mirror stream, not HLS.
+ * {@link #ADVERTISED} backs mDNS TXT and {@code GET /info} — what this server
+ * actually implements (mirror, RAOP, FairPlay v3, HLS when enabled).
+ * {@link #SERVER_INFO} backs only {@code GET /server-info} and must stay
+ * distinct; see that field's comment.
  */
 public final class AdvertisedReceiver {
 
@@ -43,6 +44,36 @@ public final class AdvertisedReceiver {
     public static final int STATUS_FLAGS = 0x44;
     public static final String MDNS_FLAGS = "0x44";
     public static final int VV = 2;
+
+    /**
+     * Compact profile for {@code GET /server-info} only — not mDNS, not
+     * {@code GET /info}.
+     * <p>
+     * YouTube (and similar HTTP HLS clients) probe {@code /server-info} before
+     * {@code POST /play}. Advertising the full {@link #ADVERTISED} mask (or
+     * {@link #SOURCE_VERSION}) there pushes those clients onto HTTP FairPlay
+     * v1 ({@code /fp-setup}, {@code /fp-setup2}), which we do not implement;
+     * the phone then aborts with “something went wrong” and may fall back to
+     * chrome-only mirroring without HLS. Keep this historic compact set
+     * (video + HLS + FairPlay, without screen / FPSAP / RAOP) and the
+     * matching {@link #SERVER_INFO_SOURCE_VERSION}.
+     */
+    private static final Set<AirPlayFeature> SERVER_INFO = EnumSet.of(
+            AirPlayFeature.VIDEO,
+            AirPlayFeature.PHOTO,
+            AirPlayFeature.VIDEO_FAIRPLAY,
+            AirPlayFeature.VIDEO_HTTP_LIVE_STREAMS,
+            AirPlayFeature.SLIDESHOW,
+            AirPlayFeature.UNASSIGNED_6);
+
+    /** Feature mask for {@link #SERVER_INFO}. */
+    public static final long SERVER_INFO_FEATURES = AirPlayFeature.maskOf(SERVER_INFO);
+
+    /**
+     * {@code srcvers} on {@code GET /server-info}. Intentionally not
+     * {@link #SOURCE_VERSION}: the HTTP HLS probe path expects this value.
+     */
+    public static final String SERVER_INFO_SOURCE_VERSION = "101.28";
 
     private AdvertisedReceiver() {
     }

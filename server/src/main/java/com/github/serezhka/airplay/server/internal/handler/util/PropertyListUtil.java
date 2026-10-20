@@ -126,13 +126,16 @@ public class PropertyListUtil {
         return BinaryPropertyListWriter.writeToArray(response);
     }
 
-    /** {@code GET /server-info} — same feature / version identity as mDNS and {@code GET /info}. */
-    public static byte[] prepareServerInfoResponse(boolean hlsEnabled) {
+    /**
+     * {@code GET /server-info} — compact HLS probe profile
+     * ({@link AdvertisedReceiver#SERVER_INFO_FEATURES}), not the mDNS /
+     * {@code GET /info} identity. See {@link AdvertisedReceiver}.
+     */
+    public static byte[] prepareServerInfoResponse() {
         NSDictionary response = new NSDictionary();
-        response.put("features", AdvertisedReceiver.features(hlsEnabled));
-        response.put("model", AdvertisedReceiver.MODEL);
+        response.put("features", AdvertisedReceiver.SERVER_INFO_FEATURES);
         response.put("protovers", SERVER_INFO_PROTOVERS);
-        response.put("srcvers", Double.parseDouble(AdvertisedReceiver.SOURCE_VERSION));
+        response.put("srcvers", Double.parseDouble(AdvertisedReceiver.SERVER_INFO_SOURCE_VERSION));
         return response.toXMLPropertyList().getBytes(StandardCharsets.UTF_8);
     }
 
