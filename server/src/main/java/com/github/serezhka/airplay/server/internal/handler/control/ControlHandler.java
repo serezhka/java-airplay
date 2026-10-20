@@ -137,6 +137,10 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 var decoder = new QueryStringDecoder(request.uri());
                 if (HttpMethod.GET.equals(request.method()) && decoder.path().equals("/server-info")) {
                     handleGetServerInfo(ctx, request);
+                } else if (HttpMethod.POST.equals(request.method())
+                        && (decoder.path().equals("/fp-setup") || decoder.path().equals("/fp-setup2"))) {
+                    // Same FairPlay binary handshake as RTSP /fp-setup; YouTube uses HTTP/1.1 here.
+                    handleFairPlaySetup(ctx, request);
                 } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/reverse")) {
                     handleReverse(ctx, request);
                 } else if (HttpMethod.POST.equals(request.method()) && decoder.path().equals("/play")) {
@@ -204,7 +208,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
 
     private void handleFairPlaySetup(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
         var session = resolveSession(request);
-        var response = createRtspResponse(request);
+        var response = createControlResponse(request);
         session.getAirPlay().fairPlaySetup(new ByteBufInputStream(request.content()),
                 new ByteBufOutputStream(response.content()));
         sendResponse(ctx, request, response);
@@ -833,6 +837,13 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             return "mlhls://localhost" + bare.substring(playlistIdx + "/playlist".length());
         }
         return bare;
+    }
+
+    private DefaultFullHttpResponse createControlResponse(FullHttpRequest request) {
+        if (HttpVersion.HTTP_1_1.equals(request.protocolVersion())) {
+            return new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+        }
+        return createRtspResponse(request);
     }
 
     private DefaultFullHttpResponse createRtspResponse(FullHttpRequest request) {
