@@ -4,6 +4,10 @@ import java.util.ServiceLoader;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
+/**
+ * Registry for {@link AudioSourceFactory}. Used by legacy audio smoke
+ * ({@code AudioClient}); tray {@code MirrorCaster} streams video only today.
+ */
 public final class AudioSources {
 
     private static final AtomicReference<AudioSourceFactory> FACTORY = new AtomicReference<>();

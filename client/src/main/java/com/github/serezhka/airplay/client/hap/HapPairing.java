@@ -61,73 +61,11 @@ public final class HapPairing {
     }
 
     /**
-     * Pair-Setup M1–M4 then enable control-channel encryption with the SRP session key.
-     * <p>
-     * Some receivers reject plaintext M5 with {@code 470 Connection Authorization Required}
-     * after M4 — skip M5–M6 / pair-verify and encrypt immediately (HKP4 transient path;
-     * also required after HKP3 on-screen PIN).
-     */
-    public byte[] perform(HapPairChannel client, String pin) throws Exception {
-        if (pin == null || pin.isBlank()) {
-            throw new IllegalArgumentException(
-                    "PIN required for HAP pair-setup (code shown on the receiver after pair-pin-start).");
-        }
-        String normalizedPin = pin.trim().replace("-", "");
-        boolean transientPairing = "4".equals(client.getHkpVersion());
-        log.info("HAP pair-setup starting (pairingId={}, hkp={}, pinLen={}, transient={})",
-                pairingId, client.getHkpVersion(), normalizedPin.length(), transientPairing);
-
-        byte[] m1 = transientPairing
-                ? Tlv8.of(
-                HapTlv.METHOD, HapTlv.METHOD_PAIR_SETUP,
-                HapTlv.STATE, HapTlv.STATE_M1,
-                HapTlv.FLAGS, HapTlv.FLAG_TRANSIENT)
-                : Tlv8.of(
-                HapTlv.METHOD, HapTlv.METHOD_PAIR_SETUP,
-                HapTlv.STATE, HapTlv.STATE_M1);
-        Map<Integer, byte[]> m2 = client.pairSetupTlv(m1);
-        assertNoError(m2, "M2");
-        if (Tlv8.requireByte(m2, HapTlv.STATE) != HapTlv.STATE_M2) {
-            throw new IllegalStateException("expected pair-setup M2 state");
-        }
-        byte[] salt = Tlv8.require(m2, HapTlv.SALT);
-        byte[] serverB = Tlv8.require(m2, HapTlv.PUBLIC_KEY);
-        log.info("HAP pair-setup M2 ok (salt={}B, B={}B)", salt.length, serverB.length);
-
-        HapSrp6a srp = new HapSrp6a();
-        srp.start(salt, serverB, normalizedPin);
-
-        byte[] m3 = Tlv8.of(
-                HapTlv.STATE, HapTlv.STATE_M3,
-                HapTlv.PUBLIC_KEY, srp.getPublicA(),
-                HapTlv.PROOF, srp.getClientProof());
-        Map<Integer, byte[]> m4 = client.pairSetupTlv(m3);
-        assertNoError(m4, "M4");
-        if (Tlv8.requireByte(m4, HapTlv.STATE) != HapTlv.STATE_M4) {
-            throw new IllegalStateException("expected pair-setup M4 state");
-        }
-        byte[] serverProof = m4.get(HapTlv.PROOF);
-        if (serverProof != null && serverProof.length > 0) {
-            srp.verifyServerProof(serverProof);
-            log.info("HAP pair-setup M4 ok (SRP verified, transient={})", transientPairing);
-        } else if (transientPairing) {
-            log.info("HAP pair-setup M4 ok (no server proof TLV — treating as transient success)");
-        } else {
-            throw new IllegalStateException("pair-setup M4 missing server proof");
-        }
-
-        this.sharedSecret = srp.getSharedSecret();
-        client.enableControlEncryption(this.sharedSecret);
-        log.info("HAP pair-setup finished after M4 (control encryption on, skip M5–M6)");
-        return sharedSecret;
-    }
-
-    /**
      * Persistable HKP3 pairing: M1–M4, then M5–M6 on <b>plaintext</b> HTTP (only the
      * TLV {@code encryptedData} is ChaCha), then pair-verify. Control-Salt is enabled
      * only after verify, with the X25519 shared secret (same as the working sender).
      * <p>
-     * Do not call {@link #perform} first — that turns on Control-Salt and makes M5 hang.
+     * Do not enable Control-Salt before M5–M6 — that makes M5 hang.
      */
     public byte[] performPersistent(HapPairChannel client, String pin) throws Exception {
         if (pin == null || pin.isBlank()) {

@@ -1,10 +1,8 @@
 package com.github.serezhka.airplay.client.control;
 
-import com.github.serezhka.airplay.client.hap.HapControlCipher;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
-import io.netty.channel.ChannelPipeline;
 import io.netty.handler.codec.http.FullHttpResponse;
 import lombok.extern.slf4j.Slf4j;
 
@@ -58,18 +56,6 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("interrupted waiting for control channel", e);
         }
-    }
-
-    public void enableControlEncryption(HapControlCipher cipher) {
-        if (ctx == null) {
-            throw new IllegalStateException("control channel not active");
-        }
-        ChannelPipeline p = ctx.pipeline();
-        if (p.get("control-decrypt") == null) {
-            p.addFirst("control-encrypt", new ClientControlChannelSupport.EncryptHandler());
-            p.addFirst("control-decrypt", new ClientControlChannelSupport.DecryptDecoder());
-        }
-        ClientControlChannelSupport.activate(ctx, cipher);
     }
 
     public FullHttpResponse receive() throws InterruptedException {

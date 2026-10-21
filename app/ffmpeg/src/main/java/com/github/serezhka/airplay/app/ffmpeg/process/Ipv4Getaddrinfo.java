@@ -11,8 +11,12 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Some CDN edges reset IPv6 connections from this host. ffplay has no IPv4 switch,
- * so the HLS process loads a small helper that resolves names as IPv4 only.
+ * In-process IPv4 DNS for the <em>ffplay child only</em> (not a host OS tweak).
+ * <p>
+ * Some CDN edges reset IPv6 from this JVM host; ffplay has no IPv4-only switch, so
+ * {@link FfplayProcess} sets {@code LD_PRELOAD} on that child to a small helper
+ * that resolves names as IPv4. Compiles on Linux when {@code cc} is available;
+ * otherwise segment fetches stay dual-stack.
  */
 @Slf4j
 final class Ipv4Getaddrinfo {
