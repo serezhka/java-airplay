@@ -100,7 +100,7 @@ runs:
         $msi = "$env:RUNNER_TEMP\gstreamer.msi"
         $prefix = 'C:\gstreamer\1.0\msvc_x86_64'
         if ($env:GST_MSI_CACHE_HIT -ne 'true' -or -not (Test-Path $msi)) {
-          Invoke-WebRequest -Uri "https://gstreamer.freedesktop.org/data/pkg/windows/$ver/msvc/gstreamer-1.0-msvc_x86_64-$ver.msi" -OutFile $msi
+          Invoke-WebRequest -Uri "https://gstreamer.freedesktop.org/data/pkg/windows/$ver/msvc/gstreamer-1.0-msvc-x86_64-$ver.msi" -OutFile $msi
         }
         Start-Process msiexec.exe -Wait -ArgumentList "/a `"$msi`" /qn TARGETDIR=$prefix"
         $exe = Get-ChildItem $prefix -Recurse -Filter gst-launch-1.0.exe -ErrorAction SilentlyContinue | Select-Object -First 1
