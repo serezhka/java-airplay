@@ -11,6 +11,8 @@ import org.springframework.context.ApplicationContext;
 
 import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
+import java.awt.Frame;
+import java.awt.Window;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -22,8 +24,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Tray: Cast submenu (devices, GTK-safe rebuild) + Exit.
- * Click a device to connect (⚙… / ✓); click again to disconnect.
+ * Tray: Cast submenu + fixed Disconnect + Exit.
+ * <p>
+ * Stopping cast must not tear down the receiver. Root {@code Disconnect} / {@code Exit}
+ * are never rebuilt (GTK AppIndicator is unsafe to mutate during a click). Cast-submenu
+ * rebuilds are deferred. An off-screen AWT peer keeps {@code AWTAutoShutdown} from
+ * calling {@code System.exit} after dialogs / menu churn.
  */
 @Slf4j
 public class SystemTrayMenu {
@@ -43,6 +49,8 @@ public class SystemTrayMenu {
 
     private final SystemTray systemTray;
     private final CastDeviceMenu deviceMenu;
+    private final MenuItem disconnectItem;
+    private final Frame awtKeepAlive;
     private final AtomicReference<List<ServiceDiscovery.Info>> devices =
             new AtomicReference<>(List.of());
     private final AtomicReference<String> activeKey = new AtomicReference<>();
@@ -57,8 +65,12 @@ public class SystemTrayMenu {
         if (systemTray == null) {
             log.warn("Unable to load SystemTray!");
             deviceMenu = null;
+            disconnectItem = null;
+            awtKeepAlive = null;
             return;
         }
+
+        awtKeepAlive = newAwtKeepAlive();
 
         systemTray.setImage(Objects.requireNonNull(getClass().getResource("/menu/tray_icon.png")));
         // Do not call setStatus — on GTK AppIndicator each status string becomes a
@@ -68,11 +80,14 @@ public class SystemTrayMenu {
                 systemTray,
                 device -> castExecutor.execute(() -> onDeviceClick(device)));
 
-        // Exit is fixed on the root menu — never rebuilt (GTK peer safety).
+        // Fixed root entries — never removed when the Cast submenu is replaced.
+        disconnectItem = new MenuItem("Disconnect", e -> castExecutor.execute(this::stopCast));
+        disconnectItem.setEnabled(false);
+        systemTray.getMenu().add(disconnectItem);
         systemTray.getMenu().add(new Separator());
         systemTray.getMenu().add(new MenuItem("Exit", e -> exitApp()));
 
-        rebuildMenuNow();
+        scheduleRebuild();
 
         mirrorCaster.startDiscovery(list -> {
             devices.set(List.copyOf(list));
@@ -81,7 +96,30 @@ public class SystemTrayMenu {
         });
     }
 
+    /**
+     * End the outbound cast session only. Discovery, tray, and the AirPlay receiver stay up.
+     */
+    private void stopCast() {
+        boolean wasCasting = mirrorCaster.isConnected()
+                || deviceState.get() != CastDeviceMenu.DeviceState.IDLE;
+        if (!wasCasting) {
+            refreshDisconnectItem();
+            return;
+        }
+        log.info("Stopping cast — AirPlay receiver keeps running");
+        mirrorCaster.disconnect();
+        activeKey.set(null);
+        deviceState.set(CastDeviceMenu.DeviceState.IDLE);
+        refreshDisconnectItem();
+        // Never rebuild the Cast submenu synchronously inside a tray click: GTK can
+        // deliver the event to Exit / tear down AWT peers and kill the JVM.
+        scheduleRebuild();
+    }
+
     private void scheduleRebuild() {
+        if (deviceMenu == null) {
+            return;
+        }
         if (!rebuildScheduled.compareAndSet(false, true)) {
             return;
         }
@@ -99,10 +137,7 @@ public class SystemTrayMenu {
         if (state == CastDeviceMenu.DeviceState.CONNECTED
                 && key.equals(current)
                 && mirrorCaster.isConnected()) {
-            mirrorCaster.disconnect();
-            activeKey.set(null);
-            deviceState.set(CastDeviceMenu.DeviceState.IDLE);
-            rebuildMenuNow();
+            stopCast();
             return;
         }
 
@@ -116,12 +151,14 @@ public class SystemTrayMenu {
 
         activeKey.set(key);
         deviceState.set(CastDeviceMenu.DeviceState.CONNECTING);
-        rebuildMenuNow();
+        refreshDisconnectItem();
+        scheduleRebuild();
 
         try {
             mirrorCaster.connect(device, this::promptPinOnEdt);
             deviceState.set(CastDeviceMenu.DeviceState.CONNECTED);
-            rebuildMenuNow();
+            refreshDisconnectItem();
+            scheduleRebuild();
         } catch (MirrorCaster.CastCancelledException cancelled) {
             log.info("{}", cancelled.getMessage());
             clearActive();
@@ -139,7 +176,17 @@ public class SystemTrayMenu {
     private void clearActive() {
         activeKey.set(null);
         deviceState.set(CastDeviceMenu.DeviceState.IDLE);
-        rebuildMenuNow();
+        refreshDisconnectItem();
+        scheduleRebuild();
+    }
+
+    private void refreshDisconnectItem() {
+        if (disconnectItem == null) {
+            return;
+        }
+        boolean connected = mirrorCaster.isConnected()
+                || deviceState.get() == CastDeviceMenu.DeviceState.CONNECTED;
+        disconnectItem.setEnabled(connected);
     }
 
     private void rebuildMenuNow() {
@@ -150,6 +197,7 @@ public class SystemTrayMenu {
                 new ArrayList<>(devices.get()),
                 activeKey.get(),
                 deviceState.get());
+        refreshDisconnectItem();
     }
 
     private String promptPinOnEdt(ServiceDiscovery.Info device) throws Exception {
@@ -169,18 +217,42 @@ public class SystemTrayMenu {
     }
 
     private void exitApp() {
-        castExecutor.execute(() -> {
-            try {
-                mirrorCaster.close();
-            } catch (Exception ignored) {
-            }
-        });
+        log.info("Exit requested — shutting down receiver");
+        try {
+            mirrorCaster.close();
+        } catch (Exception ignored) {
+        }
         castExecutor.shutdownNow();
         uiDebounce.shutdownNow();
+        disposeAwtKeepAlive();
         if (systemTray != null) {
             systemTray.shutdown();
         }
         SpringApplication.exit(context, () -> 0);
         System.exit(0);
+    }
+
+    /**
+     * Holds an AWT peer for the life of the app so disposing a PIN dialog or
+     * rebuilding the tray menu cannot trigger {@code AWTAutoShutdown → System.exit}.
+     */
+    private static Frame newAwtKeepAlive() {
+        Frame frame = new Frame("java-airplay");
+        frame.setType(Window.Type.UTILITY);
+        frame.setUndecorated(true);
+        frame.setBounds(-200, -200, 1, 1);
+        frame.setVisible(true);
+        return frame;
+    }
+
+    private void disposeAwtKeepAlive() {
+        if (awtKeepAlive == null) {
+            return;
+        }
+        try {
+            awtKeepAlive.setVisible(false);
+            awtKeepAlive.dispose();
+        } catch (Exception ignored) {
+        }
     }
 }
