@@ -69,10 +69,8 @@ public final class MirrorCaster implements AutoCloseable {
 
     public MirrorCaster(
             CastCredsStore credsStore, boolean mdnsLoopback, boolean castVideo, boolean castAudio) {
-        if (!castVideo && !castAudio) {
-            throw new IllegalArgumentException(
-                    "At least one of client.video.src / client.audio.src must be enabled");
-        }
+        // Both false is valid for a receive-only fat jar (discovery/tray still work;
+        // connect() refuses until at least one client.*.src is enabled).
         this.credsStore = credsStore;
         this.discovery = new ServiceDiscovery(mdnsLoopback);
         this.castVideo = castVideo;
@@ -100,6 +98,7 @@ public final class MirrorCaster implements AutoCloseable {
      * Explicit path: blank PIN → capability auto; non-blank → HKP persistent + DataStream.
      */
     public synchronized void connect(ServiceDiscovery.Info device, String pin) throws Exception {
+        requireCastMedia();
         disconnect();
         String normalized = pin == null ? "" : pin.trim().replace("-", "");
         if (normalized.isEmpty()) {
@@ -115,9 +114,18 @@ public final class MirrorCaster implements AutoCloseable {
      * legacy FairPlay and fall back to HKP (saved identity or PIN prompt).
      */
     public synchronized void connect(ServiceDiscovery.Info device, PinPrompt pinPrompt) throws Exception {
+        requireCastMedia();
         disconnect();
         session.set(connectAuto(device, pinPrompt));
         log.info("Casting → {} (video={}, audio={})", device, castVideo, castAudio);
+    }
+
+    private void requireCastMedia() {
+        if (!castVideo && !castAudio) {
+            throw new IllegalStateException(
+                    "Cast disabled: set client.video.src and/or client.audio.src "
+                            + "(not both none)");
+        }
     }
 
     public synchronized void disconnect() {

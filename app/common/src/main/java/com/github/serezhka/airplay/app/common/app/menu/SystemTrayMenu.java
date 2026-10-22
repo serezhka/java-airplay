@@ -78,7 +78,10 @@ public class SystemTrayMenu {
 
         mirrorCaster.startDiscovery(list -> {
             devices.set(List.copyOf(list));
-            log.info("Discovery update: {} device(s): {}", list.size(), list);
+            log.info("Discovery update: {} device(s)", list.size());
+            if (log.isDebugEnabled()) {
+                log.debug("Discovery devices: {}", list);
+            }
             scheduleRebuild();
         });
     }

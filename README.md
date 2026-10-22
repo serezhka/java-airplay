@@ -33,7 +33,8 @@
 
 - Cast synthetic test A/V (`client.video.src=videotest`, `client.audio.src=audiotest`)
   to another AirPlay receiver from the tray menu — useful for end-to-end send-path
-  checks without a camera or screen capture
+  checks without a camera or screen capture. AAC audiotest is sent on the legacy
+  FairPlay path; HAP/DataStream sessions are video-only today
 
 ## Quick start
 

@@ -6,6 +6,7 @@ import com.github.serezhka.airplay.app.common.dump.DumpConfig;
 import com.github.serezhka.airplay.server.AirPlayConfig;
 import com.github.serezhka.airplay.server.AirPlayServer;
 import com.github.serezhka.airplay.server.Playback;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -13,6 +14,7 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+@Slf4j
 @Configuration
 @EnableConfigurationProperties(ClientCastProperties.class)
 public class PlayerConfig {
@@ -31,6 +33,10 @@ public class PlayerConfig {
 
     @Bean(destroyMethod = "close")
     public MirrorCaster mirrorCaster(AirPlayConfig airPlayConfig, ClientCastProperties cast) {
+        if (!cast.videoEnabled() && !cast.audioEnabled()) {
+            log.info("Cast media disabled (client.video.src=none and client.audio.src=none); "
+                    + "receiver/discovery still run");
+        }
         return new MirrorCaster(
                 airPlayConfig.isMdnsLoopback(),
                 cast.videoEnabled(),
