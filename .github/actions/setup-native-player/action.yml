@@ -21,11 +21,26 @@ runs:
         sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list \
                    /etc/apt/sources.list.d/microsoft*.list \
                    /etc/apt/sources.list.d/azure-cli.list 2>/dev/null || true
-        sudo apt-get update -o Acquire::Retries=3
+        # azure.archive.ubuntu.com sometimes stalls with Ign/retry (~30s each) and can burn
+        # the whole playback job (~30 min) on gstreamer deps. Prefer archive.ubuntu.com and
+        # fail hung GETs quickly so the step times out instead of crawling to job timeout.
+        sudo sed -i \
+          -e 's|https\?://azure\.archive\.ubuntu\.com/ubuntu|http://archive.ubuntu.com/ubuntu|g' \
+          /etc/apt/sources.list \
+          /etc/apt/sources.list.d/*.list \
+          /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+        APT_OPTS=(
+          -o Acquire::Retries=2
+          -o Acquire::http::Timeout=20
+          -o Acquire::https::Timeout=20
+          -o Acquire::Languages=none
+        )
+        sudo apt-get update "${APT_OPTS[@]}"
         case "${{ inputs.player }}" in
           ffmpeg)
             # pulse null sink: ffplay PCM (mirror audio) needs SDL_AUDIODRIVER=pulse
-            sudo apt-get install -y ffmpeg xvfb pulseaudio
+            sudo apt-get install -y --no-install-recommends "${APT_OPTS[@]}" \
+              ffmpeg xvfb pulseaudio
             pulseaudio --check || pulseaudio --start --exit-idle-time=-1
             pactl load-module module-null-sink sink_name=ci_null 2>/dev/null || true
             pactl set-default-sink ci_null 2>/dev/null || true
@@ -33,7 +48,8 @@ runs:
           gstreamer)
             # libav = avdec_h264 (same soft decode as the app); x11 = ximagesink under xvfb;
             # pulse null sink so autoaudiosink has somewhere to go when not using appsink.
-            sudo apt-get install -y \
+            # plugins-bad: hlsdemux2 for playbin3 HLS.
+            sudo apt-get install -y --no-install-recommends "${APT_OPTS[@]}" \
               gstreamer1.0-tools \
               gstreamer1.0-plugins-base \
               gstreamer1.0-plugins-good \
