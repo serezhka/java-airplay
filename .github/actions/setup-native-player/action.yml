@@ -15,7 +15,13 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        sudo apt-get update
+        # GitHub ubuntu runners sometimes ship a packages.microsoft.com apt source that
+        # 403s and fails the whole job before ffmpeg/gstreamer install. Drop it; we only
+        # need Ubuntu archive packages for CI natives.
+        sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list \
+                   /etc/apt/sources.list.d/microsoft*.list \
+                   /etc/apt/sources.list.d/azure-cli.list 2>/dev/null || true
+        sudo apt-get update -o Acquire::Retries=3
         case "${{ inputs.player }}" in
           ffmpeg)
             # pulse null sink: ffplay PCM (mirror audio) needs SDL_AUDIODRIVER=pulse
