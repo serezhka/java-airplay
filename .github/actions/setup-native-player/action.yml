@@ -71,6 +71,7 @@ runs:
       if: runner.os == 'Windows' && inputs.player == 'ffmpeg'
       shell: pwsh
       run: |
+        # Floating "latest" zip — leave uncached (no pin).
         $dest = "$env:RUNNER_TEMP\ffmpeg"
         New-Item -ItemType Directory -Force -Path $dest | Out-Null
         Invoke-WebRequest -Uri 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip' -OutFile "$env:RUNNER_TEMP\ffmpeg.zip"
@@ -79,14 +80,28 @@ runs:
         Copy-Item -Recurse -Force "$($inner.FullName)\*" $dest
         Add-Content $env:GITHUB_PATH "$dest\bin"
 
+    # MSI URL is already versioned; cache that one file. apt and FFmpeg "latest" stay uncached.
+    - name: Cache Windows GStreamer MSI
+      if: runner.os == 'Windows' && inputs.player == 'gstreamer'
+      id: gst-msi-cache
+      uses: actions/cache@v6
+      with:
+        path: ${{ runner.temp }}/gstreamer.msi
+        # Keep in sync with $ver in the install step below.
+        key: gstreamer-msi-1.26.11-msvc_x86_64
+
     - name: Windows GStreamer
       if: runner.os == 'Windows' && inputs.player == 'gstreamer'
       shell: pwsh
+      env:
+        GST_MSI_CACHE_HIT: ${{ steps.gst-msi-cache.outputs.cache-hit }}
       run: |
         $ver = '1.26.11'
         $msi = "$env:RUNNER_TEMP\gstreamer.msi"
         $prefix = 'C:\gstreamer\1.0\msvc_x86_64'
-        Invoke-WebRequest -Uri "https://gstreamer.freedesktop.org/data/pkg/windows/$ver/msvc/gstreamer-1.0-msvc-x86_64-$ver.msi" -OutFile $msi
+        if ($env:GST_MSI_CACHE_HIT -ne 'true' -or -not (Test-Path $msi)) {
+          Invoke-WebRequest -Uri "https://gstreamer.freedesktop.org/data/pkg/windows/$ver/msvc/gstreamer-1.0-msvc_x86_64-$ver.msi" -OutFile $msi
+        }
         Start-Process msiexec.exe -Wait -ArgumentList "/a `"$msi`" /qn TARGETDIR=$prefix"
         $exe = Get-ChildItem $prefix -Recurse -Filter gst-launch-1.0.exe -ErrorAction SilentlyContinue | Select-Object -First 1
         if (-not $exe) { throw "gst-launch-1.0 missing after MSI extract under $prefix" }
@@ -95,7 +110,7 @@ runs:
         Add-Content $env:GITHUB_PATH $bin
         Add-Content $env:GITHUB_ENV "GSTREAMER_1_0_ROOT_MSVC_X86_64=$root"
         Add-Content $env:GITHUB_ENV "GSTREAMER_BIN=$bin"
-        # ffmpeg for HLS fixture generation in GST tests
+        # ffmpeg for HLS fixture generation — floating latest, uncached
         $ff = "$env:RUNNER_TEMP\ffmpeg"
         New-Item -ItemType Directory -Force -Path $ff | Out-Null
         Invoke-WebRequest -Uri 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip' -OutFile "$env:RUNNER_TEMP\ffmpeg.zip"
