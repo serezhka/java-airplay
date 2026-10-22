@@ -2,7 +2,9 @@ package com.github.serezhka.airplay.client.cast;
 
 import com.dd.plist.NSArray;
 import com.dd.plist.NSDictionary;
+import com.github.serezhka.airplay.client.audio.AudioClient;
 import com.github.serezhka.airplay.client.control.ControlClient;
+import com.github.serezhka.airplay.client.crypto.FairPlayAudioEncryptor;
 import com.github.serezhka.airplay.client.crypto.FairPlayVideoEncryptor;
 import com.github.serezhka.airplay.client.discovery.ServiceDiscovery;
 import com.github.serezhka.airplay.client.hap.HapMirrorSession;
@@ -14,7 +16,6 @@ import com.github.serezhka.airplay.client.video.VideoClient;
 import com.github.serezhka.airplay.protocol.media.AirPlayStreamType;
 import lombok.extern.slf4j.Slf4j;
 
-import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
@@ -23,9 +24,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 /**
- * Discover AirPlay receivers and stream H.264 from the installed {@code CaptureSource}.
- * Path selection is capability-based (mDNS flags / features + handshake probes),
- * not tied to a particular receiver implementation.
+ * Discover AirPlay receivers and stream from installed {@code CaptureSource} /
+ * {@code AudioSource} factories ({@code client.video.src} / {@code client.audio.src}).
  */
 @Slf4j
 public final class MirrorCaster implements AutoCloseable {
@@ -46,24 +46,37 @@ public final class MirrorCaster implements AutoCloseable {
 
     private final ServiceDiscovery discovery;
     private final CastCredsStore credsStore;
+    private final boolean castVideo;
+    private final boolean castAudio;
     private final AtomicReference<Session> session = new AtomicReference<>();
 
     public MirrorCaster() {
-        this(false);
+        this(false, true, true);
     }
 
     /** @param mdnsLoopback include loopback in discovery (self-cast / CI) */
     public MirrorCaster(boolean mdnsLoopback) {
-        this(new CastCredsStore(), mdnsLoopback);
+        this(mdnsLoopback, true, true);
+    }
+
+    public MirrorCaster(boolean mdnsLoopback, boolean castVideo, boolean castAudio) {
+        this(new CastCredsStore(), mdnsLoopback, castVideo, castAudio);
     }
 
     public MirrorCaster(CastCredsStore credsStore) {
-        this(credsStore, false);
+        this(credsStore, false, true, true);
     }
 
-    public MirrorCaster(CastCredsStore credsStore, boolean mdnsLoopback) {
+    public MirrorCaster(
+            CastCredsStore credsStore, boolean mdnsLoopback, boolean castVideo, boolean castAudio) {
+        if (!castVideo && !castAudio) {
+            throw new IllegalArgumentException(
+                    "At least one of client.video.src / client.audio.src must be enabled");
+        }
         this.credsStore = credsStore;
         this.discovery = new ServiceDiscovery(mdnsLoopback);
+        this.castVideo = castVideo;
+        this.castAudio = castAudio;
     }
 
     public List<ServiceDiscovery.Info> discover() {
@@ -94,7 +107,7 @@ public final class MirrorCaster implements AutoCloseable {
         } else {
             session.set(connectWithPin(device, normalized));
         }
-        log.info("Casting → {}", device);
+        log.info("Casting → {} (video={}, audio={})", device, castVideo, castAudio);
     }
 
     /**
@@ -104,7 +117,7 @@ public final class MirrorCaster implements AutoCloseable {
     public synchronized void connect(ServiceDiscovery.Info device, PinPrompt pinPrompt) throws Exception {
         disconnect();
         session.set(connectAuto(device, pinPrompt));
-        log.info("Casting → {}", device);
+        log.info("Casting → {} (video={}, audio={})", device, castVideo, castAudio);
     }
 
     public synchronized void disconnect() {
@@ -156,6 +169,8 @@ public final class MirrorCaster implements AutoCloseable {
 
     private Session connectLegacy(ServiceDiscovery.Info device) throws Exception {
         ControlClient control = new ControlClient(device.address(), device.port());
+        VideoClient video = null;
+        AudioClient audio = null;
         try {
             control.requestInfo();
             LegacyFairPlayHandshake.Result fp = LegacyFairPlayHandshake.perform(control);
@@ -165,25 +180,54 @@ public final class MirrorCaster implements AutoCloseable {
             phase1.put("eiv", EIV);
             control.rtspSetup(phase1);
 
-            NSArray videoStreams = new NSArray(1);
-            NSDictionary videoStream = new NSDictionary();
-            videoStream.put("type", AirPlayStreamType.SCREEN);
-            videoStream.put("streamConnectionID", STREAM_CONNECTION_ID);
-            videoStreams.setValue(0, videoStream);
-            NSDictionary streamsReq = new NSDictionary();
-            streamsReq.put("streams", videoStreams);
-            NSDictionary videoSetup = control.rtspSetup(streamsReq);
-            if (videoSetup == null || !videoSetup.containsKey("streams")) {
-                throw new IllegalStateException("legacy video SETUP returned no streams");
+            if (castVideo) {
+                NSArray videoStreams = new NSArray(1);
+                NSDictionary videoStream = new NSDictionary();
+                videoStream.put("type", AirPlayStreamType.SCREEN);
+                videoStream.put("streamConnectionID", STREAM_CONNECTION_ID);
+                videoStreams.setValue(0, videoStream);
+                NSDictionary streamsReq = new NSDictionary();
+                streamsReq.put("streams", videoStreams);
+                NSDictionary videoSetup = control.rtspSetup(streamsReq);
+                if (videoSetup == null || !videoSetup.containsKey("streams")) {
+                    throw new IllegalStateException("legacy video SETUP returned no streams");
+                }
+                int videoPort = ((NSDictionary) ((NSArray) videoSetup.get("streams")).getArray()[0])
+                        .get("dataPort").toJavaObject(Integer.class);
+                FairPlayVideoEncryptor encryptor = new FairPlayVideoEncryptor(
+                        fp.aesKey(), fp.sharedSecret(), Long.toUnsignedString(STREAM_CONNECTION_ID));
+                video = new VideoClient(device.address(), videoPort, encryptor);
             }
-            int videoPort = ((NSDictionary) ((NSArray) videoSetup.get("streams")).getArray()[0])
-                    .get("dataPort").toJavaObject(Integer.class);
 
-            FairPlayVideoEncryptor encryptor = new FairPlayVideoEncryptor(
-                    fp.aesKey(), fp.sharedSecret(), Long.toUnsignedString(STREAM_CONNECTION_ID));
-            VideoClient video = new VideoClient(device.address(), videoPort, encryptor);
-            return new Session(device, control, video, null);
+            if (castAudio) {
+                NSArray audioStreams = new NSArray(1);
+                NSDictionary audioStream = new NSDictionary();
+                audioStream.put("type", AirPlayStreamType.AUDIO_REALTIME);
+                audioStream.put("ct", 4); // AAC
+                audioStream.put("audioFormat", 0x400000); // AAC_LC_44100_2
+                audioStream.put("spf", 1024);
+                audioStreams.setValue(0, audioStream);
+                NSDictionary audioReq = new NSDictionary();
+                audioReq.put("streams", audioStreams);
+                NSDictionary audioSetup = control.rtspSetup(audioReq);
+                if (audioSetup == null || !audioSetup.containsKey("streams")) {
+                    throw new IllegalStateException("legacy audio SETUP returned no streams");
+                }
+                int audioPort = ((NSDictionary) ((NSArray) audioSetup.get("streams")).getArray()[0])
+                        .get("dataPort").toJavaObject(Integer.class);
+                FairPlayAudioEncryptor audioEncryptor =
+                        new FairPlayAudioEncryptor(fp.aesKey(), EIV, fp.sharedSecret());
+                audio = new AudioClient(device.address(), audioPort, audioEncryptor);
+            }
+
+            return new Session(device, control, video, audio, null);
         } catch (Exception e) {
+            if (audio != null) {
+                audio.close();
+            }
+            if (video != null) {
+                video.close();
+            }
             control.close();
             throw e;
         }
@@ -273,8 +317,8 @@ public final class MirrorCaster implements AutoCloseable {
                 pairing.getAccessoryLtpk()));
         log.info("Saved cast creds for {} → {}", deviceId, credsStore.path());
         HapMirrorSession hap = HapMirrorSession.startDataStream(
-                control, device.address(), device.port(), shared);
-        return new Session(device, null, null, hap);
+                control, device.address(), device.port(), shared, castVideo, castAudio);
+        return new Session(device, null, null, null, hap);
     }
 
     private Session connectWithIdentity(ServiceDiscovery.Info device, CastCredsStore.Entry entry)
@@ -293,9 +337,9 @@ public final class MirrorCaster implements AutoCloseable {
             byte[] shared = pairing.pairVerify(control, verifyAccessory);
             control.enableControlEncryption(shared);
             HapMirrorSession hap = HapMirrorSession.startDataStream(
-                    control, device.address(), device.port(), shared);
+                    control, device.address(), device.port(), shared, castVideo, castAudio);
             transferred = true;
-            return new Session(device, null, null, hap);
+            return new Session(device, null, null, null, hap);
         } finally {
             if (!transferred) {
                 try {
@@ -328,12 +372,16 @@ public final class MirrorCaster implements AutoCloseable {
             ServiceDiscovery.Info device,
             ControlClient control,
             VideoClient video,
+            AudioClient audio,
             HapMirrorSession hap) implements AutoCloseable {
         @Override
         public void close() {
             if (hap != null) {
                 hap.close();
                 return;
+            }
+            if (audio != null) {
+                audio.close();
             }
             if (video != null) {
                 video.close();

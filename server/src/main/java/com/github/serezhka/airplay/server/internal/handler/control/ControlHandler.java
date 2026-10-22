@@ -1,28 +1,19 @@
 package com.github.serezhka.airplay.server.internal.handler.control;
 
 import com.dd.plist.BinaryPropertyListParser;
-import com.dd.plist.NSData;
 import com.dd.plist.NSDictionary;
 import com.dd.plist.PropertyListParser;
 import com.github.serezhka.airplay.protocol.media.AudioStreamInfo;
 import com.github.serezhka.airplay.protocol.media.VideoStreamInfo;
 import com.github.serezhka.airplay.server.AirPlayConfig;
 import com.github.serezhka.airplay.server.Playback;
-import com.github.serezhka.airplay.server.ControlExchange;
-import com.github.serezhka.airplay.server.internal.handler.session.HlsPlaylistState;
-import com.github.serezhka.airplay.server.internal.handler.session.HlsUriRewrite;
-import com.github.serezhka.airplay.server.internal.handler.session.PlaylistRequest;
 import com.github.serezhka.airplay.server.internal.handler.session.Session;
 import com.github.serezhka.airplay.server.internal.handler.session.SessionManager;
 import com.github.serezhka.airplay.server.internal.handler.util.AirPlayVolume;
 import com.github.serezhka.airplay.server.internal.handler.util.PropertyListUtil;
-import io.lindstrom.m3u8.parser.MediaPlaylistParser;
-import io.lindstrom.m3u8.parser.ParsingMode;
-import io.lindstrom.m3u8.parser.PlaylistParserException;
 import io.netty.buffer.ByteBufInputStream;
 import io.netty.buffer.ByteBufOutputStream;
 import io.netty.buffer.ByteBufUtil;
-import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.socket.ServerSocketChannel;
@@ -32,13 +23,7 @@ import io.netty.util.ReferenceCountUtil;
 import lombok.extern.slf4j.Slf4j;
 
 import java.nio.charset.StandardCharsets;
-import java.time.Instant;
-import java.util.Base64;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.TimeUnit;
 
 @Slf4j
 public class ControlHandler extends ChannelInboundHandlerAdapter {
@@ -46,6 +31,8 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     private final SessionManager sessionManager;
     private final HlsFcupService hlsFcupService;
     private final HlsSessionControl hlsSession;
+    private final HlsPlaylistHttp hlsPlaylistHttp;
+    private final ControlResponses responses;
     private final AirPlayConfig airPlayConfig;
     private final Playback airPlayConsumer;
 
@@ -58,6 +45,9 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         this.hlsSession = new HlsSessionControl(sessionManager, hlsFcupService, airPlayConsumer);
         this.airPlayConfig = airPlayConfig;
         this.airPlayConsumer = airPlayConsumer;
+        this.responses = new ControlResponses(airPlayConsumer, () -> pendingRequestBody);
+        this.hlsPlaylistHttp = new HlsPlaylistHttp(
+                sessionManager, hlsFcupService, hlsSession, airPlayConsumer, responses);
     }
 
     @Override
@@ -129,9 +119,9 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                     handleRtspAnnounce(ctx, request);
                 } else {
                     log.error("Unknown control request: {} {} {}", request.protocolVersion(), request.method(), request.uri());
-                    var response = createRtspResponse(request);
+                    var response = responses.createRtspResponse(request);
                     response.setStatus(HttpResponseStatus.NOT_FOUND);
-                    sendResponse(ctx, request, response);
+                    responses.sendResponse(ctx, request, response);
                 }
             } else if (HttpVersion.HTTP_1_1.equals(request.protocolVersion())) {
                 var decoder = new QueryStringDecoder(request.uri());
@@ -162,11 +152,11 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                         && (decoder.path().equals("/stop") || decoder.path().equals("/stop2"))) {
                     handleStop(ctx, request);
                 } else if (HttpMethod.GET.equals(request.method()) && decoder.path().startsWith("/playlist")) {
-                    handleGetPlaylist(ctx, request);
+                    hlsPlaylistHttp.handleGetPlaylist(ctx, request);
                 } else {
                     log.error("Unknown control request: {} {} {}", request.protocolVersion(), request.method(), request.uri());
                     var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.NOT_FOUND);
-                    sendResponse(ctx, request, response);
+                    responses.sendResponse(ctx, request, response);
                 }
             }
     }
@@ -187,37 +177,37 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
 
     private void handleGetInfo(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
         var info = PropertyListUtil.prepareInfoResponse(airPlayConfig, sessionManager.pairingPublicKey());
-        var response = createRtspResponse(request);
+        var response = responses.createRtspResponse(request);
         response.content().writeBytes(info);
-        sendResponse(ctx, request, response);
+        responses.sendResponse(ctx, request, response);
     }
 
     private void handlePairSetup(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
         var session = resolveSession(request);
-        var response = createRtspResponse(request);
+        var response = responses.createRtspResponse(request);
         session.getAirPlay().pairSetup(new ByteBufOutputStream(response.content()));
-        sendResponse(ctx, request, response);
+        responses.sendResponse(ctx, request, response);
     }
 
     private void handlePairVerify(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
         var session = resolveSession(request);
-        var response = createRtspResponse(request);
+        var response = responses.createRtspResponse(request);
         session.getAirPlay().pairVerify(new ByteBufInputStream(request.content()),
                 new ByteBufOutputStream(response.content()));
-        sendResponse(ctx, request, response);
+        responses.sendResponse(ctx, request, response);
     }
 
     private void handleFairPlaySetup(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
         var session = resolveSession(request);
-        var response = createRtspResponse(request);
+        var response = responses.createRtspResponse(request);
         session.getAirPlay().fairPlaySetup(new ByteBufInputStream(request.content()),
                 new ByteBufOutputStream(response.content()));
-        sendResponse(ctx, request, response);
+        responses.sendResponse(ctx, request, response);
     }
 
     private void handleRtspSetup(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
         var session = resolveSession(request);
-        var response = createRtspResponse(request);
+        var response = responses.createRtspResponse(request);
         var mediaStreamInfo = session.getAirPlay().rtspSetup(new ByteBufInputStream(request.content()));
         if (mediaStreamInfo.isPresent()) {
             switch (mediaStreamInfo.get().getStreamType()) {
@@ -244,12 +234,12 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 }
             }
         }
-        sendResponse(ctx, request, response);
+        responses.sendResponse(ctx, request, response);
     }
 
     private void handleRtspFeedback(ChannelHandlerContext ctx, FullHttpRequest request) {
-        var response = createRtspResponse(request);
-        sendResponse(ctx, request, response);
+        var response = responses.createRtspResponse(request);
+        responses.sendResponse(ctx, request, response);
     }
 
     /**
@@ -258,33 +248,33 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
      */
     private void handleRtspOptions(ChannelHandlerContext ctx, FullHttpRequest request) {
         log.debug("RTSP OPTIONS {}", request.uri());
-        var response = createRtspResponse(request);
+        var response = responses.createRtspResponse(request);
         response.headers().add(RtspHeaderNames.PUBLIC,
                 "ANNOUNCE, SETUP, RECORD, FLUSH, TEARDOWN, OPTIONS, GET_PARAMETER, SET_PARAMETER, POST, GET");
         response.headers().add("Audio-Jack-Status", "connected; type=analog");
-        sendResponse(ctx, request, response);
+        responses.sendResponse(ctx, request, response);
     }
 
     /** Speaker setup follows OPTIONS with an SDP body. Accept it and keep the session open. */
     private void handleRtspAnnounce(ChannelHandlerContext ctx, FullHttpRequest request) {
         String body = request.content().toString(StandardCharsets.US_ASCII).replaceAll("\\s+", " ").trim();
         log.debug("RTSP ANNOUNCE {}", body.length() > 400 ? body.substring(0, 400) : body);
-        var response = createRtspResponse(request);
-        sendResponse(ctx, request, response);
+        var response = responses.createRtspResponse(request);
+        responses.sendResponse(ctx, request, response);
     }
 
     private void handleRtspGetParameter(ChannelHandlerContext ctx, FullHttpRequest request) {
         byte[] content = AirPlayVolume.formatRtspParameter(airPlayConsumer.volume()).getBytes(StandardCharsets.US_ASCII);
-        var response = createRtspResponse(request);
+        var response = responses.createRtspResponse(request);
         response.content().writeBytes(content);
-        sendResponse(ctx, request, response);
+        responses.sendResponse(ctx, request, response);
     }
 
     private void handleRtspRecord(ChannelHandlerContext ctx, FullHttpRequest request) {
-        var response = createRtspResponse(request);
+        var response = responses.createRtspResponse(request);
         response.headers().add("Audio-Latency", "11025");
         response.headers().add("Audio-Jack-Status", "connected; type=analog");
-        sendResponse(ctx, request, response);
+        responses.sendResponse(ctx, request, response);
     }
 
     private void handleRtspSetParameter(ChannelHandlerContext ctx, FullHttpRequest request) {
@@ -304,14 +294,14 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 }
             }
         }
-        var response = createRtspResponse(request);
+        var response = responses.createRtspResponse(request);
         response.headers().add("Audio-Jack-Status", "connected; type=analog");
-        sendResponse(ctx, request, response);
+        responses.sendResponse(ctx, request, response);
     }
 
     private void handleRtspFlush(ChannelHandlerContext ctx, FullHttpRequest request) {
-        var response = createRtspResponse(request);
-        sendResponse(ctx, request, response);
+        var response = responses.createRtspResponse(request);
+        responses.sendResponse(ctx, request, response);
     }
 
     private void handleRtspTeardown(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
@@ -341,13 +331,13 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 hlsSession.stopHlsPlayback(session);
             }
         }
-        var response = createRtspResponse(request);
-        sendResponse(ctx, request, response);
+        var response = responses.createRtspResponse(request);
+        responses.sendResponse(ctx, request, response);
     }
 
     private void handleRtspAudioMode(ChannelHandlerContext ctx, FullHttpRequest request) {
-        var response = createRtspResponse(request);
-        sendResponse(ctx, request, response);
+        var response = responses.createRtspResponse(request);
+        responses.sendResponse(ctx, request, response);
     }
 
     private void handleGetServerInfo(ChannelHandlerContext ctx, FullHttpRequest request) {
@@ -355,7 +345,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
         response.headers().add(HttpHeaderNames.CONTENT_TYPE, "text/x-apple-plist+xml");
         response.content().writeBytes(serverInfo);
-        sendResponse(ctx, request, response);
+        responses.sendResponse(ctx, request, response);
     }
 
     /**
@@ -365,14 +355,14 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
      */
     private void handleHttpFairPlaySetupAck(ChannelHandlerContext ctx, FullHttpRequest request) {
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
-        sendResponse(ctx, request, response);
+        responses.sendResponse(ctx, request, response);
     }
 
     private void handleReverse(ChannelHandlerContext ctx, FullHttpRequest request) {
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.SWITCHING_PROTOCOLS);
         response.headers().add(HttpHeaderNames.UPGRADE, request.headers().get(HttpHeaderNames.UPGRADE));
         response.headers().add(HttpHeaderNames.CONNECTION, HttpHeaderValues.UPGRADE);
-        sendResponse(ctx, request, response);
+        responses.sendResponse(ctx, request, response);
 
         var purpose = request.headers().get("X-Apple-Purpose");
         ctx.pipeline().remove(RtspDecoder.class);
@@ -414,19 +404,19 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 : null;
         if (playlistUri != null && !playlistUri.isBlank()) {
             var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
-            sendResponse(ctx, request, response);
+            responses.sendResponse(ctx, request, response);
             String itemUuid = play.get("uuid") != null ? play.get("uuid").toJavaObject(String.class) : null;
             hlsSession.startMediaPlaylist(
                     resolveSession(request),
                     playlistUri,
-                    playlistBaseUrl(ctx),
+                    hlsPlaylistHttp.playlistBaseUrl(ctx),
                     clientProcName,
                     startPositionSeconds,
                     itemUuid);
         } else {
             log.error("Client proc name [{}] has no Content-Location playlist", clientProcName);
             var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.NOT_IMPLEMENTED);
-            sendResponse(ctx, request, response);
+            responses.sendResponse(ctx, request, response);
         }
     }
 
@@ -456,7 +446,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         }
 
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
-        sendResponse(ctx, request, response);
+        responses.sendResponse(ctx, request, response);
     }
 
     private void handleRate(ChannelHandlerContext ctx, FullHttpRequest request) {
@@ -471,7 +461,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         if (hls != null && hls.isWaitingForMasterChange()) {
             log.debug("Ignoring rate={} while waiting for next HLS item session={}", value, session.getId());
             var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
-            sendResponse(ctx, request, response);
+            responses.sendResponse(ctx, request, response);
             return;
         }
 
@@ -510,7 +500,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         }
 
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
-        sendResponse(ctx, request, response);
+        responses.sendResponse(ctx, request, response);
     }
 
     private void handleScrub(ChannelHandlerContext ctx, FullHttpRequest request) {
@@ -544,7 +534,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             log.warn("POST /scrub without position: {}", request.uri());
         }
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
-        sendResponse(ctx, request, response);
+        responses.sendResponse(ctx, request, response);
     }
 
     private void handleStop(ChannelHandlerContext ctx, FullHttpRequest request) {
@@ -553,7 +543,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         log.info("SESSION mode=STOP path={} session={}", path, session.getId());
         hlsSession.stopHlsPlayback(session);
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
-        sendResponse(ctx, request, response);
+        responses.sendResponse(ctx, request, response);
     }
 
     private void handlePlaybackInfo(ChannelHandlerContext ctx, FullHttpRequest request) {
@@ -563,7 +553,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
         response.headers().add(HttpHeaderNames.CONTENT_TYPE, "text/x-apple-plist+xml");
         response.content().writeBytes(PropertyListUtil.preparePlaybackInfoResponse(playbackInfo));
-        sendResponse(ctx, request, response);
+        responses.sendResponse(ctx, request, response);
     }
 
     private void handleAction(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
@@ -575,7 +565,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         var type = action.get("type").toJavaObject(String.class);
         log.debug("Action type: {}", type);
         if ("unhandledURLResponse".equals(type)) {
-            handleUnhandledUrlResponse(ctx, request, action);
+            hlsPlaylistHttp.handleUnhandledUrlResponse(ctx, request, action);
         } else if ("playlistRemove".equals(type)) {
             hlsSession.stopHlsPlayback(resolveSession(request));
         } else if ("playlistInsert".equals(type)) {
@@ -583,7 +573,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         }
 
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
-        sendResponse(ctx, request, response);
+        responses.sendResponse(ctx, request, response);
     }
 
     private void handlePlaylistInsert(ChannelHandlerContext ctx, FullHttpRequest request, NSDictionary action) {
@@ -600,7 +590,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         String itemUuid = item.get("uuid") != null ? item.get("uuid").toJavaObject(String.class) : null;
         log.debug("playlistInsert Content-Location={} from [{}]", playlistUri, clientProcName);
         hlsSession.startMediaPlaylist(
-                resolveSession(request), playlistUri, playlistBaseUrl(ctx), clientProcName, null, itemUuid);
+                resolveSession(request), playlistUri, hlsPlaylistHttp.playlistBaseUrl(ctx), clientProcName, null, itemUuid);
     }
 
     private void handleGetProperty(ChannelHandlerContext ctx, FullHttpRequest request) {
@@ -614,7 +604,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         byte[] body = PropertyListUtil.prepareEmptyPropertyResponse();
         response.content().writeBytes(body);
         HttpUtil.setContentLength(response, body.length);
-        sendResponse(ctx, request, response);
+        responses.sendResponse(ctx, request, response);
     }
 
     private NSDictionary parseActionPlist(FullHttpRequest request) throws Exception {
@@ -627,299 +617,5 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         }
     }
 
-    private void handleUnhandledUrlResponse(ChannelHandlerContext ctx, FullHttpRequest request, NSDictionary action) {
-        var params = action.get("params") instanceof NSDictionary dictionary ? dictionary : null;
-        if (params == null || params.get("FCUP_Response_URL") == null) {
-            log.warn("FCUP response is missing URL: {}", action.toXMLPropertyList());
-            return;
-        }
-        var fcupResponseURL = normalizeFcupUrl(params.get("FCUP_Response_URL").toJavaObject(String.class));
-        var session = resolveSession(request);
-        if (params.get("FCUP_Response_Data") == null) {
-            log.warn("FCUP response without data: url={}, session={}", fcupResponseURL, session.getId());
-            var hls = session.getHlsPlaylistState();
-            if (hls != null && !hls.isWaitingForMasterChange()) {
-                continueMediaPrefetch(session, hls);
-            }
-            return;
-        }
-        var fcupResponseBase64 = ((NSData) params.get("FCUP_Response_Data")).getBase64EncodedData();
-        var fcupResponse = new String(Base64.getDecoder().decode(fcupResponseBase64), StandardCharsets.UTF_8);
-        log.debug("FCUP response: url={}, bytes={}, session={}", fcupResponseURL, fcupResponse.length(), session.getId());
 
-        String body;
-        List<String> remoteMediaUris = null;
-        try {
-            if (fcupResponseURL.contains("master.m3u8")) {
-                var rewritten = rewriteMasterPlaylist(fcupResponse, playlistBaseUrl(ctx), session.getId());
-                body = rewritten.localBody();
-                remoteMediaUris = rewritten.remoteMediaUris();
-            } else if (fcupResponseURL.contains("mediadata.m3u8")) {
-                body = mediaPlaylistBody(fcupResponse);
-            } else {
-                body = fcupResponse;
-            }
-        } catch (Exception e) {
-            log.warn("Failed to rewrite playlist {}, forwarding raw FCUP body", fcupResponseURL, e);
-            body = fcupResponse;
-        }
-
-        var hls = session.getHlsPlaylistState();
-        if (hls != null) {
-            try {
-                if (fcupResponseURL.contains("master.m3u8")) {
-                    if (hls.isPlaybackStarted()) {
-                        hlsFcupService.onMasterRefreshDuringPlayback(session, body, fcupResponse, remoteMediaUris);
-                    } else {
-                        hls.storeMasterPlaylist(body, remoteMediaUris);
-                        hls.recordRawMasterIfChanged(fcupResponse);
-                        log.debug("HLS master received: {} media playlists queued ({} video), state={}",
-                                hls.pendingMediaUriCount(), hls.videoMediaUriCount(), hls);
-                        // Wait for at least one video mediadata before starting the player.
-                        // Starting on master alone (many audio-language alts first) can
-                        // report EOS on a wall-clock while no video fragments are ready.
-                        if (!hls.isPlaybackStarted()) {
-                            hlsSession.schedulePlaybackStartFallback(session, hls);
-                        }
-                    }
-                } else {
-                    hls.putPlaylist(fcupResponseURL, body);
-                    hlsSession.maybeStartHlsPlayback(session, hls, "mediadata ready");
-                }
-            } catch (Exception e) {
-                log.warn("Failed to update HLS state for {}", fcupResponseURL, e);
-                hls.putPlaylist(fcupResponseURL, body);
-                hlsSession.maybeStartHlsPlayback(session, hls, "mediadata ready after error");
-            }
-            airPlayConsumer.onPlaylistContent(fcupResponseURL, body);
-
-            replyPendingPlaylists(session, fcupResponseURL, body);
-
-            if (hls.isPostEosMediaRefreshing()) {
-                // Only advance on mediadata responses — master handler already queued the first URI.
-                if (fcupResponseURL.contains("mediadata.m3u8")) {
-                    if (hls.hasMoreMediaUris()) {
-                        hlsFcupService.sendFcupRequest(session, hls.nextMediaUri());
-                    } else {
-                        hlsFcupService.onPostEosMediaRefreshComplete(session);
-                    }
-                }
-            } else if (!hls.isWaitingForMasterChange()) {
-                continueMediaPrefetch(session, hls);
-            }
-            return;
-        }
-
-        if (replyPendingPlaylists(session, fcupResponseURL, body)) {
-            airPlayConsumer.onPlaylistContent(fcupResponseURL, body);
-        } else {
-            log.warn("No pending GET /playlist for {}", fcupResponseURL);
-        }
-    }
-
-    private void continueMediaPrefetch(Session session, HlsPlaylistState hls) {
-        if (hls.hasMoreMediaUris()) {
-            hlsFcupService.sendFcupRequest(session, hls.nextMediaUri());
-        }
-    }
-
-    private boolean replyPendingPlaylists(Session session, String remoteUri, String body) {
-        PlaylistRequest pending;
-        boolean replied = false;
-        while ((pending = session.pollPlaylistRequest(remoteUri)) != null) {
-            replyPlaylist(pending, body);
-            replied = true;
-        }
-        return replied;
-    }
-
-    private String mediaPlaylistBody(String fcupResponse) throws PlaylistParserException {
-        var parser = new MediaPlaylistParser(ParsingMode.LENIENT);
-        var mediaPlaylist = HlsCondensedUrls.expand(parser.readPlaylist(fcupResponse));
-        return parser.writePlaylistAsString(mediaPlaylist);
-    }
-
-    private void replyPlaylist(PlaylistRequest pending, String body) {
-        var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
-        response.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/vnd.apple.mpegurl");
-        response.content().writeCharSequence(body == null ? "" : body, StandardCharsets.UTF_8);
-        HttpUtil.setContentLength(response, response.content().readableBytes());
-        publishControlExchange(pending, response);
-        var future = pending.context().writeAndFlush(response);
-        if (!pending.keepAlive()) {
-            future.addListener(ChannelFutureListener.CLOSE);
-        }
-    }
-
-    private void handleGetPlaylist(ChannelHandlerContext ctx, FullHttpRequest request) {
-        var playlistUriRemote = playlistPathToRemote(request.uri());
-        var decoder = new QueryStringDecoder(request.uri());
-        var session = sessionManager.getSession(decoder.parameters().get("session").get(0));
-
-        var pending = new PlaylistRequest(
-                ctx,
-                request.protocolVersion().text(),
-                request.method().name(),
-                request.uri(),
-                copyHeaders(request.headers()),
-                ByteBufUtil.getBytes(request.content()),
-                HttpUtil.isKeepAlive(request));
-
-        var hls = session.getHlsPlaylistState();
-        var cached = hls != null ? hls.getPlaylist(playlistUriRemote) : null;
-        boolean isMasterPlaylist = playlistUriRemote.contains("master.m3u8");
-        // Prefer cache so the consumer is not blocked; re-FCUP in the background so live
-        // mediadata keeps growing (stale cache freezes livestreams after the first window).
-        boolean refreshPlaylist = isMasterPlaylist && hls != null && hls.isPlaybackStarted() && cached == null;
-
-        if (cached != null) {
-            log.debug("Serving cached playlist {}", playlistUriRemote);
-            replyPlaylist(pending, cached);
-            if (hls != null && hls.isPlaybackStarted()
-                    && hls.shouldRefreshPlaylist(playlistUriRemote, TimeUnit.MILLISECONDS.toNanos(1500))) {
-                hlsFcupService.sendFcupRequest(session, playlistUriRemote);
-            }
-            return;
-        }
-
-        session.enqueuePlaylistRequest(playlistUriRemote, pending);
-        recordPendingPlaylistRequest(pending);
-
-        if (cached == null && (refreshPlaylist || hls == null || !hls.hasMoreMediaUris())) {
-            log.debug("GET /playlist {} requesting FCUP", playlistUriRemote);
-            hlsFcupService.sendFcupRequest(session, playlistUriRemote);
-        } else {
-            log.debug("GET /playlist {} waiting for HLS prefetch ({})", playlistUriRemote, hls);
-        }
-    }
-
-    private void recordPendingPlaylistRequest(PlaylistRequest pending) {
-        var processing = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.PROCESSING);
-        publishControlExchange(pending, processing);
-    }
-
-    private String playlistPathToRemote(String playlistPath) {
-        var playlistUriLocal = "mlhls://localhost" + playlistPath.replace("/playlist", "");
-        return playlistUriLocal.split("\\?")[0]; // remove query
-    }
-
-    private String playlistBaseUrl(ChannelHandlerContext ctx) {
-        var port = ((ServerSocketChannel) ctx.channel().parent()).localAddress().getPort();
-        // Use IPv4 loopback: on Windows "localhost" often resolves to ::1 while the
-        // control server listens on IPv4, so the local HLS consumer cannot fetch playlists.
-        return String.format("http://127.0.0.1:%s/playlist", port);
-    }
-
-    private String masterPlaylistToLocalUrls(String masterPlaylist, String baseUrl, String sessionId) {
-        return rewriteMasterPlaylist(masterPlaylist, baseUrl, sessionId).localBody();
-    }
-
-    private record MasterRewrite(String localBody, List<String> remoteMediaUris) {
-    }
-
-    /**
-     * Prefer AVC on the remote (mlhls) master so FCUP URIs stay mlhls://…,
-     * then rewrite those URIs to local http for the media consumer.
-     */
-    private MasterRewrite rewriteMasterPlaylist(String masterPlaylist, String baseUrl, String sessionId) {
-        String filteredRemote = HlsUriRewrite.preferAvcVariants(masterPlaylist);
-        if (!filteredRemote.equals(masterPlaylist)) {
-            log.debug("Filtered HLS master to AVC variants and the default audio track");
-        }
-        List<String> remoteMediaUris;
-        try {
-            remoteMediaUris = HlsUriRewrite.extractMediaUris(filteredRemote);
-        } catch (PlaylistParserException e) {
-            log.warn("Failed to extract media URIs from filtered master", e);
-            remoteMediaUris = List.of();
-        }
-        String localBody = HlsUriRewrite.rewritePlaylist(filteredRemote, baseUrl, sessionId);
-        return new MasterRewrite(localBody, remoteMediaUris);
-    }
-
-    /** Map accidental local playlist URLs back to mlhls:// for cache / pending-request keys. */
-    private static String normalizeFcupUrl(String url) {
-        if (url == null) {
-            return null;
-        }
-        String bare = url.split("\\?")[0];
-        int playlistIdx = bare.indexOf("/playlist/");
-        if (bare.startsWith("http") && playlistIdx >= 0) {
-            return "mlhls://localhost" + bare.substring(playlistIdx + "/playlist".length());
-        }
-        return bare;
-    }
-
-    private DefaultFullHttpResponse createRtspResponse(FullHttpRequest request) {
-        var response = new DefaultFullHttpResponse(RtspVersions.RTSP_1_0, RtspResponseStatuses.OK);
-        response.headers().clear();
-
-        var cSeq = request.headers().get(RtspHeaderNames.CSEQ);
-        if (cSeq != null) {
-            response.headers().add(RtspHeaderNames.CSEQ, cSeq);
-            response.headers().add(RtspHeaderNames.SERVER, "AirTunes/220.68");
-        }
-
-        return response;
-    }
-
-    private void sendResponse(ChannelHandlerContext ctx, FullHttpRequest request, FullHttpResponse response) {
-        HttpUtil.setContentLength(response, response.content().readableBytes());
-        publishControlExchange(request, response);
-        var future = ctx.writeAndFlush(response);
-        if (!HttpUtil.isKeepAlive(request)) {
-            future.addListener(ChannelFutureListener.CLOSE);
-        }
-    }
-
-    private void publishControlExchange(FullHttpRequest request, FullHttpResponse response) {
-        publishControlExchange(
-                Optional.ofNullable(request.headers().get("Active-Remote"))
-                        .orElseGet(() -> request.headers().get("X-Apple-Session-ID")),
-                request.protocolVersion().text(),
-                request.method().name(),
-                request.uri(),
-                copyHeaders(request.headers()),
-                pendingRequestBody,
-                response);
-    }
-
-    private void publishControlExchange(PlaylistRequest pending, FullHttpResponse response) {
-        publishControlExchange(
-                pending.requestHeaders().get("X-Apple-Session-ID"),
-                pending.protocol(),
-                pending.method(),
-                pending.uri(),
-                pending.requestHeaders(),
-                pending.requestBody(),
-                response);
-    }
-
-    private void publishControlExchange(String sessionId, String protocol, String method, String uri,
-                                        Map<String, String> requestHeaders, byte[] requestBody,
-                                        FullHttpResponse response) {
-        try {
-            airPlayConsumer.onControlExchange(new ControlExchange(
-                    Instant.now(),
-                    sessionId,
-                    protocol,
-                    method,
-                    uri,
-                    requestHeaders,
-                    requestBody,
-                    response.status().code(),
-                    copyHeaders(response.headers()),
-                    ByteBufUtil.getBytes(response.content())));
-        } catch (Exception e) {
-            log.warn("Failed to publish control exchange", e);
-        }
-    }
-
-    private static Map<String, String> copyHeaders(HttpHeaders headers) {
-        Map<String, String> copy = new LinkedHashMap<>();
-        for (Map.Entry<String, String> entry : headers) {
-            copy.putIfAbsent(entry.getKey(), entry.getValue());
-        }
-        return copy;
-    }
 }

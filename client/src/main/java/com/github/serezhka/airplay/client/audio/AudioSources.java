@@ -5,8 +5,9 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 /**
- * Registry for {@link AudioSourceFactory}. Used by legacy audio smoke
- * ({@code AudioClient}); tray {@code MirrorCaster} streams video only today.
+ * Registry for {@link AudioSourceFactory}. Apps install via Spring when
+ * {@code client.audio.src=audiotest}; {@link com.github.serezhka.airplay.client.cast.MirrorCaster}
+ * opens a source only when cast audio is enabled.
  */
 public final class AudioSources {
 
@@ -33,8 +34,8 @@ public final class AudioSources {
         }
         if (factory == null) {
             throw new IllegalStateException(
-                    "No AudioSourceFactory installed. Run a receiver app that registers one, "
-                            + "or call AudioSources.install(...).");
+                    "No AudioSourceFactory installed. Set client.audio.src=audiotest "
+                            + "in a receiver app, or call AudioSources.install(...).");
         }
         return factory.open(onAdtsFrame);
     }

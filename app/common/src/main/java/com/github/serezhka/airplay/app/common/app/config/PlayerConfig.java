@@ -8,11 +8,13 @@ import com.github.serezhka.airplay.server.AirPlayServer;
 import com.github.serezhka.airplay.server.Playback;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 @Configuration
+@EnableConfigurationProperties(ClientCastProperties.class)
 public class PlayerConfig {
 
     @Bean
@@ -28,12 +30,15 @@ public class PlayerConfig {
     }
 
     @Bean(destroyMethod = "close")
-    public MirrorCaster mirrorCaster(AirPlayConfig airPlayConfig) {
-        return new MirrorCaster(airPlayConfig.isMdnsLoopback());
+    public MirrorCaster mirrorCaster(AirPlayConfig airPlayConfig, ClientCastProperties cast) {
+        return new MirrorCaster(
+                airPlayConfig.isMdnsLoopback(),
+                cast.videoEnabled(),
+                cast.audioEnabled());
     }
 
     @Bean
-    @ConditionalOnProperty(value = "player.tray.enabled", havingValue = "true")
+    @ConditionalOnProperty(value = "airplay.tray-enabled", havingValue = "true", matchIfMissing = true)
     public SystemTrayMenu systemTrayMenu(ApplicationContext context, MirrorCaster mirrorCaster) {
         return new SystemTrayMenu(context, mirrorCaster);
     }

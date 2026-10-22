@@ -14,7 +14,7 @@ import org.springframework.context.annotation.Configuration;
 public class GstreamerCaptureConfig {
 
     @Bean
-    @ConditionalOnProperty(name = "client.src", havingValue = "videotest", matchIfMissing = true)
+    @ConditionalOnProperty(name = "client.video.src", havingValue = "videotest", matchIfMissing = true)
     public CaptureSourceFactory videoTestCaptureSourceFactory() {
         CaptureSourceFactory factory = GstVideoTestSource::new;
         CaptureSources.install(factory);
@@ -22,18 +22,19 @@ public class GstreamerCaptureConfig {
     }
 
     @Bean
-    @ConditionalOnProperty(name = "client.src", havingValue = "screencapture")
+    @ConditionalOnProperty(name = "client.video.src", havingValue = "screencapture")
     public CaptureSourceFactory screenCaptureSourceFactory() {
         CaptureSourceFactory factory = consumer -> {
             throw new UnsupportedOperationException(
-                    "client.src=screencapture is not implemented yet (GStreamer)");
+                    "client.video.src=screencapture is not implemented yet (GStreamer)");
         };
         CaptureSources.install(factory);
         return factory;
     }
 
     @Bean
-    public AudioSourceFactory audioSourceFactory() {
+    @ConditionalOnProperty(name = "client.audio.src", havingValue = "audiotest", matchIfMissing = true)
+    public AudioSourceFactory audioTestSourceFactory() {
         AudioSourceFactory factory = GstAudioTestSource::new;
         AudioSources.install(factory);
         return factory;
