@@ -11,6 +11,7 @@ import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
@@ -28,6 +29,31 @@ public final class PlaybackFixture {
 
     public static byte[] h264() {
         return resourceBytes("/test-pattern.h264");
+    }
+
+    /**
+     * Annex-B NAL units from {@link #h264()}, each slice including its start code.
+     * Bench feeds must not split mid-NAL (native decoders SIGSEGV); ffplay stdin must
+     * not receive the whole clip per tick (pipe back-pressure stalls the run).
+     */
+    public static List<byte[]> annexBNalUnits() {
+        byte[] blob = h264();
+        List<Integer> starts = new ArrayList<>();
+        for (int i = 0; i < blob.length; i++) {
+            if (annexBStartCodeLength(blob, i) != 0) {
+                starts.add(i);
+            }
+        }
+        if (starts.isEmpty()) {
+            return List.of(blob);
+        }
+        List<byte[]> nals = new ArrayList<>(starts.size());
+        for (int s = 0; s < starts.size(); s++) {
+            int from = starts.get(s);
+            int to = s + 1 < starts.size() ? starts.get(s + 1) : blob.length;
+            nals.add(Arrays.copyOfRange(blob, from, to));
+        }
+        return nals;
     }
 
     /** Stereo AAC-LC ADTS sine at 44.1 kHz ({@code fixtures/audio/sine-44100-aac-lc.adts}). */
@@ -222,6 +248,17 @@ public final class PlaybackFixture {
             Thread.sleep(100);
         }
         throw new AssertionError("seek did not land near " + target + ", last=" + position.getAsDouble());
+    }
+
+    private static int annexBStartCodeLength(byte[] blob, int offset) {
+        if (offset + 4 <= blob.length && blob[offset] == 0 && blob[offset + 1] == 0 && blob[offset + 2] == 0
+                && blob[offset + 3] == 1) {
+            return 4;
+        }
+        if (offset + 3 <= blob.length && blob[offset] == 0 && blob[offset + 1] == 0 && blob[offset + 2] == 1) {
+            return 3;
+        }
+        return 0;
     }
 
     private static byte[] resourceBytes(String path) {

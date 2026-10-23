@@ -4,6 +4,7 @@ import com.github.serezhka.airplay.app.common.test.PlaybackFixture;
 import com.github.serezhka.airplay.app.common.test.PlaybackLifecycleHarness;
 import com.github.serezhka.airplay.protocol.media.VideoStreamInfo;
 import com.github.serezhka.airplay.server.Playback;
+import org.freedesktop.gstreamer.Gst;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -28,28 +29,13 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 @Tag("gstreamer")
 class GStreamerPlaybackTest {
 
-    /**
-     * Native GStreamer threads can keep the Gradle test worker alive after a green
-     * suite (especially Windows CI). {@code Gst.deinit()} also hangs — schedule a
-     * delayed hard exit only when the CI flag is set so local runs stay interactive.
-     */
     @AfterAll
-    static void haltCiWorkerIfStuck() {
-        if (!Boolean.parseBoolean(System.getProperty("airplay.gst.ci.haltAfterSuite", "false"))
-                && !"true".equalsIgnoreCase(System.getenv("AIRPLAY_GST_CI_HALT"))) {
-            return;
+    static void releaseGst() {
+        try {
+            Gst.deinit();
+        } catch (Throwable ignored) {
+            // already torn down / never inited
         }
-        Thread halt = new Thread(() -> {
-            try {
-                Thread.sleep(5_000L);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
-            }
-            Runtime.getRuntime().halt(0);
-        }, "airplay-gst-ci-halt");
-        halt.setDaemon(true);
-        halt.start();
     }
 
     @Test

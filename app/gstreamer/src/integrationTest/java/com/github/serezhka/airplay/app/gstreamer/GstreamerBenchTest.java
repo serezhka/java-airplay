@@ -18,8 +18,8 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 class GstreamerBenchTest {
 
     @AfterAll
-    static void haltCiWorkerIfStuck() {
-        GStreamerPlaybackTest.haltCiWorkerIfStuck();
+    static void releaseGst() {
+        GStreamerPlaybackTest.releaseGst();
     }
 
     @Test

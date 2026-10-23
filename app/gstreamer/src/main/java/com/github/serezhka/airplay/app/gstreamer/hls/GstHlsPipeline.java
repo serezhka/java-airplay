@@ -224,6 +224,17 @@ public final class GstHlsPipeline {
         if (orphan == null) {
             return;
         }
+        boolean disposeOrphans = Boolean.getBoolean("airplay.gst.test.disposeOrphans");
+        if (disposeOrphans) {
+            log.info("HLS pipeline disposing orphan ({}) for test teardown", reason);
+            try {
+                orphan.setState(State.NULL);
+                orphan.dispose();
+            } catch (Throwable t) {
+                log.debug("HLS dispose-on-orphan failed: {}", t.toString());
+            }
+            return;
+        }
         log.info("HLS pipeline orphaned ({}); skipping setState(NULL)", reason);
         try {
             orphan.setState(State.PAUSED);

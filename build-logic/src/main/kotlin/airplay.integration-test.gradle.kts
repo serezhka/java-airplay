@@ -24,7 +24,7 @@ val forwardedProperties = listOf(
     "airplay.harness.reportDir",
     "airplay.gst.appsink",
     "airplay.gst.hls.headless",
-    "airplay.gst.ci.haltAfterSuite",
+    "airplay.gst.test.disposeOrphans",
     "airplay.ffmpeg.hls.headless",
     "gstreamer.path",
     "jna.library.path"

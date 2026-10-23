@@ -6,6 +6,7 @@ import com.github.serezhka.airplay.server.Playback;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.function.LongSupplier;
 
@@ -37,9 +38,7 @@ public final class PlaybackBench {
                     if (childPid != null) {
                         metrics.trackChildPid(childPid.getAsLong());
                     }
-                    // GStreamer avdec SIGSEGVs on sustained mid-NAL slices; FFmpeg needs
-                    // small paced writes or ffplay backpressure collapses frame count.
-                    feedFor(consumer, seconds, "gstreamer".equalsIgnoreCase(playerName));
+                    feedFor(consumer, seconds);
                 } finally {
                     consumer.onVideoSrcDisconnect();
                 }
@@ -63,29 +62,14 @@ public final class PlaybackBench {
         }
     }
 
-    private static void feedFor(Playback consumer, int seconds, boolean wholeAccessUnits)
-            throws InterruptedException {
-        byte[] frame = PlaybackFixture.h264();
+    private static void feedFor(Playback consumer, int seconds) throws InterruptedException {
+        List<byte[]> nals = PlaybackFixture.annexBNalUnits();
         long frameDelayMs = 33L;
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds);
-        if (wholeAccessUnits) {
-            while (System.nanoTime() < deadline) {
-                consumer.onVideo(frame);
-                Thread.sleep(frameDelayMs);
-            }
-            return;
-        }
-        int offset = 0;
-        int chunk = Math.max(1, frame.length / 60);
+        int index = 0;
         while (System.nanoTime() < deadline) {
-            if (offset >= frame.length) {
-                offset = 0;
-            }
-            int len = Math.min(chunk, frame.length - offset);
-            byte[] piece = new byte[len];
-            System.arraycopy(frame, offset, piece, 0, len);
-            offset += len;
-            consumer.onVideo(piece);
+            consumer.onVideo(nals.get(index));
+            index = (index + 1) % nals.size();
             Thread.sleep(frameDelayMs);
         }
     }
