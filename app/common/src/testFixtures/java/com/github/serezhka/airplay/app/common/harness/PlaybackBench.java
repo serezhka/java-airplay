@@ -37,7 +37,9 @@ public final class PlaybackBench {
                     if (childPid != null) {
                         metrics.trackChildPid(childPid.getAsLong());
                     }
-                    feedFor(consumer, seconds);
+                    // GStreamer avdec SIGSEGVs on sustained mid-NAL slices; FFmpeg needs
+                    // small paced writes or ffplay backpressure collapses frame count.
+                    feedFor(consumer, seconds, "gstreamer".equalsIgnoreCase(playerName));
                 } finally {
                     consumer.onVideoSrcDisconnect();
                 }
@@ -61,14 +63,29 @@ public final class PlaybackBench {
         }
     }
 
-    private static void feedFor(Playback consumer, int seconds) throws InterruptedException {
-        // Push a complete Annex-B AU each tick. Arbitrary mid-NAL slices crash native
-        // avdec/appsrc under sustained load (SIGSEGV in libgstbase on CI).
+    private static void feedFor(Playback consumer, int seconds, boolean wholeAccessUnits)
+            throws InterruptedException {
         byte[] frame = PlaybackFixture.h264();
         long frameDelayMs = 33L;
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds);
+        if (wholeAccessUnits) {
+            while (System.nanoTime() < deadline) {
+                consumer.onVideo(frame);
+                Thread.sleep(frameDelayMs);
+            }
+            return;
+        }
+        int offset = 0;
+        int chunk = Math.max(1, frame.length / 60);
         while (System.nanoTime() < deadline) {
-            consumer.onVideo(frame);
+            if (offset >= frame.length) {
+                offset = 0;
+            }
+            int len = Math.min(chunk, frame.length - offset);
+            byte[] piece = new byte[len];
+            System.arraycopy(frame, offset, piece, 0, len);
+            offset += len;
+            consumer.onVideo(piece);
             Thread.sleep(frameDelayMs);
         }
     }

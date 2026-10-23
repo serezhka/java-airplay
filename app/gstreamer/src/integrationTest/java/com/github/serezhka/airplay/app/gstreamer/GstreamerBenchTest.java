@@ -2,7 +2,6 @@ package com.github.serezhka.airplay.app.gstreamer;
 
 import com.github.serezhka.airplay.app.common.harness.PlaybackBench;
 import com.github.serezhka.airplay.server.Playback;
-import org.freedesktop.gstreamer.Gst;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -19,13 +18,8 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 class GstreamerBenchTest {
 
     @AfterAll
-    static void releaseGst() {
-        // Native GST worker threads otherwise keep the Gradle test JVM alive on CI.
-        try {
-            Gst.deinit();
-        } catch (Throwable ignored) {
-            // already torn down / never inited
-        }
+    static void haltCiWorkerIfStuck() {
+        GStreamerPlaybackTest.haltCiWorkerIfStuck();
     }
 
     @Test
