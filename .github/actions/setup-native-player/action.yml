@@ -21,14 +21,15 @@ runs:
         sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list \
                    /etc/apt/sources.list.d/microsoft*.list \
                    /etc/apt/sources.list.d/azure-cli.list 2>/dev/null || true
-        # azure.archive.ubuntu.com sometimes stalls with Ign/retry (~30s each) and can burn
-        # the whole playback job (~30 min) on gstreamer deps. Prefer archive.ubuntu.com and
-        # fail hung GETs quickly so the step times out instead of crawling to job timeout.
-        sudo sed -i \
-          -e 's|https\?://azure\.archive\.ubuntu\.com/ubuntu|http://archive.ubuntu.com/ubuntu|g' \
-          /etc/apt/sources.list \
-          /etc/apt/sources.list.d/*.list \
-          /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+        # azure.archive.ubuntu.com sometimes stalls with Ign/retry (~30s each) on GST deps.
+        # Prefer archive.ubuntu.com. Rewrite each existing sources file (a missing
+        # /etc/apt/sources.list must not abort sed before ubuntu.sources is updated).
+        shopt -s nullglob
+        for src in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+          sudo sed -i \
+            -e 's|https\?://azure\.archive\.ubuntu\.com/ubuntu|http://archive.ubuntu.com/ubuntu|g' \
+            "$src" || true
+        done
         APT_OPTS=(
           -o Acquire::Retries=2
           -o Acquire::http::Timeout=20

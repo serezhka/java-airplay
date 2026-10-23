@@ -36,7 +36,7 @@ jobs:
   # Healthy runs finish in ~2–4 min; long waits were azure apt Ign storms on GST Linux.
   playback:
     needs: unit
-    timeout-minutes: 12
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -51,7 +51,7 @@ jobs:
           distribution: temurin
       - uses: gradle/actions/setup-gradle@v6
       - uses: ./.github/actions/setup-native-player
-        timeout-minutes: 5
+        timeout-minutes: 8
         with:
           player: ${{ matrix.player }}
       - name: Integration test
@@ -78,7 +78,7 @@ jobs:
   bench:
     if: github.event_name == 'workflow_dispatch' && inputs.bench == 'true'
     needs: unit
-    timeout-minutes: 15
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -92,15 +92,16 @@ jobs:
           distribution: temurin
       - uses: gradle/actions/setup-gradle@v6
       - uses: ./.github/actions/setup-native-player
-        timeout-minutes: 5
+        timeout-minutes: 8
         with:
           player: ${{ matrix.player }}
       - name: 5-minute bench
-        timeout-minutes: 8
+        timeout-minutes: 10
         run: |
           EXTRA=(-Dairplay.harness.metrics=true -Dairplay.harness.bench.seconds=300)
+          # Same headless knobs as playback — appsink avoids ximagesink flakes under xvfb.
           if [ "${{ matrix.player }}" = "gstreamer" ]; then
-            EXTRA+=("-Dairplay.gst.hls.headless=true")
+            EXTRA+=("-Dairplay.gst.appsink=true" "-Dairplay.gst.hls.headless=true")
           else
             EXTRA+=("-Dairplay.ffmpeg.hls.headless=true")
           fi
