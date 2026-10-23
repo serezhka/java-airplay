@@ -55,7 +55,8 @@ jobs:
         with:
           player: ${{ matrix.player }}
       - name: Integration test
-        timeout-minutes: 5
+        # Windows GST cold compile + suite can exceed 5m when the runner is slow.
+        timeout-minutes: 10
         shell: bash
         run: |
           TASK=":app:${{ matrix.player }}:${{ matrix.player }}IntegrationTest"

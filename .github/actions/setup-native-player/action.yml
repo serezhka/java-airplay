@@ -21,11 +21,15 @@ runs:
         sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list \
                    /etc/apt/sources.list.d/microsoft*.list \
                    /etc/apt/sources.list.d/azure-cli.list 2>/dev/null || true
-        # azure.archive.ubuntu.com sometimes stalls with Ign/retry (~30s each) on GST deps.
-        # Prefer archive.ubuntu.com. Rewrite each existing sources file (a missing
-        # /etc/apt/sources.list must not abort sed before ubuntu.sources is updated).
+        # GitHub ubuntu images resolve mirrors via file:/etc/apt/apt-mirrors.txt (not
+        # sources.list URIs). azure.archive there stalls with Ign/retry on GST deps —
+        # rewrite the mirrorlist (and any leftover sources) to archive.ubuntu.com.
         shopt -s nullglob
-        for src in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+        for src in /etc/apt/apt-mirrors.txt \
+                   /etc/apt/sources.list \
+                   /etc/apt/sources.list.d/*.list \
+                   /etc/apt/sources.list.d/*.sources; do
+          [ -f "$src" ] || continue
           sudo sed -i \
             -e 's|https\?://azure\.archive\.ubuntu\.com/ubuntu|http://archive.ubuntu.com/ubuntu|g' \
             "$src" || true
@@ -37,6 +41,11 @@ runs:
           -o Acquire::Languages=none
         )
         sudo apt-get update "${APT_OPTS[@]}"
+        # Fail loudly if we are still on azure — otherwise GST setup can crawl to timeout.
+        if apt-get indextargets 2>/dev/null | grep -q 'azure.archive.ubuntu.com'; then
+          echo "WARN: apt still references azure.archive after rewrite; dumping mirrors:" >&2
+          cat /etc/apt/apt-mirrors.txt >&2 || true
+        fi
         case "${{ inputs.player }}" in
           ffmpeg)
             # pulse null sink: ffplay PCM (mirror audio) needs SDL_AUDIODRIVER=pulse
