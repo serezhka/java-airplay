@@ -62,20 +62,13 @@ public final class PlaybackBench {
     }
 
     private static void feedFor(Playback consumer, int seconds) throws InterruptedException {
+        // Push a complete Annex-B AU each tick. Arbitrary mid-NAL slices crash native
+        // avdec/appsrc under sustained load (SIGSEGV in libgstbase on CI).
         byte[] frame = PlaybackFixture.h264();
         long frameDelayMs = 33L;
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds);
-        int offset = 0;
-        int chunk = Math.max(1, frame.length / 60);
         while (System.nanoTime() < deadline) {
-            if (offset >= frame.length) {
-                offset = 0;
-            }
-            int len = Math.min(chunk, frame.length - offset);
-            byte[] piece = new byte[len];
-            System.arraycopy(frame, offset, piece, 0, len);
-            offset += len;
-            consumer.onVideo(piece);
+            consumer.onVideo(frame);
             Thread.sleep(frameDelayMs);
         }
     }

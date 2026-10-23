@@ -4,6 +4,8 @@ import com.github.serezhka.airplay.app.common.test.PlaybackFixture;
 import com.github.serezhka.airplay.app.common.test.PlaybackLifecycleHarness;
 import com.github.serezhka.airplay.protocol.media.VideoStreamInfo;
 import com.github.serezhka.airplay.server.Playback;
+import org.freedesktop.gstreamer.Gst;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -26,6 +28,16 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  */
 @Tag("gstreamer")
 class GStreamerPlaybackTest {
+
+    @AfterAll
+    static void releaseGst() {
+        // Native GST worker threads otherwise keep the Gradle test JVM alive on Windows CI.
+        try {
+            Gst.deinit();
+        } catch (Throwable ignored) {
+            // already torn down / never inited
+        }
+    }
 
     @Test
     @Timeout(60)
