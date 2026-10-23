@@ -1,14 +1,10 @@
 package com.github.serezhka.airplay.client.control;
 
 import com.github.serezhka.airplay.client.netty.NettyEventLoops;
-
 import com.dd.plist.BinaryPropertyListParser;
 import com.dd.plist.BinaryPropertyListWriter;
 import com.dd.plist.NSDictionary;
 import com.dd.plist.PropertyListFormatException;
-import com.github.serezhka.airplay.client.hap.HapControlCipher;
-import com.github.serezhka.airplay.client.hap.HapPairChannel;
-import com.github.serezhka.airplay.client.hap.Tlv8;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBufInputStream;
 import io.netty.channel.ChannelInitializer;
@@ -19,8 +15,10 @@ import io.netty.channel.epoll.Epoll;
 import io.netty.channel.epoll.EpollSocketChannel;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
-import io.netty.handler.codec.http.*;
-import io.netty.handler.codec.rtsp.*;
+import io.netty.handler.codec.http.FullHttpResponse;
+import io.netty.handler.codec.http.HttpObjectAggregator;
+import io.netty.handler.codec.http.HttpResponseStatus;
+import io.netty.handler.codec.rtsp.RtspDecoder;
 import io.netty.handler.logging.ByteBufFormat;
 import io.netty.handler.logging.LogLevel;
 import io.netty.handler.logging.LoggingHandler;
@@ -29,8 +27,13 @@ import lombok.extern.slf4j.Slf4j;
 import java.io.IOException;
 import java.util.Map;
 
+/**
+ * Legacy (pre-HAP) control client: empty {@code /pair-setup}, binary {@code /pair-verify},
+ * FairPlay {@code /fp-setup}, RTSP SETUP. HAP TLV pairing and Control-Salt encryption live
+ * on {@link com.github.serezhka.airplay.client.hap.HapSocketControl} only.
+ */
 @Slf4j
-public class ControlClient implements Runnable, AutoCloseable, HapPairChannel {
+public class ControlClient implements Runnable, AutoCloseable {
 
     private final String address;
     private final int port;
@@ -40,12 +43,6 @@ public class ControlClient implements Runnable, AutoCloseable, HapPairChannel {
     private ControlHandler controlHandler;
     private volatile EventLoopGroup workerGroup;
     private volatile io.netty.channel.Channel channel;
-
-    /**
-     * {@code X-Apple-HKP} for HAP TLV pairing.
-     * Default {@code 4} = transient AirPlay (works with on-screen PIN + SETUP/RECORD).
-     */
-    private String hkpVersion = "4";
 
     public ControlClient(String address, int port) throws InterruptedException {
         this.address = address;
@@ -76,9 +73,8 @@ public class ControlClient implements Runnable, AutoCloseable, HapPairChannel {
             bootstrap.handler(new ChannelInitializer<SocketChannel>() {
                 protected void initChannel(SocketChannel ch) {
                     ChannelPipeline p = ch.pipeline();
-                    // Encrypt/decrypt are added only after pair-setup M4 — keeping them
-                    // in the pipeline during plaintext pairing breaks M3/M4.
-                    p.addLast("encoder", new RtspEncoder());
+                    // Outbound uses framed bytes via sendRaw (RtspEncoder header quirks
+                    // are rejected by some receivers). Decoder still parses responses.
                     p.addLast("decoder", new RtspDecoder());
                     p.addLast("logger", new LoggingHandler(LogLevel.DEBUG, ByteBufFormat.SIMPLE));
                     p.addLast("aggregator", new HttpObjectAggregator(64 * 1024));
@@ -132,71 +128,11 @@ public class ControlClient implements Runnable, AutoCloseable, HapPairChannel {
         return responseBytes;
     }
 
-    /**
-     * Asks the receiver to show an on-screen pairing PIN. Best-effort.
-     */
-    public void pairPinStart() throws InterruptedException {
-        FullHttpResponse response = exchangeRaw("POST", "/pair-pin-start",
-                Map.of("X-Apple-HKP", hkpVersion), new byte[0]);
-        HttpResponseStatus status = response.status();
-        if (status.code() >= 400) {
-            throw new IllegalStateException("POST /pair-pin-start → " + status);
-        }
-        log.info("POST /pair-pin-start → {} (look for PIN on the receiver)", status);
-    }
-
-    /**
-     * HAP TLV {@code POST /pair-setup} with {@code X-Apple-HKP} + {@code application/pairing+tlv8}.
-     */
-    public Map<Integer, byte[]> pairSetupTlv(byte[] tlvBody) throws InterruptedException {
-        return exchangeTlv("/pair-setup", tlvBody);
-    }
-
-    /**
-     * HAP TLV {@code POST /pair-verify} with {@code X-Apple-HKP} + {@code application/pairing+tlv8}.
-     */
-    public Map<Integer, byte[]> pairVerifyTlv(byte[] tlvBody) throws InterruptedException {
-        return exchangeTlv("/pair-verify", tlvBody);
-    }
-
-    /**
-     * HomeKit protocol version for pairing: {@code 4} = transient AirPlay (PIN often {@code 3939}),
-     * {@code 3} = HomeKit-style PIN pairing. Wrong value yields a well-formed M2 then
-     * {@code authentication} at M4.
-     */
-    public void setHkpVersion(String version) {
-        this.hkpVersion = version == null || version.isBlank() ? "4" : version.trim();
-    }
-
-    public String getHkpVersion() {
-        return hkpVersion;
-    }
-
     public byte[] pairVerify(byte[] requestBytes) throws InterruptedException {
         FullHttpResponse response = exchangeRaw("POST", "/pair-verify", Map.of(), requestBytes);
         byte[] responseBytes = new byte[response.content().readableBytes()];
         response.content().readBytes(responseBytes);
         return responseBytes;
-    }
-
-    private Map<Integer, byte[]> exchangeTlv(String path, byte[] tlvBody) throws InterruptedException {
-        FullHttpResponse response = exchangeRaw("POST", path, Map.of(
-                "Content-Type", "application/pairing+tlv8",
-                "X-Apple-HKP", hkpVersion
-        ), tlvBody);
-        HttpResponseStatus status = response.status();
-        byte[] responseBytes = new byte[response.content().readableBytes()];
-        response.content().readBytes(responseBytes);
-
-        if (status.code() >= 400) {
-            throw new IllegalStateException(
-                    "POST " + path + " → " + status + " (body " + responseBytes.length + " bytes). "
-                            + "Modern receivers need HAP TLV + X-Apple-HKP; legacy empty pair-setup gets 400.");
-        }
-        if (responseBytes.length == 0) {
-            throw new IllegalStateException("POST " + path + " → " + status + " with empty body");
-        }
-        return Tlv8.decode(responseBytes);
     }
 
     public byte[] fpSetup(byte[] requestBytes) throws InterruptedException {
@@ -205,14 +141,6 @@ public class ControlClient implements Runnable, AutoCloseable, HapPairChannel {
         byte[] responseBytes = new byte[response.content().readableBytes()];
         response.content().readBytes(responseBytes);
         return responseBytes;
-    }
-
-    /**
-     * Enable HAP control-channel encryption after a successful pair-setup M4 (SRP session key).
-     */
-    public void enableControlEncryption(byte[] srpSharedSecret) throws Exception {
-        HapControlCipher cipher = HapControlCipher.forClient(srpSharedSecret);
-        controlHandler.enableControlEncryption(cipher);
     }
 
     public NSDictionary rtspSetup(NSDictionary setup) throws InterruptedException, IOException, PropertyListFormatException {
@@ -230,16 +158,6 @@ public class ControlClient implements Runnable, AutoCloseable, HapPairChannel {
             return (NSDictionary) BinaryPropertyListParser.parse(new ByteBufInputStream(response.content()));
         }
         return null;
-    }
-
-    /** Starts media after streams SETUP. */
-    public void rtspRecord() throws InterruptedException {
-        FullHttpResponse response = exchangeRaw("RECORD", "rtsp://" + address + "/stream",
-                Map.of("X-Apple-ProtocolVersion", "1"), new byte[0]);
-        HttpResponseStatus status = response.status();
-        if (status.code() >= 400) {
-            throw new IllegalStateException("RECORD → " + status);
-        }
     }
 
     /**
@@ -272,19 +190,6 @@ public class ControlClient implements Runnable, AutoCloseable, HapPairChannel {
             System.arraycopy(body, 0, msg, head.length, body.length);
         }
         controlHandler.sendRaw(msg);
-        return controlHandler.receive();
-    }
-
-    @SuppressWarnings("unused")
-    private FullHttpResponse exchange(FullHttpRequest request) throws InterruptedException {
-        // Legacy Netty-encoder path kept for reference; prefer exchangeRaw.
-        request.headers().add(RtspHeaderNames.CSEQ, ++cseqIdx);
-        request.headers().add("DACP-ID", "184F380D0A5B7139");
-        request.headers().add("Active-Remote", "1589992423");
-        request.headers().add(RtspHeaderNames.USER_AGENT, "AirPlay/670.6.2");
-        request.headers().add(HttpHeaderNames.CONNECTION, HttpHeaderValues.KEEP_ALIVE);
-        request.headers().add(HttpHeaderNames.CONTENT_LENGTH, request.content().readableBytes());
-        controlHandler.send(request);
         return controlHandler.receive();
     }
 

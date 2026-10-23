@@ -23,7 +23,8 @@ val forwardedProperties = listOf(
     "airplay.harness.bench.player",
     "airplay.harness.reportDir",
     "airplay.gst.appsink",
-    "airplay.gst.cli",
+    "airplay.gst.hls.headless",
+    "airplay.ffmpeg.hls.headless",
     "gstreamer.path",
     "jna.library.path"
 )
@@ -43,7 +44,7 @@ fun Test.wireIntegrationTest(tag: String?) {
             systemProperty(key, value)
         }
     }
-    System.getenv("AIRPLAY_GST_CLI")?.let { systemProperty("airplay.gst.cli", it) }
+    System.getenv("AIRPLAY_GST_APPSINK")?.let { systemProperty("airplay.gst.appsink", it) }
     if (tag == "bench") {
         maxParallelForks = 1
         systemProperty("junit.jupiter.execution.parallel.enabled", "false")
@@ -58,7 +59,8 @@ fun Test.wireIntegrationTest(tag: String?) {
         val seconds = System.getProperty("airplay.harness.bench.seconds", "300").toLongOrNull() ?: 300L
         timeout.set(Duration.ofSeconds(seconds + 120))
     } else {
-        timeout.set(Duration.ofMinutes(3))
+        // Lifecycle suites (mirror ↔ HLS round-trip) need more than a quick smoke.
+        timeout.set(Duration.ofMinutes(10))
     }
     outputs.upToDateWhen { false }
 }

@@ -1,0 +1,8 @@
+{
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "install": "chmod +x gradlew && ./gradlew --no-daemon :app:common:compileTestFixturesJava :app:ffmpeg:compileJava :app:gstreamer:compileJava",
+  "start": "pulseaudio --check || pulseaudio --start --exit-idle-time=-1; pactl load-module module-null-sink sink_name=ci_null 2>/dev/null || true; pactl set-default-sink ci_null 2>/dev/null || true"
+}

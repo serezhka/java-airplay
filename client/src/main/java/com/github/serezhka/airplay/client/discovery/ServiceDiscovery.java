@@ -98,7 +98,8 @@ public class ServiceDiscovery implements AutoCloseable {
                 jmdns.addServiceListener(AIRPLAY_SERVICE_TYPE, new ServiceListener() {
                     @Override
                     public void serviceAdded(ServiceEvent event) {
-                        jmdns.requestServiceInfo(event.getType(), event.getName(), 1500);
+                        // Some TVs (e.g. Samsung) need longer than the JmDNS default to fill A/AAAA.
+                        jmdns.requestServiceInfo(event.getType(), event.getName(), 3_000);
                     }
 
                     @Override
@@ -132,7 +133,7 @@ public class ServiceDiscovery implements AutoCloseable {
         }
         for (JmDNS jmdns : jmdnsHandles) {
             try {
-                ServiceInfo[] found = jmdns.list(AIRPLAY_SERVICE_TYPE, 1500);
+                ServiceInfo[] found = jmdns.list(AIRPLAY_SERVICE_TYPE, 3_000);
                 for (ServiceInfo info : found) {
                     upsertService(info);
                 }
@@ -219,6 +220,10 @@ public class ServiceDiscovery implements AutoCloseable {
         if (serviceInfo == null) {
             return;
         }
+        int port = serviceInfo.getPort();
+        if (port <= 0) {
+            return;
+        }
         String deviceId = firstTxt(serviceInfo, "deviceid", "deviceId");
         long features = AirPlayFeatures.parse(firstTxt(serviceInfo, "features", "ft"));
         long flags = AirPlayStatusFlags.parse(firstTxt(serviceInfo, "flags", "sf"));
@@ -226,23 +231,83 @@ public class ServiceDiscovery implements AutoCloseable {
         boolean passwordRequired = pwTxt
                 || AirPlayStatusFlags.passwordRequired(flags)
                 || AirPlayStatusFlags.pinRequired(flags);
-        for (InetAddress addr : serviceInfo.getInetAddresses()) {
-            if (!(addr instanceof Inet4Address)) {
-                continue;
-            }
-            if (addr.isLoopbackAddress() && !includeLoopback) {
-                continue;
-            }
+        for (Inet4Address addr : ipv4Addresses(serviceInfo, includeLoopback)) {
             Info info = new Info(
                     serviceInfo.getName(),
                     addr.getHostAddress(),
-                    serviceInfo.getPort(),
+                    port,
                     passwordRequired,
                     deviceId == null ? "" : deviceId.trim(),
                     features,
                     flags);
             byKey.putIfAbsent(info.address() + ":" + info.port(), info);
         }
+    }
+
+    /**
+     * Collect IPv4 peers for a resolved service. Prefer {@link ServiceInfo#getInet4Addresses()};
+     * fall back to {@link ServiceInfo#getInetAddresses()} and host-name lookup — some receivers
+     * leave the typed arrays empty until a late resolve.
+     */
+    private static List<Inet4Address> ipv4Addresses(ServiceInfo serviceInfo, boolean includeLoopback) {
+        LinkedHashMap<String, Inet4Address> byHost = new LinkedHashMap<>();
+        Inet4Address[] v4 = serviceInfo.getInet4Addresses();
+        if (v4 != null) {
+            for (Inet4Address addr : v4) {
+                acceptIpv4(byHost, addr, includeLoopback);
+            }
+        }
+        if (byHost.isEmpty()) {
+            InetAddress[] any = serviceInfo.getInetAddresses();
+            if (any != null) {
+                for (InetAddress addr : any) {
+                    if (addr instanceof Inet4Address inet4) {
+                        acceptIpv4(byHost, inet4, includeLoopback);
+                    }
+                }
+            }
+        }
+        if (byHost.isEmpty()) {
+            for (String host : hostCandidates(serviceInfo)) {
+                try {
+                    InetAddress resolved = InetAddress.getByName(host);
+                    if (resolved instanceof Inet4Address inet4) {
+                        acceptIpv4(byHost, inet4, includeLoopback);
+                    }
+                } catch (Exception ignored) {
+                    // keep trying other candidates
+                }
+            }
+        }
+        return List.copyOf(byHost.values());
+    }
+
+    private static void acceptIpv4(
+            Map<String, Inet4Address> byHost, Inet4Address addr, boolean includeLoopback) {
+        if (addr == null) {
+            return;
+        }
+        if (addr.isLoopbackAddress() && !includeLoopback) {
+            return;
+        }
+        byHost.putIfAbsent(addr.getHostAddress(), addr);
+    }
+
+    private static List<String> hostCandidates(ServiceInfo serviceInfo) {
+        List<String> out = new ArrayList<>();
+        String[] hosts = serviceInfo.getHostAddresses();
+        if (hosts != null) {
+            for (String h : hosts) {
+                if (h != null && !h.isBlank()) {
+                    out.add(h.trim());
+                }
+            }
+        }
+        String server = serviceInfo.getServer();
+        if (server != null && !server.isBlank()) {
+            out.add(server.trim());
+        }
+        return out;
     }
 
     private static String firstTxt(ServiceInfo info, String... keys) {

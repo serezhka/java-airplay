@@ -10,7 +10,11 @@ dumps/
 /log.*
 gst.log
 /research/
+# Private Cursor rules stay local; public cloud-agent env is committed.
 /.cursor/*
+!/.cursor/environment.json
+!/.cursor/Dockerfile
+!/.cursor/README.md
 **/build/reports/playback-metrics/
 __pycache__/
 /scripts

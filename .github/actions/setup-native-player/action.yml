@@ -15,10 +15,55 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        sudo apt-get update
+        # GitHub ubuntu runners sometimes ship a packages.microsoft.com apt source that
+        # 403s and fails the whole job before ffmpeg/gstreamer install. Drop it; we only
+        # need Ubuntu archive packages for CI natives.
+        sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list \
+                   /etc/apt/sources.list.d/microsoft*.list \
+                   /etc/apt/sources.list.d/azure-cli.list 2>/dev/null || true
+        # azure.archive.ubuntu.com sometimes stalls with Ign/retry (~30s each) and can burn
+        # the whole playback job (~30 min) on gstreamer deps. Prefer archive.ubuntu.com and
+        # fail hung GETs quickly so the step times out instead of crawling to job timeout.
+        sudo sed -i \
+          -e 's|https\?://azure\.archive\.ubuntu\.com/ubuntu|http://archive.ubuntu.com/ubuntu|g' \
+          /etc/apt/sources.list \
+          /etc/apt/sources.list.d/*.list \
+          /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+        APT_OPTS=(
+          -o Acquire::Retries=2
+          -o Acquire::http::Timeout=20
+          -o Acquire::https::Timeout=20
+          -o Acquire::Languages=none
+        )
+        sudo apt-get update "${APT_OPTS[@]}"
         case "${{ inputs.player }}" in
-          ffmpeg) sudo apt-get install -y ffmpeg xvfb ;;
-          gstreamer) sudo apt-get install -y gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad xvfb ;;
+          ffmpeg)
+            # pulse null sink: ffplay PCM (mirror audio) needs SDL_AUDIODRIVER=pulse
+            sudo apt-get install -y --no-install-recommends "${APT_OPTS[@]}" \
+              ffmpeg xvfb pulseaudio
+            pulseaudio --check || pulseaudio --start --exit-idle-time=-1
+            pactl load-module module-null-sink sink_name=ci_null 2>/dev/null || true
+            pactl set-default-sink ci_null 2>/dev/null || true
+            ;;
+          gstreamer)
+            # libav = avdec_h264 (same soft decode as the app); x11 = ximagesink under xvfb;
+            # pulse null sink so autoaudiosink has somewhere to go when not using appsink.
+            # plugins-bad: hlsdemux2 for playbin3 HLS.
+            sudo apt-get install -y --no-install-recommends "${APT_OPTS[@]}" \
+              gstreamer1.0-tools \
+              gstreamer1.0-plugins-base \
+              gstreamer1.0-plugins-good \
+              gstreamer1.0-plugins-bad \
+              gstreamer1.0-libav \
+              gstreamer1.0-x \
+              gstreamer1.0-pulseaudio \
+              pulseaudio \
+              xvfb \
+              ffmpeg
+            pulseaudio --check || pulseaudio --start --exit-idle-time=-1
+            pactl load-module module-null-sink sink_name=ci_null 2>/dev/null || true
+            pactl set-default-sink ci_null 2>/dev/null || true
+            ;;
           *) echo "Unknown player: ${{ inputs.player }}"; exit 1 ;;
         esac
 
@@ -26,6 +71,7 @@ runs:
       if: runner.os == 'Windows' && inputs.player == 'ffmpeg'
       shell: pwsh
       run: |
+        # Floating "latest" zip — leave uncached (no pin).
         $dest = "$env:RUNNER_TEMP\ffmpeg"
         New-Item -ItemType Directory -Force -Path $dest | Out-Null
         Invoke-WebRequest -Uri 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip' -OutFile "$env:RUNNER_TEMP\ffmpeg.zip"
@@ -34,14 +80,28 @@ runs:
         Copy-Item -Recurse -Force "$($inner.FullName)\*" $dest
         Add-Content $env:GITHUB_PATH "$dest\bin"
 
+    # MSI URL is already versioned; cache that one file. apt and FFmpeg "latest" stay uncached.
+    - name: Cache Windows GStreamer MSI
+      if: runner.os == 'Windows' && inputs.player == 'gstreamer'
+      id: gst-msi-cache
+      uses: actions/cache@v6
+      with:
+        path: ${{ runner.temp }}/gstreamer.msi
+        # Keep in sync with $ver in the install step below.
+        key: gstreamer-msi-1.26.11-msvc_x86_64
+
     - name: Windows GStreamer
       if: runner.os == 'Windows' && inputs.player == 'gstreamer'
       shell: pwsh
+      env:
+        GST_MSI_CACHE_HIT: ${{ steps.gst-msi-cache.outputs.cache-hit }}
       run: |
         $ver = '1.26.11'
         $msi = "$env:RUNNER_TEMP\gstreamer.msi"
         $prefix = 'C:\gstreamer\1.0\msvc_x86_64'
-        Invoke-WebRequest -Uri "https://gstreamer.freedesktop.org/data/pkg/windows/$ver/msvc/gstreamer-1.0-msvc-x86_64-$ver.msi" -OutFile $msi
+        if ($env:GST_MSI_CACHE_HIT -ne 'true' -or -not (Test-Path $msi)) {
+          Invoke-WebRequest -Uri "https://gstreamer.freedesktop.org/data/pkg/windows/$ver/msvc/gstreamer-1.0-msvc-x86_64-$ver.msi" -OutFile $msi
+        }
         Start-Process msiexec.exe -Wait -ArgumentList "/a `"$msi`" /qn TARGETDIR=$prefix"
         $exe = Get-ChildItem $prefix -Recurse -Filter gst-launch-1.0.exe -ErrorAction SilentlyContinue | Select-Object -First 1
         if (-not $exe) { throw "gst-launch-1.0 missing after MSI extract under $prefix" }
@@ -50,3 +110,11 @@ runs:
         Add-Content $env:GITHUB_PATH $bin
         Add-Content $env:GITHUB_ENV "GSTREAMER_1_0_ROOT_MSVC_X86_64=$root"
         Add-Content $env:GITHUB_ENV "GSTREAMER_BIN=$bin"
+        # ffmpeg for HLS fixture generation — floating latest, uncached
+        $ff = "$env:RUNNER_TEMP\ffmpeg"
+        New-Item -ItemType Directory -Force -Path $ff | Out-Null
+        Invoke-WebRequest -Uri 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip' -OutFile "$env:RUNNER_TEMP\ffmpeg.zip"
+        Expand-Archive "$env:RUNNER_TEMP\ffmpeg.zip" "$env:RUNNER_TEMP\ffmpeg-extract" -Force
+        $inner = Get-ChildItem "$env:RUNNER_TEMP\ffmpeg-extract" | Select-Object -First 1
+        Copy-Item -Recurse -Force "$($inner.FullName)\*" $ff
+        Add-Content $env:GITHUB_PATH "$ff\bin"

@@ -20,6 +20,7 @@ class LoopbackMediaCallbackTest {
         consumer.onVideoSrcDisconnect();
         assertTrue(consumer.videoFrames() > 0);
         assertEquals(0, consumer.audioFrames());
+        assertEquals(1, consumer.videoDisconnects());
     }
 
     @Test
@@ -37,6 +38,7 @@ class LoopbackMediaCallbackTest {
         consumer.onAudioSrcDisconnect();
         assertEquals(30, consumer.audioFrames());
         assertEquals(0, consumer.videoFrames());
+        assertEquals(1, consumer.audioDisconnects());
     }
 
     @Test
@@ -55,5 +57,43 @@ class LoopbackMediaCallbackTest {
         consumer.onAudioSrcDisconnect();
         assertTrue(consumer.videoFrames() > 0);
         assertTrue(consumer.audioFrames() >= 2);
+    }
+
+    @Test
+    void audioDisconnectWhileVideoContinuesThenReconnect() throws Exception {
+        RecordingConsumer consumer = new RecordingConsumer();
+        consumer.onVideoFormat(new VideoStreamInfo("loopback-audio-reconnect"));
+        consumer.onAudioFormat(PlaybackFixture.aacLcStreamInfo());
+        PlaybackFixture.playVideo(consumer, 10);
+        consumer.onAudio(new byte[64]);
+        consumer.onAudioSrcDisconnect();
+        assertEquals(1, consumer.audioDisconnects());
+
+        consumer.onAudioFormat(PlaybackFixture.aacLcStreamInfo());
+        consumer.onAudio(new byte[64]);
+        consumer.onAudio(new byte[64]);
+        PlaybackFixture.playVideo(consumer, 5);
+        consumer.onAudioSrcDisconnect();
+        consumer.onVideoSrcDisconnect();
+
+        assertEquals(2, consumer.audioDisconnects());
+        assertEquals(1, consumer.videoDisconnects());
+        assertTrue(consumer.videoFrames() > 0);
+        assertTrue(consumer.audioFrames() >= 3);
+        assertTrue(consumer.eventsContainInOrder(
+                "videoFormat", "audioFormat", "audioDisconnect", "audioFormat", "audioDisconnect",
+                "videoDisconnect"));
+    }
+
+    @Test
+    void mirrorReconnectTwice() throws Exception {
+        RecordingConsumer consumer = new RecordingConsumer();
+        for (int i = 0; i < 2; i++) {
+            consumer.onVideoFormat(new VideoStreamInfo("reconnect-" + i));
+            PlaybackFixture.playVideo(consumer, 8);
+            consumer.onVideoSrcDisconnect();
+        }
+        assertEquals(2, consumer.videoDisconnects());
+        assertTrue(consumer.videoFrames() > 0);
     }
 }

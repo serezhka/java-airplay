@@ -1,34 +1,49 @@
 {
   "properties": [
     {
-      "name": "airplay.serverName",
+      "name": "airplay.server-name",
       "type": "java.lang.String",
-      "description": "Name of airplay server."
+      "description": "mDNS / AirPlay display name advertised by the receiver."
     },
     {
       "name": "airplay.width",
-      "type": "java.lang.String",
-      "description": "Airplay video width."
+      "type": "java.lang.Integer",
+      "description": "Advertised max mirror width (pixels)."
     },
     {
       "name": "airplay.height",
-      "type": "java.lang.String",
-      "description": "Airplay video height."
+      "type": "java.lang.Integer",
+      "description": "Advertised max mirror height (pixels)."
     },
     {
       "name": "airplay.fps",
-      "type": "java.lang.String",
-      "description": "Airplay max fps."
+      "type": "java.lang.Integer",
+      "description": "Advertised max mirror frame rate."
     },
     {
-      "name": "player.tray.enabled",
+      "name": "airplay.hls-enabled",
       "type": "java.lang.Boolean",
-      "description": "Enables system tray menu."
+      "description": "Advertise Video / HTTP-Live feature bits and accept HLS /play."
     },
     {
-      "name": "client.src",
+      "name": "airplay.mdns-loopback",
+      "type": "java.lang.Boolean",
+      "description": "Include loopback in mDNS advertise/browse (self-cast / CI). Default off for release."
+    },
+    {
+      "name": "airplay.tray-enabled",
+      "type": "java.lang.Boolean",
+      "description": "Show the system tray menu (cast picker + quit)."
+    },
+    {
+      "name": "client.video.src",
       "type": "java.lang.String",
-      "description": "Cast capture source: videotest or screencapture."
+      "description": "Cast video source installed for MirrorCaster / VideoClient."
+    },
+    {
+      "name": "client.audio.src",
+      "type": "java.lang.String",
+      "description": "Cast audio source installed for MirrorCaster / AudioClient."
     },
     {
       "name": "dump.enabled",
@@ -69,6 +84,79 @@
       "name": "dump.videoFps",
       "type": "java.lang.Integer",
       "description": "Assumed AirPlay mirror frame rate used when remuxing dumped H.264 into MP4."
+    },
+    {
+      "name": "player.tray.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Deprecated: use airplay.tray-enabled.",
+      "deprecation": {
+        "level": "error",
+        "reason": "Renamed under the airplay.* receiver/UI group.",
+        "replacement": "airplay.tray-enabled"
+      }
+    },
+    {
+      "name": "client.src",
+      "type": "java.lang.String",
+      "description": "Deprecated: use client.video.src (and client.audio.src).",
+      "deprecation": {
+        "level": "error",
+        "reason": "Split into separate video and audio cast sources.",
+        "replacement": "client.video.src"
+      }
+    }
+  ],
+  "hints": [
+    {
+      "name": "client.video.src",
+      "values": [
+        {
+          "value": "videotest",
+          "description": "Synthetic H.264 test pattern (GStreamer/FFmpeg)."
+        },
+        {
+          "value": "screencapture",
+          "description": "Desktop capture (not implemented yet)."
+        },
+        {
+          "value": "none",
+          "description": "Do not send a video stream when casting."
+        }
+      ]
+    },
+    {
+      "name": "client.audio.src",
+      "values": [
+        {
+          "value": "audiotest",
+          "description": "Synthetic AAC-LC sine tone for cast smoke tests."
+        },
+        {
+          "value": "none",
+          "description": "Do not send an audio stream when casting."
+        }
+      ]
+    },
+    {
+      "name": "airplay.hls-enabled",
+      "values": [
+        { "value": "true", "description": "Advertise HLS and accept /play." },
+        { "value": "false", "description": "Mirror-oriented feature bits only." }
+      ]
+    },
+    {
+      "name": "airplay.mdns-loopback",
+      "values": [
+        { "value": "false", "description": "Default release: no loopback advertise/browse." },
+        { "value": "true", "description": "Self-cast / CI: include loopback." }
+      ]
+    },
+    {
+      "name": "airplay.tray-enabled",
+      "values": [
+        { "value": "true", "description": "Show tray menu." },
+        { "value": "false", "description": "Headless / no tray." }
+      ]
     }
   ]
 }

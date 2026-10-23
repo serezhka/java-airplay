@@ -10,4 +10,6 @@ public class AirPlayConfig {
     private int fps;
     private boolean hlsEnabled;
     private boolean mdnsLoopback;
+    /** System tray menu (cast picker + quit). Bound from {@code airplay.tray-enabled}. */
+    private boolean trayEnabled = true;
 }

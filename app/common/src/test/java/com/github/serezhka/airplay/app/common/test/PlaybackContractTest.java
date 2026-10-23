@@ -39,6 +39,56 @@ class PlaybackContractTest {
     }
 
     @Test
+    void volumeClampsToUnitInterval() {
+        RecordingConsumer playback = new RecordingConsumer();
+        playback.onVolume(-1.0);
+        assertEquals(0.0, playback.volume(), 0.0);
+        playback.onVolume(2.0);
+        assertEquals(1.0, playback.volume(), 0.0);
+    }
+
+    @Test
+    void controlEventOrderForHlsRoundTrip() {
+        RecordingConsumer playback = new RecordingConsumer();
+        playback.onPlaylist("http://127.0.0.1/mediadata.m3u8");
+        playback.onPlaylistContent("http://127.0.0.1/mediadata.m3u8", "#EXTM3U\n");
+        playback.onVolume(0.3);
+        playback.onPause();
+        playback.onResume();
+        playback.onSeek(2.0);
+        playback.onPlaylistRemoved();
+        assertTrue(playback.eventsContainInOrder(
+                "playlist", "playlistContent", "volume", "pause", "resume", "seek", "playlistRemoved"));
+    }
+
+    @Test
+    void reconnectRecordsDisconnects() throws Exception {
+        RecordingConsumer consumer = new RecordingConsumer();
+        for (int i = 0; i < 2; i++) {
+            consumer.onVideoFormat(new VideoStreamInfo("r" + i));
+            PlaybackFixture.playVideo(consumer, 5);
+            consumer.onVideoSrcDisconnect();
+        }
+        assertEquals(2, consumer.videoDisconnects());
+        assertTrue(consumer.videoFrames() > 0);
+        assertTrue(consumer.eventsContainInOrder(
+                "videoFormat", "videoDisconnect", "videoFormat", "videoDisconnect"));
+    }
+
+    @Test
+    void doubleDisconnectIsIdempotent() {
+        RecordingConsumer consumer = new RecordingConsumer();
+        consumer.onVideoFormat(new VideoStreamInfo("d"));
+        consumer.onAudioFormat(PlaybackFixture.aacLcStreamInfo());
+        consumer.onVideoSrcDisconnect();
+        consumer.onVideoSrcDisconnect();
+        consumer.onAudioSrcDisconnect();
+        consumer.onAudioSrcDisconnect();
+        assertEquals(2, consumer.videoDisconnects());
+        assertEquals(2, consumer.audioDisconnects());
+    }
+
+    @Test
     void observerOnEndedIsInvokable() {
         AtomicInteger ends = new AtomicInteger();
         RecordingConsumer playback = new RecordingConsumer();

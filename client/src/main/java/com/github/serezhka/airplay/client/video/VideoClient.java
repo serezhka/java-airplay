@@ -4,7 +4,6 @@ import com.github.serezhka.airplay.client.netty.NettyEventLoops;
 
 import com.github.serezhka.airplay.client.capture.CaptureSource;
 import com.github.serezhka.airplay.client.capture.CaptureSources;
-import com.github.serezhka.airplay.client.crypto.AesCtrStreamEncryptor;
 import com.github.serezhka.airplay.client.crypto.FairPlayVideoEncryptor;
 import com.github.serezhka.airplay.protocol.mirror.MirrorPacketHeaders;
 import com.github.serezhka.airplay.protocol.mirror.MirrorPacketLayout;
@@ -37,7 +36,6 @@ public class VideoClient extends ChannelInboundHandlerAdapter implements AutoClo
     private final String address;
     private final int port;
     private final FairPlayVideoEncryptor encryptor;
-    private final AesCtrStreamEncryptor streamEncryptor;
 
     private static final int FRAME_WIDTH = 1280;
     private static final int FRAME_HEIGHT = 720;
@@ -58,23 +56,9 @@ public class VideoClient extends ChannelInboundHandlerAdapter implements AutoClo
      *                  (HAP SETUP without {@code ekey})
      */
     public VideoClient(String address, int port, FairPlayVideoEncryptor encryptor) throws InterruptedException {
-        this(address, port, encryptor, null);
-    }
-
-    /** Continuous CTR path used for HAP {@code aes_raw}. */
-    public VideoClient(String address, int port, AesCtrStreamEncryptor streamEncryptor) throws InterruptedException {
-        this(address, port, null, streamEncryptor);
-    }
-
-    private VideoClient(
-            String address,
-            int port,
-            FairPlayVideoEncryptor encryptor,
-            AesCtrStreamEncryptor streamEncryptor) throws InterruptedException {
         this.address = address;
         this.port = port;
         this.encryptor = encryptor;
-        this.streamEncryptor = streamEncryptor;
         Thread t = new Thread(this::run, "airplay-video-client");
         t.setDaemon(true);
         t.start();
@@ -177,13 +161,9 @@ public class VideoClient extends ChannelInboundHandlerAdapter implements AutoClo
         }
         // Type-1 codec config is plaintext on the wire (receivers do not AES-CTR it).
         // Encrypting it advances our CTR while the peer does not — every later frame decrypts wrong.
-        if (payloadType != MirrorPacketLayout.PAYLOAD_CODEC) {
+        if (payloadType != MirrorPacketLayout.PAYLOAD_CODEC && encryptor != null) {
             try {
-                if (streamEncryptor != null) {
-                    streamEncryptor.encrypt(payload);
-                } else if (encryptor != null) {
-                    encryptor.encrypt(payload);
-                }
+                encryptor.encrypt(payload);
             } catch (Exception e) {
                 log.error("video encrypt failed: {}", e.getMessage());
                 return;

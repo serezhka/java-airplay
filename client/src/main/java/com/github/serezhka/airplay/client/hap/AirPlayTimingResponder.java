@@ -35,10 +35,6 @@ public final class AirPlayTimingResponder implements AutoCloseable {
     private final AtomicInteger replies = new AtomicInteger();
     private final long bootNanos;
 
-    public AirPlayTimingResponder() throws SocketException {
-        this(System.nanoTime());
-    }
-
     public AirPlayTimingResponder(long bootNanos) throws SocketException {
         this.bootNanos = bootNanos;
         Bound bound = bindTimingWithNeighbors();

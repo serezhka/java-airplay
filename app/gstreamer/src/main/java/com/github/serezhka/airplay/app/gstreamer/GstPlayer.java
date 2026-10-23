@@ -38,7 +38,7 @@ public class GstPlayer implements Playback {
         GLib.setEnv("GST_DEBUG_FILE", NativeProcessLog.playerLogFile("gstreamer").toString(), true);
         GLib.setEnv("GST_DEBUG", System.getProperty("airplay.gst.debug", "3"), true);
         preferSoftwareVideoDecode();
-        Gst.init(Version.of(1, 10), "BasicPipeline");
+        Gst.init(Version.of(1, 10), "java-airplay");
     }
 
     /**
@@ -127,11 +127,20 @@ public class GstPlayer implements Playback {
         } else {
             sinkLaunch = " ! appsink name=sink sync=false";
         }
-        log.info("GStreamer video sink: {}",
-                forceAppsink ? "fakesink(forced)" : useD3d11 ? "d3d11videosink" : useXimage ? "ximagesink" : "appsink");
+        // Headless CI (appsink/fakesink video) has no usable audio device either.
+        String audioSink = forceAppsink
+                ? "fakesink sync=false async=false"
+                : "autoaudiosink sync=false";
+        log.info("GStreamer video sink: {}; audio sink: {}",
+                forceAppsink ? "fakesink(forced)" : useD3d11 ? "d3d11videosink" : useXimage ? "ximagesink" : "appsink",
+                forceAppsink ? "fakesink(forced)" : "autoaudiosink");
+        // Never leaky before avdec — mid-GOP drops freeze / ghost the picture.
+        // Cap display latency after decode; videoflip kept for orientation.
         h264Pipeline = (Pipeline) Gst.parseLaunch(
                 "appsrc name=h264-src ! h264parse config-interval=-1 ! avdec_h264"
                         + " ! videoflip video-direction=auto ! videoconvert"
+                        + " ! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0"
+                        + " leaky=downstream"
                         + sinkLaunch);
 
         h264Src = (AppSrc) h264Pipeline.getElementByName("h264-src");
@@ -143,36 +152,45 @@ public class GstPlayer implements Playback {
         h264Src.set("format", Format.TIME);
         h264Src.set("do-timestamp", true);
         h264Src.set("emit-signals", true);
+        h264Src.set("block", false);
+        h264Src.set("max-bytes", 2L * 1024 * 1024);
 
         alacPipeline = (Pipeline) Gst.parseLaunch(
-                "appsrc name=alac-src ! avdec_alac ! audioconvert ! audioresample"
-                        + " ! volume name=alac-vol ! autoaudiosink sync=false");
+                "appsrc name=alac-src ! queue max-size-buffers=8 leaky=downstream"
+                        + " ! avdec_alac ! audioconvert ! audioresample"
+                        + " ! volume name=alac-vol ! " + audioSink);
         alacSrc = (AppSrc) alacPipeline.getElementByName("alac-src");
         alacSrc.setStreamType(AppSrc.StreamType.STREAM);
         alacSrc.setCaps(Caps.fromString("audio/x-alac,mpegversion=(int)4,channels=(int)2,rate=(int)44100,stream-format=raw,codec_data=(buffer)00000024616c616300000000000001600010280a0e0200ff00000000000000000000ac44"));
         alacSrc.set("is-live", true);
         alacSrc.set("format", Format.TIME);
         alacSrc.set("emit-signals", true);
+        alacSrc.set("block", false);
 
         aacEldPipeline = (Pipeline) Gst.parseLaunch(
-                "appsrc name=aac-eld-src ! avdec_aac ! audioconvert ! audioresample"
-                        + " ! volume name=aac-eld-vol ! autoaudiosink sync=false");
+                "appsrc name=aac-eld-src ! queue max-size-buffers=8 leaky=downstream"
+                        + " ! avdec_aac ! audioconvert ! audioresample"
+                        + " ! volume name=aac-eld-vol ! " + audioSink);
         aacEldSrc = (AppSrc) aacEldPipeline.getElementByName("aac-eld-src");
         aacEldSrc.setStreamType(AppSrc.StreamType.STREAM);
+        // AirPlay mirror AAC-ELD ASC used by iOS senders (do not "fix" for CAF aace fixtures).
         aacEldSrc.setCaps(Caps.fromString("audio/mpeg,mpegversion=(int)4,channels=(int)2,rate=(int)44100,stream-format=raw,codec_data=(buffer)f8e85000"));
         aacEldSrc.set("is-live", true);
         aacEldSrc.set("format", Format.TIME);
         aacEldSrc.set("emit-signals", true);
+        aacEldSrc.set("block", false);
 
         aacLcPipeline = (Pipeline) Gst.parseLaunch(
-                "appsrc name=aac-lc-src ! aacparse ! avdec_aac ! audioconvert ! audioresample"
-                        + " ! volume name=aac-lc-vol ! autoaudiosink sync=false");
+                "appsrc name=aac-lc-src ! queue max-size-buffers=8 leaky=downstream"
+                        + " ! aacparse ! avdec_aac ! audioconvert ! audioresample"
+                        + " ! volume name=aac-lc-vol ! " + audioSink);
         aacLcSrc = (AppSrc) aacLcPipeline.getElementByName("aac-lc-src");
         aacLcSrc.setStreamType(AppSrc.StreamType.STREAM);
         aacLcSrc.setCaps(Caps.fromString("audio/mpeg,mpegversion=(int)4,stream-format=adts,channels=(int)2,rate=(int)44100"));
         aacLcSrc.set("is-live", true);
         aacLcSrc.set("format", Format.TIME);
         aacLcSrc.set("emit-signals", true);
+        aacLcSrc.set("block", false);
 
         Element sink = h264Pipeline.getElementByName("sink");
         if (forceAppsink) {
@@ -205,6 +223,11 @@ public class GstPlayer implements Playback {
     public void onVideoFormat(VideoStreamInfo videoStreamInfo) {
         // Release HLS before starting the appsrc mirror pipeline (shared GPU/display).
         hls.stop();
+        // Fresh decoder state — a previous session / mid-GOP drop leaves avdec with
+        // bad refs and paints ghosted / duplicated-looking frames.
+        if (h264Pipeline.isPlaying()) {
+            h264Pipeline.stop();
+        }
         if (window != null) {
             GstFullscreenWindow.show(window);
             GstFullscreenWindow.onEdt(attachWindow);
@@ -244,8 +267,16 @@ public class GstPlayer implements Playback {
 
     @Override
     public void onAudio(byte[] bytes) {
-        Buffer buf = new Buffer(bytes.length);
-        buf.map(true).put(bytes);
+        onAudio(bytes, 0, bytes == null ? 0 : bytes.length);
+    }
+
+    @Override
+    public void onAudio(byte[] bytes, int offset, int length) {
+        if (bytes == null || length <= 0 || audioCompressionType == null) {
+            return;
+        }
+        Buffer buf = new Buffer(length);
+        buf.map(true).put(bytes, offset, length);
         buf.unmap();
         switch (audioCompressionType) {
             case ALAC -> alacSrc.pushBuffer(buf);
@@ -343,6 +374,14 @@ public class GstPlayer implements Playback {
 
     boolean isVideoPipelinePlaying() {
         return h264Pipeline.isPlaying();
+    }
+
+    boolean isAudioPipelinePlaying() {
+        return alacPipeline.isPlaying() || aacEldPipeline.isPlaying() || aacLcPipeline.isPlaying();
+    }
+
+    boolean isHlsActive() {
+        return hls.isActive();
     }
 
     boolean isFullscreenConfigured() {

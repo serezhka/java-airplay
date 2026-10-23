@@ -4,6 +4,7 @@ import com.dd.plist.BinaryPropertyListWriter;
 import com.dd.plist.NSArray;
 import com.dd.plist.NSData;
 import com.dd.plist.NSDictionary;
+import com.github.serezhka.airplay.protocol.media.AirPlayStreamType;
 import com.github.serezhka.airplay.server.discovery.AdvertisedReceiver;
 import com.github.serezhka.airplay.server.AirPlayConfig;
 import com.github.serezhka.airplay.server.Playback;
@@ -14,39 +15,63 @@ import java.nio.charset.StandardCharsets;
 @Slf4j
 public class PropertyListUtil {
 
+    /**
+     * Bitmask of audio codecs listed under {@code GET /info} {@code audioFormats}
+     * ({@code audioInputFormats} / {@code audioOutputFormats}).
+     */
+    private static final int INFO_AUDIO_FORMATS_MASK = 0x3FFFFFC;
+
+    /** {@code type} values pairing {@code audioFormats} / {@code audioLatencies} entries. */
+    private static final int INFO_AUDIO_DESCRIPTOR_TYPE_A = 100;
+    private static final int INFO_AUDIO_DESCRIPTOR_TYPE_B = 101;
+
+    /**
+     * {@code displays[].features} in {@code GET /info}
+     * (width / height / pixels capability bits).
+     */
+    private static final int INFO_DISPLAY_FEATURES = 0xE;
+
+    private static final int INFO_DISPLAY_REFRESH_RATE_HZ = 60;
+
+    private static final double SERVER_INFO_PROTOVERS = 1.0;
+
+    /** FCUP reverse-request client identity fields (wire constants). */
+    private static final int FCUP_CLIENT_INFO = 1;
+    private static final int FCUP_CLIENT_REF = 40_030_004;
+
     public static byte[] prepareInfoResponse(AirPlayConfig airPlayConfig, byte[] pairingPublicKey) throws Exception {
         NSDictionary audioFormat100 = new NSDictionary();
-        audioFormat100.put("audioInputFormats", 67108860);
-        audioFormat100.put("audioOutputFormats", 67108860);
-        audioFormat100.put("type", 100);
+        audioFormat100.put("audioInputFormats", INFO_AUDIO_FORMATS_MASK);
+        audioFormat100.put("audioOutputFormats", INFO_AUDIO_FORMATS_MASK);
+        audioFormat100.put("type", INFO_AUDIO_DESCRIPTOR_TYPE_A);
 
         NSDictionary audioFormat101 = new NSDictionary();
-        audioFormat101.put("audioInputFormats", 67108860);
-        audioFormat101.put("audioOutputFormats", 67108860);
-        audioFormat101.put("type", 101);
+        audioFormat101.put("audioInputFormats", INFO_AUDIO_FORMATS_MASK);
+        audioFormat101.put("audioOutputFormats", INFO_AUDIO_FORMATS_MASK);
+        audioFormat101.put("type", INFO_AUDIO_DESCRIPTOR_TYPE_B);
 
         NSArray audioFormats = new NSArray(audioFormat100, audioFormat101);
 
         NSDictionary audioLatency100 = new NSDictionary();
         audioLatency100.put("audioType", "default");
         audioLatency100.put("inputLatencyMicros", false);
-        audioLatency100.put("type", 100);
+        audioLatency100.put("type", INFO_AUDIO_DESCRIPTOR_TYPE_A);
 
         NSDictionary audioLatency101 = new NSDictionary();
         audioLatency101.put("audioType", "default");
         audioLatency101.put("inputLatencyMicros", false);
-        audioLatency101.put("type", 101);
+        audioLatency101.put("type", INFO_AUDIO_DESCRIPTOR_TYPE_B);
 
         NSArray audioLatencies = new NSArray(audioLatency100, audioLatency101);
 
         NSDictionary display = new NSDictionary();
-        display.put("features", 14);
+        display.put("features", INFO_DISPLAY_FEATURES);
         display.put("height", airPlayConfig.getHeight());
         display.put("heightPhysical", false);
         display.put("heightPixels", airPlayConfig.getHeight());
         display.put("maxFPS", airPlayConfig.getFps());
         display.put("overscanned", false);
-        display.put("refreshRate", 60);
+        display.put("refreshRate", INFO_DISPLAY_REFRESH_RATE_HZ);
         display.put("rotation", false);
         display.put("uuid", "e5f7a68d-7b0f-4305-984b-974f677a150b");
         display.put("width", airPlayConfig.getWidth());
@@ -76,7 +101,7 @@ public class PropertyListUtil {
         NSArray streams = new NSArray(1);
         NSDictionary dataStream = new NSDictionary();
         dataStream.put("dataPort", dataPort);
-        dataStream.put("type", 96);
+        dataStream.put("type", AirPlayStreamType.AUDIO_REALTIME);
         dataStream.put("controlPort", controlPort);
         streams.setValue(0, dataStream);
 
@@ -90,7 +115,7 @@ public class PropertyListUtil {
         NSArray streams = new NSArray(1);
         NSDictionary dataStream = new NSDictionary();
         dataStream.put("dataPort", dataPort);
-        dataStream.put("type", 110);
+        dataStream.put("type", AirPlayStreamType.SCREEN);
         streams.setValue(0, dataStream);
 
         NSDictionary response = new NSDictionary();
@@ -101,11 +126,16 @@ public class PropertyListUtil {
         return BinaryPropertyListWriter.writeToArray(response);
     }
 
+    /**
+     * {@code GET /server-info} — compact HLS probe profile
+     * ({@link AdvertisedReceiver#SERVER_INFO_FEATURES}), not the mDNS /
+     * {@code GET /info} identity. See {@link AdvertisedReceiver}.
+     */
     public static byte[] prepareServerInfoResponse() {
         NSDictionary response = new NSDictionary();
-        response.put("features", 119); // 130367356919L -> leads to HTTP fp-setup, fp-setup2
-        response.put("protovers", 1.0);
-        response.put("srcvers", 101.28);
+        response.put("features", AdvertisedReceiver.SERVER_INFO_FEATURES);
+        response.put("protovers", SERVER_INFO_PROTOVERS);
+        response.put("srcvers", Double.parseDouble(AdvertisedReceiver.SERVER_INFO_SOURCE_VERSION));
         return response.toXMLPropertyList().getBytes(StandardCharsets.UTF_8);
     }
 
@@ -266,8 +296,8 @@ public class PropertyListUtil {
         headers.put("User-Agent", "AppleCoreMedia/1.0.0.11B554a (Apple TV; U; CPU OS 7_0_4 like Mac OS X; en_us");
 
         NSDictionary request = new NSDictionary();
-        request.put("FCUP_Response_ClientInfo", 1);
-        request.put("FCUP_Response_ClientRef", 40030004);
+        request.put("FCUP_Response_ClientInfo", FCUP_CLIENT_INFO);
+        request.put("FCUP_Response_ClientRef", FCUP_CLIENT_REF);
         request.put("FCUP_Response_Headers", headers);
         request.put("FCUP_Response_RequestID", requestId);
         request.put("FCUP_Response_URL", listUri);

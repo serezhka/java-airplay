@@ -22,8 +22,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Tray: Cast submenu (devices, GTK-safe rebuild) + Exit.
- * Click a device to connect (⚙… / ✓); click again to disconnect.
+ * Tray: Cast submenu + Exit.
+ * Click a device to connect; click again to disconnect. Stopping cast must not
+ * tear down the receiver — Exit stays fixed on the root menu, and Cast-submenu
+ * rebuilds are deferred off the GTK click path.
  */
 @Slf4j
 public class SystemTrayMenu {
@@ -72,16 +74,40 @@ public class SystemTrayMenu {
         systemTray.getMenu().add(new Separator());
         systemTray.getMenu().add(new MenuItem("Exit", e -> exitApp()));
 
-        rebuildMenuNow();
+        scheduleRebuild();
 
         mirrorCaster.startDiscovery(list -> {
             devices.set(List.copyOf(list));
             log.info("Discovery update: {} device(s)", list.size());
+            if (log.isDebugEnabled()) {
+                log.debug("Discovery devices: {}", list);
+            }
             scheduleRebuild();
         });
     }
 
+    /**
+     * End the outbound cast session only. Discovery, tray, and the AirPlay receiver stay up.
+     */
+    private void stopCast() {
+        boolean wasCasting = mirrorCaster.isConnected()
+                || deviceState.get() != CastDeviceMenu.DeviceState.IDLE;
+        if (!wasCasting) {
+            return;
+        }
+        log.info("Stopping cast — AirPlay receiver keeps running");
+        mirrorCaster.disconnect();
+        activeKey.set(null);
+        deviceState.set(CastDeviceMenu.DeviceState.IDLE);
+        // Never rebuild the Cast submenu synchronously inside a tray click: GTK can
+        // deliver the event to Exit while the menu is being replaced.
+        scheduleRebuild();
+    }
+
     private void scheduleRebuild() {
+        if (deviceMenu == null) {
+            return;
+        }
         if (!rebuildScheduled.compareAndSet(false, true)) {
             return;
         }
@@ -99,10 +125,7 @@ public class SystemTrayMenu {
         if (state == CastDeviceMenu.DeviceState.CONNECTED
                 && key.equals(current)
                 && mirrorCaster.isConnected()) {
-            mirrorCaster.disconnect();
-            activeKey.set(null);
-            deviceState.set(CastDeviceMenu.DeviceState.IDLE);
-            rebuildMenuNow();
+            stopCast();
             return;
         }
 
@@ -116,12 +139,12 @@ public class SystemTrayMenu {
 
         activeKey.set(key);
         deviceState.set(CastDeviceMenu.DeviceState.CONNECTING);
-        rebuildMenuNow();
+        scheduleRebuild();
 
         try {
             mirrorCaster.connect(device, this::promptPinOnEdt);
             deviceState.set(CastDeviceMenu.DeviceState.CONNECTED);
-            rebuildMenuNow();
+            scheduleRebuild();
         } catch (MirrorCaster.CastCancelledException cancelled) {
             log.info("{}", cancelled.getMessage());
             clearActive();
@@ -139,7 +162,7 @@ public class SystemTrayMenu {
     private void clearActive() {
         activeKey.set(null);
         deviceState.set(CastDeviceMenu.DeviceState.IDLE);
-        rebuildMenuNow();
+        scheduleRebuild();
     }
 
     private void rebuildMenuNow() {
@@ -169,12 +192,11 @@ public class SystemTrayMenu {
     }
 
     private void exitApp() {
-        castExecutor.execute(() -> {
-            try {
-                mirrorCaster.close();
-            } catch (Exception ignored) {
-            }
-        });
+        log.info("Exit requested — shutting down receiver");
+        try {
+            mirrorCaster.close();
+        } catch (Exception ignored) {
+        }
         castExecutor.shutdownNow();
         uiDebounce.shutdownNow();
         if (systemTray != null) {

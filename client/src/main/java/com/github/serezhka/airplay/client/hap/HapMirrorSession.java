@@ -18,7 +18,13 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * HKP mirror session: pair-verify → audio+video SETUP → RECORD → DataStream ChaCha video.
+ * HKP mirror session: pair-verify → audio companion SETUP → video SETUP → RECORD →
+ * DataStream video.
+ *
+ * <p>AAC {@code client.audio.src=audiotest} is sent on the <em>legacy FairPlay</em> cast path
+ * only. HAP audio SETUP here is session plumbing (timing / eventPort); we do not encrypt
+ * UDP AAC with FairPlay ekey/eiv on this path, and our receiver ignores HAP {@code shk}
+ * for audio decrypt.
  */
 @Slf4j
 public final class HapMirrorSession implements AutoCloseable {
@@ -46,17 +52,33 @@ public final class HapMirrorSession implements AutoCloseable {
     }
 
     /**
-     * After Control-Salt is enabled on {@code control}, run audio→video SETUP and start
-     * the DataStream video feed.
+     * After Control-Salt is enabled on {@code control}, run SETUP and start the video feed.
      *
      * @param sharedSecret pair-verify X25519 shared secret
+     * @param castVideo    must be true (DataStream video)
+     * @param castAudio    if true, logged only — AAC is not sent on HAP (see class javadoc)
      */
     public static HapMirrorSession startDataStream(
-            HapSocketControl control, String host, int controlPort, byte[] sharedSecret)
-            throws Exception {
+            HapSocketControl control,
+            String host,
+            int controlPort,
+            byte[] sharedSecret,
+            boolean castVideo,
+            boolean castAudio) throws Exception {
+        if (!castVideo) {
+            throw new IllegalStateException(
+                    "HAP cast requires client.video.src (DataStream); "
+                            + "audio-only cast uses the legacy FairPlay path");
+        }
+        if (castAudio) {
+            log.info(
+                    "HAP session: client.audio.src is set but AAC is not sent on this path "
+                            + "(FairPlay ekey/eiv audio is legacy-only)");
+        }
         long bootNanos = System.nanoTime();
         AirPlayTimingResponder timing = new AirPlayTimingResponder(bootNanos);
         Socket eventSocket = null;
+        DataStreamVideoClient video = null;
         try {
             long audioId = RANDOM.nextLong() & Long.MAX_VALUE;
             long videoId = RANDOM.nextLong() & Long.MAX_VALUE;
@@ -67,6 +89,7 @@ public final class HapMirrorSession implements AutoCloseable {
             byte[] audioShk = new byte[32];
             RANDOM.nextBytes(audioShk);
 
+            // Audio SETUP always runs: receivers expect timing/event ports on the HAP path.
             NSDictionary audioStream = new NSDictionary();
             audioStream.put("type", AirPlayStreamType.AUDIO_REALTIME);
             audioStream.put("streamConnectionID", audioId);
@@ -164,9 +187,15 @@ public final class HapMirrorSession implements AutoCloseable {
                     host, dataPort, Long.toUnsignedString(videoId), timing.replyCount());
 
             DataStreamCipher cipher = new DataStreamCipher(sharedSecret, videoId);
-            DataStreamVideoClient video = new DataStreamVideoClient(host, dataPort, cipher, bootNanos);
+            video = new DataStreamVideoClient(host, dataPort, cipher, bootNanos);
             return new HapMirrorSession(control, timing, eventSocket, video, videoId);
         } catch (Exception e) {
+            if (video != null) {
+                try {
+                    video.close();
+                } catch (Exception ignored) {
+                }
+            }
             if (eventSocket != null) {
                 try {
                     eventSocket.close();
@@ -176,6 +205,13 @@ public final class HapMirrorSession implements AutoCloseable {
             timing.close();
             throw e;
         }
+    }
+
+    /** Backward-compatible entry: video + companion audio SETUP (no AAC frames). */
+    public static HapMirrorSession startDataStream(
+            HapSocketControl control, String host, int controlPort, byte[] sharedSecret)
+            throws Exception {
+        return startDataStream(control, host, controlPort, sharedSecret, true, false);
     }
 
     public DataStreamVideoClient video() {

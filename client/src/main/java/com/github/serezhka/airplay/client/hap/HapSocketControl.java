@@ -3,7 +3,6 @@ package com.github.serezhka.airplay.client.hap;
 import com.dd.plist.BinaryPropertyListParser;
 import com.dd.plist.BinaryPropertyListWriter;
 import com.dd.plist.NSDictionary;
-import com.dd.plist.PropertyListFormatException;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -72,14 +71,10 @@ public final class HapSocketControl implements AutoCloseable, HapPairChannel {
 
     @Override
     public Map<Integer, byte[]> pairSetupTlv(byte[] tlvBody) throws Exception {
-        return pairSetupTlv(hkpVersion, tlvBody);
-    }
-
-    public Map<Integer, byte[]> pairSetupTlv(String hkp, byte[] tlvBody) throws Exception {
         // Working HKP3 senders use octet-stream for /pair-setup (not pairing+tlv8).
         Response r = exchange("POST", "/pair-setup", Map.of(
                 "Content-Type", "application/octet-stream",
-                "X-Apple-HKP", hkp
+                "X-Apple-HKP", hkpVersion
         ), tlvBody);
         if (r.statusCode >= 400) {
             throw new IllegalStateException("POST /pair-setup → " + r.statusLine);
@@ -106,21 +101,8 @@ public final class HapSocketControl implements AutoCloseable, HapPairChannel {
         return Tlv8.decode(r.body);
     }
 
-    public NSDictionary rtspSetup(NSDictionary setup) throws Exception {
-        return rtspSetup("rtsp://" + host + "/stream", setup);
-    }
-
     public NSDictionary rtspSetup(String requestUri, NSDictionary setup) throws Exception {
         byte[] body = BinaryPropertyListWriter.writeToArray(setup);
-        return rtspSetupBody(requestUri, body);
-    }
-
-    /** SETUP with a pre-encoded binary plist body. */
-    public NSDictionary rtspSetupBody(byte[] body) throws Exception {
-        return rtspSetupBody("rtsp://" + host + "/stream", body);
-    }
-
-    public NSDictionary rtspSetupBody(String requestUri, byte[] body) throws Exception {
         Response r = exchange("SETUP", requestUri, Map.of(
                 "Content-Type", "application/x-apple-binary-plist",
                 "X-Apple-ProtocolVersion", "1"
@@ -132,10 +114,6 @@ public final class HapSocketControl implements AutoCloseable, HapPairChannel {
             return null;
         }
         return (NSDictionary) BinaryPropertyListParser.parse(r.body);
-    }
-
-    public void rtspRecord() throws Exception {
-        rtspRecord("rtsp://" + host + "/stream", Map.of("X-Apple-ProtocolVersion", "1"));
     }
 
     public void rtspRecord(String requestUri, Map<String, String> extraHeaders) throws Exception {
@@ -340,10 +318,5 @@ public final class HapSocketControl implements AutoCloseable, HapPairChannel {
     }
 
     private record Parsed(Response response, byte[] remainder) {
-    }
-
-    /** Expose parse helpers for tests; suppress unused warning on PropertyListFormatException. */
-    @SuppressWarnings("unused")
-    private static void touch(PropertyListFormatException e) {
     }
 }

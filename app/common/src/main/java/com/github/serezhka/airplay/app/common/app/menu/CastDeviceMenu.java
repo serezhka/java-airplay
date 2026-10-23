@@ -17,7 +17,8 @@ import java.util.stream.Collectors;
  * GTK AppIndicator peers throw {@code IndexOutOfBoundsException} if children are
  * removed/added on an already-attached menu. Populate an unbound {@link Menu}, then
  * {@code parent.add(menu, index)} once so {@code bind()} attaches children cleanly.
- * Exit stays on the root menu and is never rebuilt here.
+ * Root {@code Exit} stays outside this submenu and is never rebuilt here —
+ * stopping cast must not reshuffle Exit mid-click.
  */
 @Slf4j
 public final class CastDeviceMenu {
@@ -93,7 +94,8 @@ public final class CastDeviceMenu {
         return castMenu;
     }
 
-    public static int childCount(Menu menu) {
+    /** Same-package smoke / integration helpers. */
+    static int childCount(Menu menu) {
         return menu == null ? -1 : menu.getEntries().size();
     }
 

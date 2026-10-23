@@ -31,9 +31,10 @@
 
 ## Experimental features
 
-- Cast a synthetic test video pattern (`client.src=videotest`) to another AirPlay
-  receiver from the tray menu — useful for end-to-end send-path checks without a
-  camera or screen capture
+- Cast synthetic test A/V (`client.video.src=videotest`, `client.audio.src=audiotest`)
+  to another AirPlay receiver from the tray menu — useful for end-to-end send-path
+  checks without a camera or screen capture. AAC audiotest is sent on the legacy
+  FairPlay path; HAP/DataStream sessions are video-only today
 
 ## Quick start
 
@@ -66,16 +67,18 @@ Each fat jar ships its own `application.properties` (`app/gstreamer`, `app/ffmpe
 Override by placing `application.properties` in the working directory:
 
 ```properties
-# airplay
-airplay.serverName=JavaAirPlay
+# Receiver
+airplay.server-name=JavaAirPlay
 airplay.width=1920
 airplay.height=1080
 airplay.fps=60
 airplay.hls-enabled=true
-player.tray.enabled=true
-# cast capture: videotest | screencapture
-client.src=videotest
-# dump (optional sidecar)
+airplay.mdns-loopback=false
+airplay.tray-enabled=true
+# Cast sender: videotest|screencapture|none  /  audiotest|none
+client.video.src=videotest
+client.audio.src=audiotest
+# Dump (optional receive-side sidecar)
 dump.enabled=false
 dump.directory=dumps
 dump.protocol=true

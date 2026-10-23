@@ -13,14 +13,22 @@ import com.github.serezhka.airplay.server.Playback;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
+import java.io.OutputStream;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 public class FFmpegPlayer implements Playback {
 
+    private static final long VIDEO_FLUSH_INTERVAL_NS = TimeUnit.MILLISECONDS.toNanos(8);
+
     private final int fps;
     private final FfmpegHlsPipeline hls = new FfmpegHlsPipeline();
+    private final Object videoLock = new Object();
+    private final Object audioLock = new Object();
     private volatile Playback.Observer observer = Playback.Observer.NONE;
     private Process h264Process;
+    private OutputStream h264Out;
+    private long lastVideoFlushNanos;
     private LibavAlacDecoder alacDecoder;
     private LibavAacDecoder aacDecoder;
     private FfplayPcmSink pcmSink;
@@ -41,67 +49,96 @@ public class FFmpegPlayer implements Playback {
     }
 
     @Override
-    public synchronized void onVideoFormat(VideoStreamInfo videoStreamInfo) {
-        stopVideoProcess();
-        try {
-            // Video-only: -an + dummy SDL audio (see FfplayProcess.applyDisplayEnv).
-            h264Process = FfplayProcess.startH264Pipe(this.fps);
-        } catch (IOException e) {
-            h264Process = null;
-            throw new IllegalStateException("Failed to start ffplay. Make sure it is available on PATH.", e);
-        }
-    }
-
-    @Override
-    public synchronized void onVideo(byte[] bytes) {
-        if (h264Process == null || !h264Process.isAlive()) {
-            throw new IllegalStateException("ffplay is not running");
-        }
-        try {
-            h264Process.getOutputStream().write(bytes);
-            h264Process.getOutputStream().flush();
-        } catch (IOException e) {
-            throw new IllegalStateException("Failed to send video data to ffplay", e);
-        }
-    }
-
-    @Override
-    public synchronized void onVideoSrcDisconnect() {
-        stopVideoProcess();
-    }
-
-    @Override
-    public synchronized void onAudioFormat(AudioStreamInfo audioStreamInfo) {
-        this.audioCompressionType = audioStreamInfo.getCompressionType();
-        stopAudioProcess();
-        switch (audioCompressionType) {
-            case ALAC -> startAlacProcess(audioStreamInfo);
-            case AAC -> startAacLcProcess(audioStreamInfo);
-            case AAC_ELD -> startAacEldProcess(audioStreamInfo);
-            default -> log.warn("Unsupported audio compression {}", audioCompressionType);
-        }
-    }
-
-    @Override
-    public synchronized void onAudio(byte[] bytes) {
-        if (pcmSink == null) {
-            return;
-        }
-        try {
-            if (alacDecoder != null) {
-                alacDecoder.decode(bytes, pcmSink);
-            } else if (aacDecoder != null) {
-                aacDecoder.decode(bytes, pcmSink);
+    public void onVideoFormat(VideoStreamInfo videoStreamInfo) {
+        // Release HLS before starting the mirror ffplay (shared display).
+        hls.stop();
+        synchronized (videoLock) {
+            stopVideoProcessLocked();
+            try {
+                // Video-only: -an + dummy SDL audio (see FfplayProcess.applyDisplayEnv).
+                h264Process = FfplayProcess.startH264Pipe(this.fps);
+                h264Out = h264Process.getOutputStream();
+                lastVideoFlushNanos = 0;
+            } catch (IOException e) {
+                h264Process = null;
+                h264Out = null;
+                throw new IllegalStateException("Failed to start ffplay. Make sure it is available on PATH.", e);
             }
-        } catch (IOException e) {
-            throw new IllegalStateException("Failed to decode/play audio", e);
         }
     }
 
     @Override
-    public synchronized void onAudioSrcDisconnect() {
-        stopAudioProcess();
-        audioCompressionType = null;
+    public void onVideo(byte[] bytes) {
+        synchronized (videoLock) {
+            if (h264Process == null || !h264Process.isAlive() || h264Out == null) {
+                throw new IllegalStateException("ffplay is not running");
+            }
+            try {
+                h264Out.write(bytes);
+                long now = System.nanoTime();
+                if (now - lastVideoFlushNanos >= VIDEO_FLUSH_INTERVAL_NS) {
+                    h264Out.flush();
+                    lastVideoFlushNanos = now;
+                }
+            } catch (IOException e) {
+                throw new IllegalStateException("Failed to send video data to ffplay", e);
+            }
+        }
+    }
+
+    @Override
+    public void onVideoSrcDisconnect() {
+        synchronized (videoLock) {
+            stopVideoProcessLocked();
+        }
+    }
+
+    @Override
+    public void onAudioFormat(AudioStreamInfo audioStreamInfo) {
+        synchronized (audioLock) {
+            this.audioCompressionType = audioStreamInfo.getCompressionType();
+            stopAudioProcessLocked();
+            switch (audioCompressionType) {
+                case ALAC -> startAlacProcess(audioStreamInfo);
+                case AAC -> startAacLcProcess(audioStreamInfo);
+                case AAC_ELD -> startAacEldProcess(audioStreamInfo);
+                default -> log.warn("Unsupported audio compression {}", audioCompressionType);
+            }
+        }
+    }
+
+    @Override
+    public void onAudio(byte[] bytes) {
+        onAudio(bytes, 0, bytes == null ? 0 : bytes.length);
+    }
+
+    @Override
+    public void onAudio(byte[] bytes, int offset, int length) {
+        synchronized (audioLock) {
+            if (pcmSink == null || bytes == null || length <= 0) {
+                return;
+            }
+            try {
+                byte[] packet = (offset == 0 && length == bytes.length)
+                        ? bytes
+                        : copyRange(bytes, offset, length);
+                if (alacDecoder != null) {
+                    alacDecoder.decode(packet, pcmSink);
+                } else if (aacDecoder != null) {
+                    aacDecoder.decode(packet, pcmSink);
+                }
+            } catch (IOException e) {
+                throw new IllegalStateException("Failed to decode/play audio", e);
+            }
+        }
+    }
+
+    @Override
+    public void onAudioSrcDisconnect() {
+        synchronized (audioLock) {
+            stopAudioProcessLocked();
+            audioCompressionType = null;
+        }
     }
 
     @Override
@@ -153,10 +190,12 @@ public class FFmpegPlayer implements Playback {
     }
 
     @Override
-    public synchronized void onVolume(double volumeLinear) {
+    public void onVolume(double volumeLinear) {
         this.volumeLinear = Math.max(0.0, Math.min(1.0, volumeLinear));
-        if (pcmSink != null) {
-            pcmSink.setVolume(this.volumeLinear);
+        synchronized (audioLock) {
+            if (pcmSink != null) {
+                pcmSink.setVolume(this.volumeLinear);
+            }
         }
         hls.setVolume(this.volumeLinear);
         log.info("Volume set to {}", this.volumeLinear);
@@ -187,12 +226,22 @@ public class FFmpegPlayer implements Playback {
     }
 
     boolean isVideoProcessAlive() {
-        return h264Process != null && h264Process.isAlive();
+        synchronized (videoLock) {
+            return h264Process != null && h264Process.isAlive();
+        }
+    }
+
+    boolean isAudioSinkAlive() {
+        synchronized (audioLock) {
+            return pcmSink != null && pcmSink.isAlive();
+        }
     }
 
     /** PID of the ffplay video process, or {@code -1} if not running. */
     public long videoProcessPid() {
-        return h264Process != null && h264Process.isAlive() ? h264Process.pid() : -1L;
+        synchronized (videoLock) {
+            return h264Process != null && h264Process.isAlive() ? h264Process.pid() : -1L;
+        }
     }
 
     private void startAlacProcess(AudioStreamInfo audioStreamInfo) {
@@ -230,20 +279,24 @@ public class FFmpegPlayer implements Playback {
         }
     }
 
-    private void stopVideoProcess() {
+    private void stopVideoProcessLocked() {
         if (h264Process == null) {
             return;
         }
         try {
-            h264Process.getOutputStream().close();
+            if (h264Out != null) {
+                h264Out.flush();
+                h264Out.close();
+            }
         } catch (IOException e) {
             log.debug("Failed to close ffplay input", e);
         }
         FfplayProcess.destroy(h264Process);
         h264Process = null;
+        h264Out = null;
     }
 
-    private void stopAudioProcess() {
+    private void stopAudioProcessLocked() {
         closeAudioDecoders();
     }
 
@@ -260,5 +313,11 @@ public class FFmpegPlayer implements Playback {
             aacDecoder.close();
             aacDecoder = null;
         }
+    }
+
+    private static byte[] copyRange(byte[] bytes, int offset, int length) {
+        byte[] copy = new byte[length];
+        System.arraycopy(bytes, offset, copy, 0, length);
+        return copy;
     }
 }

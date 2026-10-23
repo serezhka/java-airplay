@@ -82,7 +82,17 @@ public final class FfplayProcess {
         cmd.add(playlistUri);
 
         ProcessBuilder pb = new ProcessBuilder(cmd);
-        applyPulseAudioEnv(pb);
+        // Keep an audio graph (do not use -an): ffplay -nodisp needs it for the clock /
+        // status line. Linux CI often has no Pulse — SDL dummy. Windows keeps the default
+        // device (dummy breaks status-line latching on some BtbN builds).
+        if (headless) {
+            applyDisplayEnv(pb);
+            if (isLinux()) {
+                pb.environment().put("SDL_AUDIODRIVER", "dummy");
+            }
+        } else {
+            applyPulseAudioEnv(pb);
+        }
         if (isHlsPlaylistUri(playlistUri)) {
             Ipv4Getaddrinfo.apply(pb);
         }

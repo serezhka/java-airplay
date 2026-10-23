@@ -23,8 +23,6 @@ public class VideoDecoder extends ReplayingDecoder<VideoDecoder.DecoderState> {
 
     private int payloadSize;
     private short payloadType;
-    // private short payloadOption;
-    // private long timestamp;
 
     @Override
     protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) {
@@ -33,8 +31,6 @@ public class VideoDecoder extends ReplayingDecoder<VideoDecoder.DecoderState> {
                 ByteBuf headerBuf = in.readSlice(128);
                 payloadSize = (int) headerBuf.readUnsignedIntLE();
                 payloadType = (short) (headerBuf.readUnsignedShortLE() & 0xff);
-                // payloadOption = (short) headerBuf.readUnsignedShortLE();
-                // timestamp = headerBuf.readLongLE();
                 checkpoint(DecoderState.READ_PAYLOAD);
             case READ_PAYLOAD:
                 if (payloadType == MirrorPacketLayout.PAYLOAD_VIDEO

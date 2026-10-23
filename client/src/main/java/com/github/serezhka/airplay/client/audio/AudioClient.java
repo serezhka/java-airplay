@@ -1,10 +1,10 @@
 package com.github.serezhka.airplay.client.audio;
 
-import com.github.serezhka.airplay.client.netty.NettyEventLoops;
-
 import com.github.serezhka.airplay.client.crypto.FairPlayAudioEncryptor;
+import com.github.serezhka.airplay.client.netty.NettyEventLoops;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.Unpooled;
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelInitializer;
@@ -18,34 +18,44 @@ import io.netty.channel.socket.nio.NioDatagramChannel;
 import lombok.extern.slf4j.Slf4j;
 
 import java.net.InetSocketAddress;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** UDP RAOP-style audio sender (mirrors {@code AudioServer} datagram path). */
 @Slf4j
-public class AudioClient extends ChannelInboundHandlerAdapter implements Runnable {
+public class AudioClient extends ChannelInboundHandlerAdapter implements AutoCloseable {
 
     private final String address;
     private final int port;
     private final FairPlayAudioEncryptor encryptor;
+    private final CountDownLatch started = new CountDownLatch(1);
+    private final AtomicBoolean closed = new AtomicBoolean();
 
-    private AudioSource audioSource;
-    private ChannelHandlerContext ctx;
+    private volatile AudioSource audioSource;
+    private volatile ChannelHandlerContext ctx;
+    private volatile Channel channel;
+    private volatile EventLoopGroup workerGroup;
     private int sequenceNumber;
     private long timestamp;
 
-    public AudioClient(String address, int port, FairPlayAudioEncryptor encryptor) throws InterruptedException {
+    public AudioClient(String address, int port, FairPlayAudioEncryptor encryptor)
+            throws InterruptedException {
         this.address = address;
         this.port = port;
         this.encryptor = encryptor;
-        new Thread(this, "audio-client").start();
-        synchronized (this) {
-            wait();
+        Thread t = new Thread(this::run, "airplay-audio-client");
+        t.setDaemon(true);
+        t.start();
+        if (!started.await(15, TimeUnit.SECONDS)) {
+            close();
+            throw new IllegalStateException("audio client connect timed out");
         }
     }
 
-    @Override
-    public void run() {
-        var workerGroup = eventLoopGroup();
-        var bootstrap = new Bootstrap();
+    private void run() {
+        workerGroup = NettyEventLoops.create();
+        Bootstrap bootstrap = new Bootstrap();
         try {
             bootstrap.group(workerGroup);
             bootstrap.channel(datagramChannelClass());
@@ -56,18 +66,22 @@ public class AudioClient extends ChannelInboundHandlerAdapter implements Runnabl
                     ch.pipeline().addLast("audio handler", AudioClient.this);
                 }
             });
-            var channelFuture = bootstrap.connect(address, port).sync();
+            channel = bootstrap.connect(address, port).sync().channel();
             log.info("Audio client started (UDP) {}:{}", address, port);
-            synchronized (this) {
-                notify();
-            }
-            channelFuture.channel().closeFuture().sync();
+            started.countDown();
+            channel.closeFuture().sync();
         } catch (InterruptedException e) {
-            throw new RuntimeException(e);
+            Thread.currentThread().interrupt();
+            started.countDown();
+        } catch (Exception e) {
+            log.warn("Audio client failed: {}", e.toString());
+            started.countDown();
         } finally {
-            log.info("Audio client stopped");
             stopAudio();
-            workerGroup.shutdownGracefully();
+            if (workerGroup != null) {
+                workerGroup.shutdownGracefully();
+            }
+            log.info("Audio client stopped");
         }
     }
 
@@ -76,6 +90,18 @@ public class AudioClient extends ChannelInboundHandlerAdapter implements Runnabl
         this.ctx = ctx;
         log.info("Audio client connected");
         audioSource = AudioSources.open(this::send);
+    }
+
+    @Override
+    public void close() {
+        if (!closed.compareAndSet(false, true)) {
+            return;
+        }
+        stopAudio();
+        Channel ch = channel;
+        if (ch != null) {
+            ch.close();
+        }
     }
 
     private void stopAudio() {
@@ -91,7 +117,7 @@ public class AudioClient extends ChannelInboundHandlerAdapter implements Runnabl
     }
 
     private void send(byte[] frame) {
-        if (ctx == null || !ctx.channel().isActive()) {
+        if (closed.get() || ctx == null || !ctx.channel().isActive()) {
             return;
         }
         int paddedLen = (frame.length + 15) / 16 * 16;
@@ -117,10 +143,6 @@ public class AudioClient extends ChannelInboundHandlerAdapter implements Runnabl
 
         InetSocketAddress remote = (InetSocketAddress) ctx.channel().remoteAddress();
         ctx.writeAndFlush(new DatagramPacket(packet, remote));
-    }
-
-    private EventLoopGroup eventLoopGroup() {
-        return NettyEventLoops.create();
     }
 
     private Class<? extends DatagramChannel> datagramChannelClass() {
