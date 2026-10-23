@@ -1,0 +1,139 @@
+{
+  "run": {
+    "number": "70",
+    "id": "39935204140",
+    "sha": "2beadff",
+    "ref": "main",
+    "when": "2026-10-23T10:01:17.024659+00:00",
+    "actionsUrl": "https://github.com/serezhka/java-airplay/actions/runs/39935204140"
+  },
+  "instrumentation": {
+    "available": [
+      "sustained/instantaneous FPS (pushed frames)",
+      "framesOk / framesFail (failed writes)",
+      "writeLatencyMs percentiles (sink backpressure)",
+      "frameIntervalMs percentiles (schema v2+)",
+      "stalls / slowWrites",
+      "JVM+child CPU % samples",
+      "JVM+child RSS / heap",
+      "timeToFirstFrameMs (schema v2+)",
+      "GC time in samples"
+    ],
+    "missing": [
+      "end-to-end AirPlay display latency",
+      "decoded / rendered frame counts",
+      "decoder dropped-frame counters",
+      "player init / time-to-stable",
+      "raw per-frame histogram dump"
+    ]
+  },
+  "osSections": [
+    {
+      "os": "linux",
+      "badges": {
+        "ffmpeg": [
+          "Best FPS",
+          "Lowest CPU",
+          "Lowest memory",
+          "Lowest write p99",
+          "Fewest stalls",
+          "Fewest failed writes"
+        ]
+      },
+      "players": [
+        {
+          "schemaVersion": 2,
+          "scenario": "bench-ffmpeg-300s",
+          "player": "ffmpeg",
+          "os": "linux",
+          "kind": "bench",
+          "startedAt": "2026-10-23T09:55:54.868975849Z",
+          "wallSec": 300.2,
+          "targetFps": 30.0,
+          "frameBudgetMs": 33.33,
+          "environment": {
+            "osName": "Linux",
+            "osArch": "amd64",
+            "javaVersion": "21.0.12.1",
+            "availableProcessors": 4,
+            "runnerOs": "Linux",
+            "osFamily": "linux"
+          },
+          "fps": {
+            "sustained": 29.73,
+            "avg": 30.1,
+            "p50": 30.0,
+            "p95": 31.0,
+            "min": 6.0
+          },
+          "frames": {
+            "ok": 8927,
+            "fail": 0,
+            "failPct": 0.0,
+            "decoded": null,
+            "rendered": null,
+            "dropped": null
+          },
+          "writeLatencyMs": {
+            "p50": 0.007,
+            "p95": 0.014,
+            "p99": 0.018,
+            "max": 4294.197,
+            "note": "Sink write / pipe backpressure \u2014 not end-to-end AirPlay latency"
+          },
+          "frameIntervalMs": {
+            "p50": 33.111,
+            "p95": 33.159,
+            "p99": 33.224,
+            "max": 4327.323,
+            "note": "Gap between onVideo calls; N/A on schema v1 artifacts"
+          },
+          "latencyE2E": null,
+          "cpu": {
+            "avg": 3.97,
+            "p95": 5.25,
+            "peak": 8.25,
+            "jvmAvg": 0.12,
+            "childAvg": 3.85
+          },
+          "memory": {
+            "rssAvgMb": 339.2,
+            "rssPeakMb": 375.2,
+            "rssHighWaterMb": 375.2,
+            "heapUsedMb": 93.4,
+            "jvmRssAvgMb": 173.9,
+            "childRssAvgMb": 165.3
+          },
+          "stability": {
+            "stalls": 1,
+            "slowWrites": 1,
+            "jankPct": 0.34,
+            "longestStallMs": 4327.323
+          },
+          "startup": {
+            "timeToFirstFrameMs": 35.056,
+            "playerInitMs": null,
+            "timeToStableMs": null
+          },
+          "rawFile": "bench-ffmpeg-300s.json",
+          "notes": {
+            "writeLatency": "onVideo sink write duration (backpressure), not end-to-end AirPlay latency",
+            "frameInterval": "wall-clock gap between consecutive onVideo calls",
+            "framesFail": "failed onVideo writes, not decoder drop counters",
+            "missing": "end-to-end latency, decoded/rendered frames, decoder drops"
+          }
+        }
+      ]
+    }
+  ],
+  "playbackSmoke": [],
+  "vsPrevious": {},
+  "previousRun": {
+    "number": "69",
+    "id": "39934371103",
+    "sha": "2beadff",
+    "ref": "main",
+    "when": "2026-10-23T09:53:03.375669+00:00",
+    "actionsUrl": "https://github.com/serezhka/java-airplay/actions/runs/39934371103"
+  }
+}
