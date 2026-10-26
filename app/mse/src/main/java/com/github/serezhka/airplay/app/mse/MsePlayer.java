@@ -53,18 +53,22 @@ public class MsePlayer implements Playback, AutoCloseable {
 
     private void ensureBrowser() {
         try {
-            boolean relaunched;
-            if (!chromium.isAlive()) {
-                relaunched = chromium.ensureAlive();
-            } else if (!media.hasControlClient()) {
-                chromium.restart();
-                relaunched = true;
-            } else {
+            if (chromium.isAlive() && media.hasControlClient()) {
                 return;
             }
-            if (relaunched) {
-                media.resetPageReady();
-                if (!media.awaitReady(15, TimeUnit.SECONDS)) {
+            // Reset the ready latch BEFORE launching Chrome. Otherwise the page can emit
+            // "ready" on the old latch, then resetPageReady() leaves us waiting forever and
+            // startMirror is delayed past the first IDR (black picture after window close).
+            media.resetPageReady();
+            if (!chromium.isAlive()) {
+                chromium.ensureAlive();
+            } else {
+                chromium.restart();
+            }
+            if (!media.awaitReady(15, TimeUnit.SECONDS)) {
+                if (media.hasControlClient()) {
+                    log.info("MSE Chromium control connected without ready latch; continuing");
+                } else {
                     log.warn("MSE Chromium relaunched but page did not signal ready");
                 }
             }
