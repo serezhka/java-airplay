@@ -14,12 +14,10 @@
     video {
       width: 100%;
       height: 100%;
-      object-fit: contain; /* fill stage, keep aspect — no intrinsic-size postage stamp */
+      object-fit: contain;
       background: #000;
     }
-    video.idle {
-      visibility: hidden;
-    }
+    video.idle { visibility: hidden; }
   </style>
   <script src="jmuxer.min.js"></script>
   <script src="hls.min.js"></script>
@@ -32,11 +30,30 @@
   let hls = null;
   let jmuxer = null;
   let mirrorWs = null;
+  let audioWs = null;
   let controlWs = null;
   let mode = 'idle';
   let playbackTimer = null;
   let mirrorFps = 60;
   let lastSpsKey = null;
+
+  // Decoded mirror/Music PCM → Web Audio (AAC-ELD/ALAC cannot go through MSE).
+  let audioCtx = null;
+  let gainNode = null;
+  let nextAudioTime = 0;
+  let audioSampleRate = 44100;
+  let audioChannels = 2;
+  let pcmBytesQueued = 0;
+  let volumeLinear = 1;
+
+  // Test hooks (Playwright).
+  window.__mse = {
+    mode: function () { return mode; },
+    pcmBytesQueued: function () { return pcmBytesQueued; },
+    hasJmuxer: function () { return !!jmuxer; },
+    hasHls: function () { return !!hls; },
+    videoReadyState: function () { return video.readyState; }
+  };
 
   function emit(obj) {
     if (controlWs && controlWs.readyState === 1) {
@@ -47,6 +64,85 @@
   function log(msg) {
     emit({ event: 'log', message: String(msg) });
     console.log('[airplay-mse]', msg);
+  }
+
+  function ensureAudioGraph(sampleRate, channels) {
+    audioSampleRate = sampleRate || 44100;
+    audioChannels = channels || 2;
+    if (!audioCtx || audioCtx.sampleRate !== audioSampleRate) {
+      try { if (audioCtx) audioCtx.close(); } catch (e) {}
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: audioSampleRate });
+      gainNode = audioCtx.createGain();
+      gainNode.gain.value = volumeLinear;
+      gainNode.connect(audioCtx.destination);
+      nextAudioTime = 0;
+      log('audio context ' + audioSampleRate + 'Hz x' + audioChannels);
+    } else if (gainNode) {
+      gainNode.gain.value = volumeLinear;
+    }
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume().catch(function () {});
+    }
+  }
+
+  function stopPcmAudio() {
+    if (audioWs) {
+      try { audioWs.close(); } catch (e) {}
+      audioWs = null;
+    }
+    nextAudioTime = 0;
+    try { if (audioCtx) audioCtx.suspend(); } catch (e) {}
+  }
+
+  function feedPcm(arrayBuffer) {
+    if (!audioCtx || !gainNode || !arrayBuffer || arrayBuffer.byteLength < 2) return;
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume().catch(function () {});
+    }
+    var bytes = new Uint8Array(arrayBuffer);
+    // Align to sample frame (channels * 2 bytes).
+    var frameBytes = audioChannels * 2;
+    var usable = bytes.byteLength - (bytes.byteLength % frameBytes);
+    if (usable < frameBytes) return;
+    var view = new DataView(arrayBuffer, 0, usable);
+    var frames = usable / frameBytes;
+    var buffer = audioCtx.createBuffer(audioChannels, frames, audioSampleRate);
+    for (var ch = 0; ch < audioChannels; ch++) {
+      var plane = buffer.getChannelData(ch);
+      for (var i = 0; i < frames; i++) {
+        plane[i] = view.getInt16((i * audioChannels + ch) * 2, true) / 32768;
+      }
+    }
+    var src = audioCtx.createBufferSource();
+    src.buffer = buffer;
+    src.connect(gainNode);
+    var now = audioCtx.currentTime;
+    if (nextAudioTime < now + 0.02) {
+      nextAudioTime = now + 0.02;
+    }
+    src.start(nextAudioTime);
+    nextAudioTime += buffer.duration;
+    pcmBytesQueued += usable;
+    // Cap scheduling horizon to avoid unbounded latency under burst.
+    if (nextAudioTime > now + 0.75) {
+      nextAudioTime = now + 0.25;
+    }
+  }
+
+  function connectAudio(wsUrl) {
+    if (audioWs) {
+      try { audioWs.close(); } catch (e) {}
+      audioWs = null;
+    }
+    if (!wsUrl) return;
+    audioWs = new WebSocket(wsUrl);
+    audioWs.binaryType = 'arraybuffer';
+    audioWs.onopen = function () { log('audio ws open'); };
+    audioWs.onclose = function () { log('audio ws closed'); };
+    audioWs.onerror = function () { emit({ event: 'error', message: 'audio websocket error' }); };
+    audioWs.onmessage = function (ev) {
+      if (ev.data instanceof ArrayBuffer) feedPcm(ev.data);
+    };
   }
 
   function stopHls() {
@@ -77,6 +173,7 @@
       mirrorWs = null;
     }
     destroyJmuxer();
+    stopPcmAudio();
   }
 
   function stopAll() {
@@ -93,12 +190,9 @@
   function reportPlayback() {
     var duration = isFinite(video.duration) ? video.duration : 0;
     var position = video.currentTime || 0;
-    // After EOS some browsers reset currentTime to 0; keep the clock at the end until stopHls.
     if (mode === 'hls' && video.ended && duration > 0) {
       position = duration;
     }
-    // Only claim rate=1 when media is actually playing; otherwise the phone sees a fake
-    // "playing" VOD (e.g. ~6s ad) stuck at position=0 and hangs.
     var rate = (mode === 'hls' && !video.paused && !video.ended && !video.error && video.readyState >= 2) ? 1 : 0;
     emit({ event: 'playback', duration: duration, position: position, rate: rate, mode: mode });
   }
@@ -112,7 +206,6 @@
     }
   });
 
-  /** Fingerprint SPS NALs so a mid-stream resolution change (phone rotate) resets MSE. */
   function spsKeyFromAnnexB(bytes) {
     var i = 0;
     var key = null;
@@ -130,7 +223,6 @@
       if (start < bytes.length) {
         var nalType = bytes[start] & 0x1f;
         if (nalType === 7) {
-          // Full SPS bytes as key — any dimension/profile change triggers reset.
           key = bytes.subarray(start, j).join(',');
         }
       }
@@ -141,7 +233,6 @@
 
   function createJmuxer(fps) {
     destroyJmuxer();
-    // Clear video element so SourceBuffer is not stuck on previous coded size / HLS MSE.
     try {
       video.pause();
       video.removeAttribute('src');
@@ -169,7 +260,6 @@
       jmuxer.feed({ video: bytes });
     } catch (e) {
       emit({ event: 'error', message: 'jmuxer feed: ' + e });
-      // Mid-stream MSE failure after rotate: rebuild once and retry.
       try {
         createJmuxer(mirrorFps);
         if (spsKey) lastSpsKey = spsKey;
@@ -181,17 +271,19 @@
     }
   }
 
-  function startMirror(wsUrl, fps) {
+  function startMirror(wsUrl, audioWsUrl, fps) {
     stopAll();
     mode = 'mirror';
     markActive();
-    video.muted = true;
+    video.muted = true; // mirror audio is Web Audio, not the <video> track
     mirrorFps = Math.max(1, Number(fps) || 60);
     if (typeof MediaSource === 'undefined') {
       emit({ event: 'error', message: 'MediaSource unsupported' });
       return;
     }
+    ensureAudioGraph(audioSampleRate, audioChannels);
     createJmuxer(mirrorFps);
+    connectAudio(audioWsUrl);
     mirrorWs = new WebSocket(wsUrl);
     mirrorWs.binaryType = 'arraybuffer';
     mirrorWs.onopen = function () { log('mirror ws open'); };
@@ -228,9 +320,6 @@
       log('hls manifest parsed');
       video.play().catch(function (e) { emit({ event: 'error', message: 'play: ' + e }); });
     });
-    video.addEventListener('playing', function onPlaying() {
-      log('video playing');
-    });
     video.addEventListener('error', function () {
       emit({ event: 'error', message: 'video element error' });
       try { video.pause(); } catch (e) {}
@@ -242,20 +331,28 @@
 
   function onCommand(msg) {
     var cmd = msg.cmd;
-    if (cmd === 'startMirror') startMirror(msg.wsUrl, msg.fps);
+    if (cmd === 'startMirror') startMirror(msg.wsUrl, msg.audioWsUrl, msg.fps);
     else if (cmd === 'stopMirror') { stopMirror(); mode = 'idle'; video.classList.add('idle'); }
-    else if (cmd === 'startHls') startHls(msg.url);
+    else if (cmd === 'configureAudio') {
+      ensureAudioGraph(Number(msg.sampleRate) || 44100, Number(msg.channels) || 2);
+    } else if (cmd === 'startHls') startHls(msg.url);
     else if (cmd === 'stopHls') { stopHls(); mode = 'idle'; video.classList.add('idle'); }
     else if (cmd === 'stopAll') stopAll();
-    else if (cmd === 'pause') { try { video.pause(); } catch (e) {} }
-    else if (cmd === 'resume') { video.play().catch(function (e) { emit({ event: 'error', message: 'resume: ' + e }); }); }
-    else if (cmd === 'seek') {
+    else if (cmd === 'pause') {
+      try { video.pause(); } catch (e) {}
+      try { if (audioCtx) audioCtx.suspend(); } catch (e) {}
+    } else if (cmd === 'resume') {
+      video.play().catch(function (e) { emit({ event: 'error', message: 'resume: ' + e }); });
+      try { if (audioCtx) audioCtx.resume(); } catch (e) {}
+    } else if (cmd === 'seek') {
       try { if (isFinite(msg.seconds) && msg.seconds >= 0) video.currentTime = msg.seconds; } catch (e) {}
     } else if (cmd === 'setVolume') {
       var v = Number(msg.value);
       if (!isFinite(v)) return;
-      video.volume = Math.max(0, Math.min(1, v));
-      video.muted = video.volume === 0 && mode !== 'mirror';
+      volumeLinear = Math.max(0, Math.min(1, v));
+      video.volume = volumeLinear;
+      video.muted = (mode === 'mirror') || volumeLinear === 0;
+      if (gainNode) gainNode.gain.value = volumeLinear;
     }
   }
 

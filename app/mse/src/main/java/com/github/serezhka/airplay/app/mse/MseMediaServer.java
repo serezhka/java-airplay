@@ -72,6 +72,7 @@ final class MseMediaServer implements AutoCloseable {
     private final EventLoopGroup boss = new NioEventLoopGroup(1);
     private final EventLoopGroup worker = new NioEventLoopGroup(2);
     private final ChannelGroup mirrorClients = new DefaultChannelGroup(GlobalEventExecutor.INSTANCE);
+    private final ChannelGroup audioClients = new DefaultChannelGroup(GlobalEventExecutor.INSTANCE);
     private final ChannelGroup controlClients = new DefaultChannelGroup(GlobalEventExecutor.INSTANCE);
     private final Map<String, byte[]> staticFiles = new ConcurrentHashMap<>();
     private final AtomicReference<Channel> serverChannel = new AtomicReference<>();
@@ -128,6 +129,10 @@ final class MseMediaServer implements AutoCloseable {
         return "ws://127.0.0.1:" + port + "/mirror";
     }
 
+    String audioWsUrl() {
+        return "ws://127.0.0.1:" + port + "/audio";
+    }
+
     boolean awaitReady(long timeout, TimeUnit unit) throws InterruptedException {
         return pageReady.await(timeout, unit);
     }
@@ -148,7 +153,8 @@ final class MseMediaServer implements AutoCloseable {
         if (!hasControlClient()) {
             log.warn("MSE startMirror with no control client — Chromium page not connected");
         }
-        sendControl("{\"cmd\":\"startMirror\",\"wsUrl\":\"" + mirrorWsUrl() + "\",\"fps\":" + fps + "}");
+        sendControl("{\"cmd\":\"startMirror\",\"wsUrl\":\"" + mirrorWsUrl()
+                + "\",\"audioWsUrl\":\"" + audioWsUrl() + "\",\"fps\":" + fps + "}");
         applyVolume();
     }
 
@@ -156,7 +162,26 @@ final class MseMediaServer implements AutoCloseable {
         mirrorActive = false;
         clearPendingNals();
         closeMirrorClients();
+        closeAudioClients();
         sendControl("{\"cmd\":\"stopMirror\"}");
+    }
+
+    /** Tell the page to (re)configure Web Audio for decoded mirror/Music PCM. */
+    void configureAudio(int sampleRate, int channels) {
+        sendControl("{\"cmd\":\"configureAudio\",\"sampleRate\":" + sampleRate
+                + ",\"channels\":" + channels + "}");
+    }
+
+    void sendPcm(byte[] s16le, int offset, int length) {
+        if (s16le == null || length <= 0 || audioClients.isEmpty()) {
+            return;
+        }
+        int off = Math.max(0, offset);
+        int len = Math.min(length, s16le.length - off);
+        if (len <= 0) {
+            return;
+        }
+        audioClients.writeAndFlush(new BinaryWebSocketFrame(Unpooled.copiedBuffer(s16le, off, len)));
     }
 
     void startHls(String playlistUri) {
@@ -164,6 +189,7 @@ final class MseMediaServer implements AutoCloseable {
         mirrorActive = false;
         mediaDurationHint = 0;
         closeMirrorClients();
+        closeAudioClients();
         // Same-origin proxy: Chromium page cannot fetch AirPlay :control /playlist (no CORS)
         // and cannot fetch googlevideo segment URLs either.
         String proxied = hlsProxyUrl(playlistUri);
@@ -186,6 +212,7 @@ final class MseMediaServer implements AutoCloseable {
         hlsActive = false;
         clearPendingNals();
         closeMirrorClients();
+        closeAudioClients();
         sendControl("{\"cmd\":\"stopAll\"}");
     }
 
@@ -325,6 +352,13 @@ final class MseMediaServer implements AutoCloseable {
             ch.writeAndFlush(new CloseWebSocketFrame()).addListener(ChannelFutureListener.CLOSE);
         }
         mirrorClients.clear();
+    }
+
+    private void closeAudioClients() {
+        for (Channel ch : audioClients.toArray(new Channel[0])) {
+            ch.writeAndFlush(new CloseWebSocketFrame()).addListener(ChannelFutureListener.CLOSE);
+        }
+        audioClients.clear();
     }
 
     private void loadAssets(Path dir) throws IOException {
@@ -471,7 +505,7 @@ final class MseMediaServer implements AutoCloseable {
 
         private void handleHttp(ChannelHandlerContext ctx, FullHttpRequest request) {
             String path = new QueryStringDecoder(request.uri()).path();
-            if ("/mirror".equals(path) || "/control".equals(path)) {
+            if ("/mirror".equals(path) || "/audio".equals(path) || "/control".equals(path)) {
                 WebSocketServerHandshakerFactory factory = new WebSocketServerHandshakerFactory(
                         "ws://127.0.0.1:" + port + path, null, true, 8 * 1024 * 1024);
                 WebSocketServerHandshaker handshaker = factory.newHandshaker(request);
@@ -489,6 +523,9 @@ final class MseMediaServer implements AutoCloseable {
                         mirrorClients.add(ctx.channel());
                         log.debug("MSE mirror client {}", ctx.channel().remoteAddress());
                         flushPendingNals();
+                    } else if ("/audio".equals(path)) {
+                        audioClients.add(ctx.channel());
+                        log.debug("MSE audio client {}", ctx.channel().remoteAddress());
                     } else {
                         controlClients.add(ctx.channel());
                         log.info("MSE control client connected");
@@ -613,6 +650,7 @@ final class MseMediaServer implements AutoCloseable {
         @Override
         public void channelInactive(ChannelHandlerContext ctx) {
             mirrorClients.remove(ctx.channel());
+            audioClients.remove(ctx.channel());
             controlClients.remove(ctx.channel());
         }
 

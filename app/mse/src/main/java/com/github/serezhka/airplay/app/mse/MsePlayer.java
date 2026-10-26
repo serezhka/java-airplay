@@ -1,5 +1,7 @@
 package com.github.serezhka.airplay.app.mse;
 
+import com.github.serezhka.airplay.app.mse.decode.LibavAacDecoder;
+import com.github.serezhka.airplay.app.mse.decode.LibavAlacDecoder;
 import com.github.serezhka.airplay.protocol.media.AudioStreamInfo;
 import com.github.serezhka.airplay.protocol.media.EndListDuration;
 import com.github.serezhka.airplay.protocol.media.VideoStreamInfo;
@@ -13,21 +15,20 @@ import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Browser MSE player: Chromium + hls.js (HTTP-Live) + jmuxer (mirror H.264 Annex-B).
- * No GStreamer / FFmpeg dependency. System Chromium/Chrome is required (JavaFX WebView
- * has no MSE on Linux).
- * <p>
- * Current limits: mirror AAC-ELD and Music ALAC are silent in-browser; HLS AAC-LC comes
- * from playlist segments via hls.js.
+ * Browser MSE player: Chromium + hls.js (HTTP-Live) + jmuxer (mirror H.264).
+ * Mirror/Music audio is decoded with bundled libav (AAC-ELD / AAC-LC / ALAC) to PCM
+ * and played in the page via Web Audio — browsers cannot decode AirPlay AAC-ELD natively.
  */
 @Slf4j
-public class MsePlayer implements Playback {
+public class MsePlayer implements Playback, AutoCloseable {
 
     private final MseMediaServer media;
     private final ChromiumHost chromium;
     private final int fps;
-    private volatile boolean audioWarned;
     private volatile Observer observer = Observer.NONE;
+    private volatile AudioStreamInfo.CompressionType audioCompressionType;
+    private volatile LibavAacDecoder aacDecoder;
+    private volatile LibavAlacDecoder alacDecoder;
 
     public MsePlayer() {
         this(60);
@@ -113,25 +114,81 @@ public class MsePlayer implements Playback {
 
     @Override
     public void onAudioFormat(AudioStreamInfo audioStreamInfo) {
-        if (!audioWarned) {
-            audioWarned = true;
-            log.warn("MSE: mirror/Music audio ({}) is silent — no AAC-ELD/ALAC in-browser decode yet; "
-                    + "HLS audio still works via hls.js", audioStreamInfo.getCompressionType());
+        closeAudioDecoders();
+        audioCompressionType = audioStreamInfo == null ? null : audioStreamInfo.getCompressionType();
+        if (audioCompressionType == null) {
+            return;
+        }
+        ensureBrowser();
+        try {
+            switch (audioCompressionType) {
+                case AAC_ELD, AAC -> {
+                    aacDecoder = new LibavAacDecoder(audioStreamInfo);
+                    media.configureAudio(aacDecoder.sampleRate(), aacDecoder.channels());
+                    log.info("MSE audio decoder {} {}Hz x{}",
+                            audioCompressionType, aacDecoder.sampleRate(), aacDecoder.channels());
+                }
+                case ALAC -> {
+                    alacDecoder = new LibavAlacDecoder(audioStreamInfo);
+                    media.configureAudio(alacDecoder.sampleRate(), alacDecoder.channels());
+                    log.info("MSE audio decoder ALAC {}Hz x{}",
+                            alacDecoder.sampleRate(), alacDecoder.channels());
+                }
+                default -> log.warn("MSE unsupported audio compression {}", audioCompressionType);
+            }
+        } catch (Exception e) {
+            log.error("MSE failed to open audio decoder {}: {}", audioCompressionType, e.toString());
+            closeAudioDecoders();
         }
     }
 
     @Override
     public void onAudio(byte[] bytes) {
-        // Mirror/Music audio not wired yet (see implementation plan).
+        onAudio(bytes, 0, bytes == null ? 0 : bytes.length);
+    }
+
+    @Override
+    public void onAudio(byte[] bytes, int offset, int length) {
+        if (bytes == null || length <= 0 || audioCompressionType == null) {
+            return;
+        }
+        try {
+            byte[] packet = bytes;
+            if (offset != 0 || length != bytes.length) {
+                packet = new byte[length];
+                System.arraycopy(bytes, offset, packet, 0, length);
+            }
+            switch (audioCompressionType) {
+                case AAC_ELD, AAC -> {
+                    LibavAacDecoder dec = aacDecoder;
+                    if (dec != null) {
+                        dec.decode(packet, media::sendPcm);
+                    }
+                }
+                case ALAC -> {
+                    LibavAlacDecoder dec = alacDecoder;
+                    if (dec != null) {
+                        dec.decode(packet, media::sendPcm);
+                    }
+                }
+                default -> {
+                }
+            }
+        } catch (Exception e) {
+            log.debug("MSE audio decode failed: {}", e.toString());
+        }
     }
 
     @Override
     public void onAudioSrcDisconnect() {
+        closeAudioDecoders();
+        audioCompressionType = null;
     }
 
     @Override
     public void onPlaylist(String playlistUri) {
         ensureBrowser();
+        closeAudioDecoders();
         media.stopMirror();
         media.startHls(playlistUri);
         chromium.setPresentationActive(true);
@@ -195,5 +252,28 @@ public class MsePlayer implements Playback {
     public void setObserver(Observer observer) {
         this.observer = observer == null ? Observer.NONE : observer;
         media.setOnEnded(() -> this.observer.onEnded());
+    }
+
+    private void closeAudioDecoders() {
+        LibavAacDecoder aac = aacDecoder;
+        aacDecoder = null;
+        if (aac != null) {
+            aac.close();
+        }
+        LibavAlacDecoder alac = alacDecoder;
+        alacDecoder = null;
+        if (alac != null) {
+            alac.close();
+        }
+    }
+
+    @Override
+    public void close() {
+        closeAudioDecoders();
+        try {
+            chromium.close();
+        } catch (Exception ignored) {
+        }
+        media.close();
     }
 }
