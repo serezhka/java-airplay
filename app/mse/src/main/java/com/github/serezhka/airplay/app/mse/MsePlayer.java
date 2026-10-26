@@ -18,6 +18,10 @@ import java.util.concurrent.TimeUnit;
  * Browser MSE player: Chromium + hls.js (HTTP-Live) + jmuxer (mirror H.264).
  * Mirror/Music audio is decoded with bundled libav (AAC-ELD / AAC-LC / ALAC) to PCM
  * and played in the page via Web Audio — browsers cannot decode AirPlay AAC-ELD natively.
+ *
+ * <p>Chromium is started lazily on the first mirror/HLS/audio session so boot does not
+ * open a black idle window. Without a system browser the receiver still runs (mDNS/tray)
+ * but playback is a no-op with a clear log.
  */
 @Slf4j
 public class MsePlayer implements Playback, AutoCloseable {
@@ -25,6 +29,8 @@ public class MsePlayer implements Playback, AutoCloseable {
     private final MseMediaServer media;
     private final ChromiumHost chromium;
     private final int fps;
+    private final boolean browserAvailable;
+    private volatile boolean browserFailed;
     private volatile Observer observer = Observer.NONE;
     private volatile AudioStreamInfo.CompressionType audioCompressionType;
     private volatile LibavAacDecoder aacDecoder;
@@ -42,16 +48,25 @@ public class MsePlayer implements Playback, AutoCloseable {
             media.start(assets);
             media.setOnEnded(() -> observer.onEnded());
             chromium = new ChromiumHost(media.pageUrl());
-            if (!media.awaitReady(25, TimeUnit.SECONDS)) {
-                log.warn("MSE Chromium page did not signal ready within timeout; continuing");
+            browserAvailable = chromium.browserAvailable();
+            if (!browserAvailable) {
+                browserFailed = true;
+                log.error("MSE: no Chromium/Chrome found. Install a browser or set "
+                        + "-Dairplay.mse.browser=/path/to/chrome — receiver will advertise "
+                        + "but mirror/HLS will not display until a browser is available");
+            } else {
+                log.info("MsePlayer ready page={} fps={} (Chromium starts on first session)",
+                        media.pageUrl(), this.fps);
             }
-            log.info("MsePlayer ready page={} fps={}", media.pageUrl(), this.fps);
         } catch (Exception e) {
-            throw new IllegalStateException("Failed to start MSE Chromium player", e);
+            throw new IllegalStateException("Failed to start MSE media server", e);
         }
     }
 
     private void ensureBrowser() {
+        if (browserFailed || !browserAvailable) {
+            return;
+        }
         try {
             if (chromium.isAlive() && media.hasControlClient()) {
                 return;
@@ -73,6 +88,7 @@ public class MsePlayer implements Playback, AutoCloseable {
                 }
             }
         } catch (Exception e) {
+            browserFailed = true;
             log.error("MSE failed to ensure Chromium: {}", e.toString());
         }
     }
@@ -98,6 +114,7 @@ public class MsePlayer implements Playback, AutoCloseable {
     @Override
     public void onVideoFormat(VideoStreamInfo videoStreamInfo) {
         ensureBrowser();
+        // Mirror tears HLS on the shared <video> element (same as GST/FFmpeg shared display).
         media.stopHls();
         media.startMirror(fps);
         chromium.setPresentationActive(true);
@@ -112,7 +129,9 @@ public class MsePlayer implements Playback, AutoCloseable {
     @Override
     public void onVideoSrcDisconnect() {
         media.stopMirror();
-        chromium.setPresentationActive(false);
+        if (!media.isHlsActive()) {
+            chromium.setPresentationActive(false);
+        }
         log.info("MSE mirror stopped");
     }
 
@@ -193,6 +212,8 @@ public class MsePlayer implements Playback, AutoCloseable {
     public void onPlaylist(String playlistUri) {
         ensureBrowser();
         closeAudioDecoders();
+        // Match GST/FFmpeg: do not tear mirror here — onVideoFormat / onVideoSrcDisconnect
+        // own that. Only stop local mirror sink so the shared <video> can show HLS.
         media.stopMirror();
         media.startHls(playlistUri);
         chromium.setPresentationActive(true);
@@ -201,8 +222,9 @@ public class MsePlayer implements Playback, AutoCloseable {
 
     @Override
     public void onPlaylistRemoved() {
+        // Keep the Chromium window up: YouTube often remirrors the phone UI right after
+        // stopping the VOD item. Minimizing here left a black gap (unlike GST last-frame).
         media.stopHls();
-        chromium.setPresentationActive(false);
         log.info("MSE HLS removed");
     }
 

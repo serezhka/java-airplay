@@ -345,7 +345,17 @@
       video.play().catch(function (e) { emit({ event: 'error', message: 'resume: ' + e }); });
       try { if (audioCtx) audioCtx.resume(); } catch (e) {}
     } else if (cmd === 'seek') {
-      try { if (isFinite(msg.seconds) && msg.seconds >= 0) video.currentTime = msg.seconds; } catch (e) {}
+      try {
+        if (!isFinite(msg.seconds) || msg.seconds < 0) return;
+        // hls.js: assign currentTime; recover if the buffer gap after a large scrub is fatal.
+        video.currentTime = msg.seconds;
+        if (hls && video.paused) {
+          video.play().catch(function () {});
+        }
+      } catch (e) {
+        emit({ event: 'error', message: 'seek: ' + e });
+        try { if (hls) hls.recoverMediaError(); } catch (e2) {}
+      }
     } else if (cmd === 'setVolume') {
       var v = Number(msg.value);
       if (!isFinite(v)) return;

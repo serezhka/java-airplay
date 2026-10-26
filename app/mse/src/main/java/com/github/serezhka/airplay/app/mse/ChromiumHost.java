@@ -14,7 +14,7 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Launches system Chromium/Chrome against the local MSE page (JavaFX WebView has no MSE on Linux).
- * Idle: small (or minimized) window. With an active mirror/HLS stream: fullscreen.
+ * Idle: no window until the first mirror/HLS session (lazy start). With an active stream: fullscreen.
  */
 @Slf4j
 final class ChromiumHost implements AutoCloseable {
@@ -27,6 +27,7 @@ final class ChromiumHost implements AutoCloseable {
     private final boolean hasDisplay;
     private volatile Process process;
     private volatile boolean presentationActive;
+    private volatile String browserBin;
 
     ChromiumHost(String pageUrl) throws IOException {
         this.pageUrl = pageUrl;
@@ -35,9 +36,14 @@ final class ChromiumHost implements AutoCloseable {
         // xdotool fullscreen/minimize is Linux/X11-only; macOS/Windows still launch the app window.
         this.hasDisplay = Files.exists(Path.of("/tmp/.X11-unix"))
                 || System.getenv("DISPLAY") != null;
-        startProcess();
-        // Start idle — do not occupy the whole screen before the first frame.
-        setPresentationActive(false);
+        // Resolve early so missing-browser fails before the first AirPlay session, not mid-cast.
+        this.browserBin = resolveBrowser();
+        // Do not startProcess() here — a black idle window at app boot is pointless.
+    }
+
+    /** {@code true} if a Chromium/Chrome binary was found at construction time. */
+    boolean browserAvailable() {
+        return browserBin != null && !browserBin.isBlank();
     }
 
     synchronized boolean isAlive() {
@@ -52,7 +58,11 @@ final class ChromiumHost implements AutoCloseable {
         if (isAlive()) {
             return false;
         }
-        log.warn("MSE Chromium is dead; relaunching url={}", pageUrl);
+        if (!browserAvailable()) {
+            throw new IllegalStateException(
+                    "No Chromium/Chrome found (needed for MSE). Install a browser or set -Dairplay.mse.browser=");
+        }
+        log.info("MSE Chromium launching url={}", pageUrl);
         destroyQuietly();
         startProcess();
         setPresentationActive(presentationActive);
@@ -104,7 +114,7 @@ final class ChromiumHost implements AutoCloseable {
 
     private void startProcess() throws IOException {
         List<String> cmd = new ArrayList<>();
-        cmd.add(resolveBrowser());
+        cmd.add(browserBin);
         cmd.add("--user-data-dir=" + userData.toAbsolutePath());
         cmd.add("--no-first-run");
         cmd.add("--no-default-browser-check");
@@ -174,8 +184,7 @@ final class ChromiumHost implements AutoCloseable {
                 return candidate;
             }
         }
-        throw new IllegalStateException(
-                "No Chromium/Chrome found (needed for MSE). Install a browser or set -Dairplay.mse.browser=");
+        return null;
     }
 
     private static boolean which(String binary) {
