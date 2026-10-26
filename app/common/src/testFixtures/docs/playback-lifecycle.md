@@ -1,6 +1,6 @@
 # Playback lifecycle integration tests
 
-Shared by `app/gstreamer` and `app/ffmpeg` (`*PlaybackTest` + `PlaybackLifecycleHarness`).
+Shared by `app/gstreamer`, `app/ffmpeg`, and `app/mse` (`*PlaybackTest` + `PlaybackLifecycleHarness`).
 Each case drives the **production** `Playback` implementation (same code as the release fat jar).
 
 Wall-clock delays below are intentional — they mimic a user who watches for a bit,

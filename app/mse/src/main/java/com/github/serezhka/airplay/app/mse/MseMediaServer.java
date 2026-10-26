@@ -317,6 +317,10 @@ final class MseMediaServer implements AutoCloseable {
         return hlsActive;
     }
 
+    boolean isMirrorActive() {
+        return mirrorActive;
+    }
+
     private void clearHlsClock(boolean resetSnapshot) {
         hlsActive = false;
         hlsPaused = false;
@@ -503,6 +507,10 @@ final class MseMediaServer implements AutoCloseable {
             if ("http".equalsIgnoreCase(scheme)) {
                 return "127.0.0.1".equals(host) || "localhost".equalsIgnoreCase(host);
             }
+            // Local VOD fixtures for the lifecycle harness (file:/…/mediadata.m3u8).
+            if ("file".equalsIgnoreCase(scheme)) {
+                return Boolean.parseBoolean(System.getProperty("airplay.mse.allow-file-hls", "false"));
+            }
             return false;
         } catch (Exception e) {
             return false;
@@ -676,10 +684,26 @@ final class MseMediaServer implements AutoCloseable {
             }
             // Retain across the async hop: SimpleChannelInboundHandler releases after channelRead0.
             request.retain();
+            URI upstreamUri = URI.create(upstream);
+            if ("file".equalsIgnoreCase(upstreamUri.getScheme())) {
+                ctx.channel().eventLoop().execute(() -> {
+                    try {
+                        writeProxiedUpstream(ctx, request, upstream, Files.readAllBytes(Path.of(upstreamUri)),
+                                "application/octet-stream");
+                    } catch (Exception e) {
+                        log.warn("MSE HLS file proxy failed for {}: {}", upstream, e.toString());
+                        writeHttp(ctx, request, HttpResponseStatus.BAD_GATEWAY,
+                                e.toString().getBytes(StandardCharsets.UTF_8), "text/plain");
+                    } finally {
+                        request.release();
+                    }
+                });
+                return;
+            }
             // Never hlsHttp.send() on the Netty event loop: a slow mediadata/FCUP refresh
             // during scrub stalls control WS + every other /hls fetch (cascade timeouts).
             hlsHttp.sendAsync(
-                            HttpRequest.newBuilder(URI.create(upstream))
+                            HttpRequest.newBuilder(upstreamUri)
                                     .timeout(Duration.ofSeconds(20))
                                     .header("User-Agent", "airplay-mse-hls-proxy")
                                     .GET()
@@ -693,11 +717,6 @@ final class MseMediaServer implements AutoCloseable {
                                         err.toString().getBytes(StandardCharsets.UTF_8), "text/plain");
                                 return;
                             }
-                            if (!hlsActive) {
-                                writeHttp(ctx, request, HttpResponseStatus.SERVICE_UNAVAILABLE,
-                                        "hls inactive".getBytes(StandardCharsets.UTF_8), "text/plain");
-                                return;
-                            }
                             if (upstreamResponse.statusCode() >= 400) {
                                 writeHttp(ctx, request, HttpResponseStatus.valueOf(upstreamResponse.statusCode()),
                                         ("upstream " + upstreamResponse.statusCode())
@@ -705,30 +724,39 @@ final class MseMediaServer implements AutoCloseable {
                                         "text/plain");
                                 return;
                             }
-                            byte[] bytes = upstreamResponse.body();
-                            if (bytes.length > HLS_PROXY_MAX_BYTES) {
-                                writeHttp(ctx, request, HttpResponseStatus.REQUEST_ENTITY_TOO_LARGE,
-                                        "too large".getBytes(StandardCharsets.UTF_8), "text/plain");
-                                return;
-                            }
                             String contentType = upstreamResponse.headers()
                                     .firstValue("content-type")
                                     .orElse("application/octet-stream");
-                            boolean playlist = looksLikePlaylist(upstream, contentType, bytes);
-                            if (playlist) {
-                                String text = new String(bytes, StandardCharsets.UTF_8);
-                                String rewritten = rewritePlaylistForProxy(
-                                        text, upstream, "http://127.0.0.1:" + port + "/hls?u=");
-                                writeHttp(ctx, request, HttpResponseStatus.OK,
-                                        rewritten.getBytes(StandardCharsets.UTF_8),
-                                        "application/vnd.apple.mpegurl");
-                            } else {
-                                writeHttp(ctx, request, HttpResponseStatus.OK, bytes, contentType);
-                            }
+                            writeProxiedUpstream(ctx, request, upstream, upstreamResponse.body(), contentType);
                         } finally {
                             request.release();
                         }
                     }));
+        }
+
+        private void writeProxiedUpstream(ChannelHandlerContext ctx, FullHttpRequest request,
+                                          String upstream, byte[] bytes, String contentType) {
+            if (!hlsActive) {
+                writeHttp(ctx, request, HttpResponseStatus.SERVICE_UNAVAILABLE,
+                        "hls inactive".getBytes(StandardCharsets.UTF_8), "text/plain");
+                return;
+            }
+            if (bytes.length > HLS_PROXY_MAX_BYTES) {
+                writeHttp(ctx, request, HttpResponseStatus.REQUEST_ENTITY_TOO_LARGE,
+                        "too large".getBytes(StandardCharsets.UTF_8), "text/plain");
+                return;
+            }
+            boolean playlist = looksLikePlaylist(upstream, contentType, bytes);
+            if (playlist) {
+                String text = new String(bytes, StandardCharsets.UTF_8);
+                String rewritten = rewritePlaylistForProxy(
+                        text, upstream, "http://127.0.0.1:" + port + "/hls?u=");
+                writeHttp(ctx, request, HttpResponseStatus.OK,
+                        rewritten.getBytes(StandardCharsets.UTF_8),
+                        "application/vnd.apple.mpegurl");
+            } else {
+                writeHttp(ctx, request, HttpResponseStatus.OK, bytes, contentType);
+            }
         }
 
         private void handleFrame(ChannelHandlerContext ctx, WebSocketFrame frame) {

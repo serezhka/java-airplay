@@ -30,18 +30,23 @@ jobs:
           java-version: '21'
           distribution: temurin
       - uses: gradle/actions/setup-gradle@v6
+      # Includes :app:mse unit + Playwright Chrome smoke (downloads Chromium once).
       - run: ./gradlew test :app:common:loopbackIntegrationTest --no-daemon
 
   # OS × player: production Playback path (mirror, A/V, reconnect, HLS round-trip).
   # Healthy runs finish in ~2–4 min; long waits were azure apt Ign storms on GST Linux.
+  # mse = Chromium + hls.js / jmuxer (Linux only — system Chrome install on Windows is out of scope).
   playback:
     needs: unit
-    timeout-minutes: 15
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        player: [ffmpeg, gstreamer]
+        player: [ffmpeg, gstreamer, mse]
+        exclude:
+          - os: windows-latest
+            player: mse
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -56,7 +61,8 @@ jobs:
           player: ${{ matrix.player }}
       - name: Integration test
         # Windows GST cold compile + suite can exceed 5m when the runner is slow.
-        timeout-minutes: 10
+        # MSE cold Chromium + Playwright deps can also take a few minutes.
+        timeout-minutes: 12
         shell: bash
         run: |
           TASK=":app:${{ matrix.player }}:${{ matrix.player }}IntegrationTest"
@@ -69,6 +75,12 @@ jobs:
           fi
           if [ "${{ matrix.player }}" = "ffmpeg" ]; then
             EXTRA+=("-Dairplay.ffmpeg.hls.headless=true")
+          fi
+          if [ "${{ matrix.player }}" = "mse" ]; then
+            EXTRA+=("-Dairplay.mse.headless=true" "-Dairplay.mse.allow-file-hls=true")
+            if [ -n "${AIRPLAY_MSE_BROWSER:-}" ]; then
+              EXTRA+=("-Dairplay.mse.browser=$AIRPLAY_MSE_BROWSER")
+            fi
           fi
           if [ "${{ runner.os }}" = "Linux" ]; then
             xvfb-run -a ./gradlew "$TASK" --no-daemon "${EXTRA[@]}"

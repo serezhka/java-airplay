@@ -85,6 +85,25 @@ class MseMediaServerTest {
     }
 
     @Test
+    void fileUpstreamAllowedOnlyWhenOptIn() {
+        String prev = System.getProperty("airplay.mse.allow-file-hls");
+        try {
+            System.clearProperty("airplay.mse.allow-file-hls");
+            assertFalse(MseMediaServer.isAllowedUpstream("file:///tmp/mediadata.m3u8"));
+            System.setProperty("airplay.mse.allow-file-hls", "true");
+            assertTrue(MseMediaServer.isAllowedUpstream("file:///tmp/mediadata.m3u8"));
+            assertTrue(MseMediaServer.isAllowedUpstream("http://127.0.0.1:9/playlist.m3u8"));
+            assertFalse(MseMediaServer.isAllowedUpstream("http://evil.example/x.m3u8"));
+        } finally {
+            if (prev == null) {
+                System.clearProperty("airplay.mse.allow-file-hls");
+            } else {
+                System.setProperty("airplay.mse.allow-file-hls", prev);
+            }
+        }
+    }
+
+    @Test
     void hlsClockReportsPlayingImmediatelyAndHonorsPauseSeek() throws Exception {
         Path dir = Files.createTempDirectory("mse-hls-clock-");
         for (String name : new String[]{"player.html", "hls.min.js", "jmuxer.min.js"}) {

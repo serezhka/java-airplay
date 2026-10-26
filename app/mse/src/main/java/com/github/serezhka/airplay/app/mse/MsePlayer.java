@@ -274,6 +274,25 @@ public class MsePlayer implements Playback, AutoCloseable {
         return new Info(clock.duration(), clock.position(), clock.rate());
     }
 
+    /** Package-visible for the playback lifecycle harness. */
+    boolean isMirrorActive() {
+        return media.isMirrorActive();
+    }
+
+    boolean isHlsActive() {
+        return media.isHlsActive();
+    }
+
+    boolean isAudioDecoderOpen() {
+        return aacDecoder != null || alacDecoder != null;
+    }
+
+    boolean isBrowserReady() {
+        return !browserFailed && browserAvailable
+                && chromium.isAlive()
+                && media.hasControlClient();
+    }
+
     @Override
     public void setObserver(Observer observer) {
         this.observer = observer == null ? Observer.NONE : observer;

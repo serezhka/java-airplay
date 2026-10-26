@@ -120,6 +120,8 @@ Windows-only native sinks.
 xvfb-run -a ./gradlew :app:ffmpeg:ffmpegIntegrationTest --no-daemon -Dairplay.ffmpeg.hls.headless=true
 xvfb-run -a ./gradlew :app:gstreamer:gstreamerIntegrationTest --no-daemon \
   -Dairplay.gst.appsink=true -Dairplay.gst.hls.headless=true
+xvfb-run -a ./gradlew :app:mse:mseIntegrationTest --no-daemon \
+  -Dairplay.mse.headless=true -Dairplay.mse.allow-file-hls=true
 ./gradlew test --no-daemon
 ```
 

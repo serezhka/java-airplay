@@ -26,6 +26,9 @@ val forwardedProperties = listOf(
     "airplay.gst.hls.headless",
     "airplay.gst.test.disposeOrphans",
     "airplay.ffmpeg.hls.headless",
+    "airplay.mse.headless",
+    "airplay.mse.browser",
+    "airplay.mse.allow-file-hls",
     "gstreamer.path",
     "jna.library.path"
 )

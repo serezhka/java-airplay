@@ -28,3 +28,4 @@ jobs:
           files: |
             app/gstreamer/build/libs/java-airplay-gstreamer-*.jar
             app/ffmpeg/build/libs/java-airplay-ffmpeg-*.jar
+            app/mse/build/libs/java-airplay-mse-*.jar

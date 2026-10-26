@@ -1,10 +1,10 @@
 name: Setup native player
 
-description: Install ffmpeg or gstreamer for harness tests
+description: Install ffmpeg, gstreamer, or Chromium (mse) for harness tests
 
 inputs:
   player:
-    description: ffmpeg or gstreamer
+    description: ffmpeg, gstreamer, or mse
     required: true
 
 runs:
@@ -73,6 +73,30 @@ runs:
             pulseaudio --check || pulseaudio --start --exit-idle-time=-1
             pactl load-module module-null-sink sink_name=ci_null 2>/dev/null || true
             pactl set-default-sink ci_null 2>/dev/null || true
+            ;;
+          mse)
+            # Chromium for ChromiumHost + ffmpeg for HLS fixtures; Playwright unit tests
+            # download their own browser. Prefer google-chrome-stable when present.
+            sudo apt-get install -y --no-install-recommends "${APT_OPTS[@]}" \
+              xvfb ffmpeg
+            if ! command -v google-chrome-stable >/dev/null 2>&1 \
+               && ! command -v chromium-browser >/dev/null 2>&1 \
+               && ! command -v chromium >/dev/null 2>&1; then
+              # Deb from Google — snap chromium is flaky on GHA.
+              curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
+                | sudo gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg
+              echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
+                | sudo tee /etc/apt/sources.list.d/google-chrome.list >/dev/null
+              sudo apt-get update "${APT_OPTS[@]}"
+              sudo apt-get install -y --no-install-recommends "${APT_OPTS[@]}" google-chrome-stable
+            fi
+            BROWSER="$(command -v google-chrome-stable || command -v chromium-browser || command -v chromium || true)"
+            if [ -z "$BROWSER" ]; then
+              echo "No Chromium/Chrome after mse setup" >&2
+              exit 1
+            fi
+            echo "AIRPLAY_MSE_BROWSER=$BROWSER" >> "$GITHUB_ENV"
+            echo "MSE browser: $BROWSER"
             ;;
           *) echo "Unknown player: ${{ inputs.player }}"; exit 1 ;;
         esac

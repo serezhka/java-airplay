@@ -83,7 +83,7 @@ final class ChromiumHost implements AutoCloseable {
      */
     synchronized void setPresentationActive(boolean active) {
         presentationActive = active;
-        if (!hasDisplay || !isAlive()) {
+        if (headless() || !hasDisplay || !isAlive()) {
             return;
         }
         try {
@@ -112,6 +112,10 @@ final class ChromiumHost implements AutoCloseable {
         }
     }
 
+    private static boolean headless() {
+        return Boolean.parseBoolean(System.getProperty("airplay.mse.headless", "false"));
+    }
+
     private void startProcess() throws IOException {
         List<String> cmd = new ArrayList<>();
         cmd.add(browserBin);
@@ -124,6 +128,11 @@ final class ChromiumHost implements AutoCloseable {
         cmd.add("--disable-session-crashed-bubble");
         cmd.add("--check-for-update-interval=31536000");
         cmd.add("--window-size=" + IDLE_WIDTH + "," + IDLE_HEIGHT);
+        if (headless()) {
+            // CI / harness: no window manager. Still loads MSE + WebAudio.
+            cmd.add("--headless=new");
+            cmd.add("--disable-gpu");
+        }
         // Never --start-fullscreen: empty black fullscreen is worse than a tiny idle window.
         cmd.add("--app=" + pageUrl);
         ProcessBuilder pb = new ProcessBuilder(cmd);
