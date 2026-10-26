@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>airplay-mse</title>
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
+    #stage {
+      width: 100%; height: 100%;
+      display: flex; align-items: center; justify-content: center;
+      background: #000;
+    }
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: contain; /* fill stage, keep aspect — no intrinsic-size postage stamp */
+      background: #000;
+    }
+    video.idle {
+      visibility: hidden;
+    }
+  </style>
+  <script src="jmuxer.min.js"></script>
+  <script src="hls.min.js"></script>
+</head>
+<body>
+<div id="stage"><video id="player" autoplay playsinline></video></div>
+<script>
+(function () {
+  const video = document.getElementById('player');
+  let hls = null;
+  let jmuxer = null;
+  let mirrorWs = null;
+  let controlWs = null;
+  let mode = 'idle';
+  let playbackTimer = null;
+  let mirrorFps = 60;
+  let lastSpsKey = null;
+
+  function emit(obj) {
+    if (controlWs && controlWs.readyState === 1) {
+      controlWs.send(JSON.stringify(obj));
+    }
+  }
+
+  function log(msg) {
+    emit({ event: 'log', message: String(msg) });
+    console.log('[airplay-mse]', msg);
+  }
+
+  function stopHls() {
+    if (hls) {
+      try { hls.detachMedia(); } catch (e) {}
+      try { hls.destroy(); } catch (e) {}
+      hls = null;
+    }
+    try {
+      video.pause();
+      video.removeAttribute('src');
+      video.srcObject = null;
+      video.load();
+    } catch (e) {}
+  }
+
+  function destroyJmuxer() {
+    if (jmuxer) {
+      try { jmuxer.destroy(); } catch (e) {}
+      jmuxer = null;
+    }
+    lastSpsKey = null;
+  }
+
+  function stopMirror() {
+    if (mirrorWs) {
+      try { mirrorWs.close(); } catch (e) {}
+      mirrorWs = null;
+    }
+    destroyJmuxer();
+  }
+
+  function stopAll() {
+    stopHls();
+    stopMirror();
+    mode = 'idle';
+    video.classList.add('idle');
+  }
+
+  function markActive() {
+    video.classList.remove('idle');
+  }
+
+  function reportPlayback() {
+    var duration = isFinite(video.duration) ? video.duration : 0;
+    var position = video.currentTime || 0;
+    // After EOS some browsers reset currentTime to 0; keep the clock at the end until stopHls.
+    if (mode === 'hls' && video.ended && duration > 0) {
+      position = duration;
+    }
+    // Only claim rate=1 when media is actually playing; otherwise the phone sees a fake
+    // "playing" VOD (e.g. ~6s ad) stuck at position=0 and hangs.
+    var rate = (mode === 'hls' && !video.paused && !video.ended && !video.error && video.readyState >= 2) ? 1 : 0;
+    emit({ event: 'playback', duration: duration, position: position, rate: rate, mode: mode });
+  }
+
+  video.addEventListener('ended', function () {
+    if (mode === 'hls') {
+      log('video ended');
+      var duration = isFinite(video.duration) ? video.duration : 0;
+      emit({ event: 'playback', duration: duration, position: duration, rate: 0, mode: 'hls' });
+      emit({ event: 'ended' });
+    }
+  });
+
+  /** Fingerprint SPS NALs so a mid-stream resolution change (phone rotate) resets MSE. */
+  function spsKeyFromAnnexB(bytes) {
+    var i = 0;
+    var key = null;
+    while (i + 4 < bytes.length) {
+      var sc = 0;
+      if (bytes[i] === 0 && bytes[i + 1] === 0 && bytes[i + 2] === 0 && bytes[i + 3] === 1) sc = 4;
+      else if (bytes[i] === 0 && bytes[i + 1] === 0 && bytes[i + 2] === 1) sc = 3;
+      else { i++; continue; }
+      var start = i + sc;
+      var j = start;
+      while (j + 3 < bytes.length) {
+        if (bytes[j] === 0 && bytes[j + 1] === 0 && (bytes[j + 2] === 1 || (bytes[j + 2] === 0 && bytes[j + 3] === 1))) break;
+        j++;
+      }
+      if (start < bytes.length) {
+        var nalType = bytes[start] & 0x1f;
+        if (nalType === 7) {
+          // Full SPS bytes as key — any dimension/profile change triggers reset.
+          key = bytes.subarray(start, j).join(',');
+        }
+      }
+      i = j > start ? j : start + 1;
+    }
+    return key;
+  }
+
+  function createJmuxer(fps) {
+    destroyJmuxer();
+    // Clear video element so SourceBuffer is not stuck on previous coded size / HLS MSE.
+    try {
+      video.pause();
+      video.removeAttribute('src');
+      video.srcObject = null;
+      video.load();
+    } catch (e) {}
+    jmuxer = new JMuxer({
+      node: 'player',
+      mode: 'video',
+      flushingTime: 0,
+      fps: Math.max(1, Number(fps) || 60),
+      debug: false
+    });
+  }
+
+  function feedMirror(bytes) {
+    if (!jmuxer) return;
+    var spsKey = spsKeyFromAnnexB(bytes);
+    if (spsKey && lastSpsKey && spsKey !== lastSpsKey) {
+      log('SPS changed (rotate/resolution); recreating jmuxer');
+      createJmuxer(mirrorFps);
+    }
+    if (spsKey) lastSpsKey = spsKey;
+    try {
+      jmuxer.feed({ video: bytes });
+    } catch (e) {
+      emit({ event: 'error', message: 'jmuxer feed: ' + e });
+      // Mid-stream MSE failure after rotate: rebuild once and retry.
+      try {
+        createJmuxer(mirrorFps);
+        if (spsKey) lastSpsKey = spsKey;
+        jmuxer.feed({ video: bytes });
+        log('jmuxer recovered after feed error');
+      } catch (e2) {
+        emit({ event: 'error', message: 'jmuxer recover failed: ' + e2 });
+      }
+    }
+  }
+
+  function startMirror(wsUrl, fps) {
+    stopAll();
+    mode = 'mirror';
+    markActive();
+    video.muted = true;
+    mirrorFps = Math.max(1, Number(fps) || 60);
+    if (typeof MediaSource === 'undefined') {
+      emit({ event: 'error', message: 'MediaSource unsupported' });
+      return;
+    }
+    createJmuxer(mirrorFps);
+    mirrorWs = new WebSocket(wsUrl);
+    mirrorWs.binaryType = 'arraybuffer';
+    mirrorWs.onopen = function () { log('mirror ws open'); };
+    mirrorWs.onclose = function () { log('mirror ws closed'); };
+    mirrorWs.onerror = function () { emit({ event: 'error', message: 'mirror websocket error' }); };
+    mirrorWs.onmessage = function (ev) {
+      feedMirror(new Uint8Array(ev.data));
+    };
+  }
+
+  function startHls(url) {
+    stopAll();
+    mode = 'hls';
+    markActive();
+    video.muted = false;
+    if (!window.Hls || !Hls.isSupported()) {
+      emit({ event: 'error', message: 'Hls.js / MSE not supported' });
+      return;
+    }
+    hls = new Hls({ enableWorker: true, lowLatencyMode: false, backBufferLength: 30 });
+    hls.on(Hls.Events.ERROR, function (_e, data) {
+      if (data && data.fatal) {
+        emit({ event: 'error', message: 'hls fatal ' + data.type + '/' + data.details });
+        try {
+          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
+          else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
+          else {
+            try { video.pause(); } catch (e) {}
+          }
+        } catch (e) {}
+      }
+    });
+    hls.on(Hls.Events.MANIFEST_PARSED, function () {
+      log('hls manifest parsed');
+      video.play().catch(function (e) { emit({ event: 'error', message: 'play: ' + e }); });
+    });
+    video.addEventListener('playing', function onPlaying() {
+      log('video playing');
+    });
+    video.addEventListener('error', function () {
+      emit({ event: 'error', message: 'video element error' });
+      try { video.pause(); } catch (e) {}
+    });
+    hls.loadSource(url);
+    hls.attachMedia(video);
+    log('hls loadSource ' + url);
+  }
+
+  function onCommand(msg) {
+    var cmd = msg.cmd;
+    if (cmd === 'startMirror') startMirror(msg.wsUrl, msg.fps);
+    else if (cmd === 'stopMirror') { stopMirror(); mode = 'idle'; video.classList.add('idle'); }
+    else if (cmd === 'startHls') startHls(msg.url);
+    else if (cmd === 'stopHls') { stopHls(); mode = 'idle'; video.classList.add('idle'); }
+    else if (cmd === 'stopAll') stopAll();
+    else if (cmd === 'pause') { try { video.pause(); } catch (e) {} }
+    else if (cmd === 'resume') { video.play().catch(function (e) { emit({ event: 'error', message: 'resume: ' + e }); }); }
+    else if (cmd === 'seek') {
+      try { if (isFinite(msg.seconds) && msg.seconds >= 0) video.currentTime = msg.seconds; } catch (e) {}
+    } else if (cmd === 'setVolume') {
+      var v = Number(msg.value);
+      if (!isFinite(v)) return;
+      video.volume = Math.max(0, Math.min(1, v));
+      video.muted = video.volume === 0 && mode !== 'mirror';
+    }
+  }
+
+  function connectControl() {
+    var url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/control';
+    controlWs = new WebSocket(url);
+    controlWs.onopen = function () {
+      log('control ws open');
+      emit({ event: 'ready' });
+      if (!playbackTimer) {
+        playbackTimer = setInterval(reportPlayback, 500);
+      }
+    };
+    controlWs.onclose = function () {
+      log('control ws closed; reconnecting');
+      setTimeout(connectControl, 500);
+    };
+    controlWs.onerror = function () { /* reconnect via onclose */ };
+    controlWs.onmessage = function (ev) {
+      try { onCommand(JSON.parse(ev.data)); }
+      catch (e) { emit({ event: 'error', message: 'bad command: ' + e }); }
+    };
+  }
+
+  connectControl();
+  video.classList.add('idle');
+})();
+</script>
+</body>
+</html>
