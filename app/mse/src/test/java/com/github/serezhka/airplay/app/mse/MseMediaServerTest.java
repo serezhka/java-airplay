@@ -18,6 +18,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -80,6 +81,49 @@ class MseMediaServerTest {
             assertEquals(nal.length, received.get().length);
             assertEquals(nal[4], received.get()[4]);
             socket.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(2, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    void hlsClockReportsPlayingImmediatelyAndHonorsPauseSeek() throws Exception {
+        Path dir = Files.createTempDirectory("mse-hls-clock-");
+        for (String name : new String[]{"player.html", "hls.min.js", "jmuxer.min.js"}) {
+            try (InputStream in = MseMediaServerTest.class.getResourceAsStream("/mse/" + name)) {
+                Files.write(dir.resolve(name), in.readAllBytes());
+            }
+        }
+        try (MseMediaServer server = new MseMediaServer()) {
+            server.start(dir);
+            server.startHls("http://127.0.0.1:" + server.port() + "/playlist/master.m3u8");
+            assertTrue(server.isHlsActive());
+            MseMediaServer.PlaybackSnapshot start = server.playback();
+            assertEquals(1.0, start.rate(), 0.001, "rate must be 1 before browser readyState");
+            assertEquals(0.0, start.position(), 0.05);
+
+            Thread.sleep(300);
+            MseMediaServer.PlaybackSnapshot advancing = server.playback();
+            assertEquals(1.0, advancing.rate(), 0.001);
+            assertTrue(advancing.position() >= 0.2, "wall clock should advance while playing");
+
+            server.pause();
+            double pausedAt = server.playback().position();
+            assertEquals(0.0, server.playback().rate(), 0.001);
+            Thread.sleep(250);
+            assertEquals(pausedAt, server.playback().position(), 0.05, "position frozen while paused");
+
+            server.seek(12.5);
+            MseMediaServer.PlaybackSnapshot afterSeek = server.playback();
+            assertEquals(1.0, afterSeek.rate(), 0.001, "scrub leaves transport playing");
+            assertEquals(12.5, afterSeek.position(), 0.05);
+
+            server.pause();
+            assertEquals(0.0, server.playback().rate(), 0.001);
+            server.resume();
+            assertEquals(1.0, server.playback().rate(), 0.001);
+
+            server.stopHls();
+            assertFalse(server.isHlsActive());
+            assertEquals(0.0, server.playback().rate(), 0.001);
         }
     }
 }

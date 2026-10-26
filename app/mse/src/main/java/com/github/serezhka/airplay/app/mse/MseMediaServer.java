@@ -48,9 +48,12 @@ import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Map;
+import com.github.serezhka.airplay.app.common.hls.HlsPlaybackMath;
+
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -92,6 +95,21 @@ final class MseMediaServer implements AutoCloseable {
     private volatile boolean mirrorActive;
     private volatile double mediaDurationHint;
     private volatile double volumeLinear = 1.0;
+
+    /**
+     * Authoritative HLS transport clock (same idea as GST/FFmpeg pipelines).
+     * Must not derive rate from the browser {@code readyState}: during scrub/buffer
+     * hls.js drops readyState and the page reported rate=0, so YouTube sent /stop
+     * on the next item and left a black window.
+     */
+    private final AtomicInteger hlsEpoch = new AtomicInteger();
+    private volatile int activeHlsEpoch;
+    private volatile boolean hlsPaused;
+    private volatile boolean hlsEnded;
+    private volatile double positionBaseSeconds;
+    private volatile long positionAnchorNanos;
+    private volatile double scrubHoldSeconds = -1;
+    private volatile long scrubHoldUntilNanos;
 
     private volatile Runnable onEnded = () -> {};
 
@@ -148,7 +166,7 @@ final class MseMediaServer implements AutoCloseable {
 
     void startMirror(int fps) {
         mirrorActive = true;
-        hlsActive = false;
+        clearHlsClock(false);
         clearPendingNals();
         if (!hasControlClient()) {
             log.warn("MSE startMirror with no control client — Chromium page not connected");
@@ -185,16 +203,28 @@ final class MseMediaServer implements AutoCloseable {
     }
 
     void startHls(String playlistUri) {
+        int epoch = hlsEpoch.incrementAndGet();
+        activeHlsEpoch = epoch;
         hlsActive = true;
         mirrorActive = false;
+        hlsPaused = false;
+        hlsEnded = false;
         mediaDurationHint = 0;
+        positionBaseSeconds = 0;
+        positionAnchorNanos = System.nanoTime();
+        scrubHoldSeconds = -1;
+        // Publish rate=1 immediately — waiting for hls.js readyState made YouTube /stop
+        // the item before the first frame (black Chrome on the next video).
+        lastPlayback.set(new PlaybackSnapshot(0, 0, 1, "hls"));
         closeMirrorClients();
         closeAudioClients();
         // Same-origin proxy: Chromium page cannot fetch AirPlay :control /playlist (no CORS)
         // and cannot fetch googlevideo segment URLs either.
         String proxied = hlsProxyUrl(playlistUri);
-        sendControl("{\"cmd\":\"startHls\",\"url\":" + jsonString(proxied) + "}");
+        sendControl("{\"cmd\":\"startHls\",\"url\":" + jsonString(proxied)
+                + ",\"epoch\":" + epoch + "}");
         applyVolume();
+        log.info("MSE HLS clock start epoch={} uri={}", epoch, playlistUri);
     }
 
     String hlsProxyUrl(String upstream) {
@@ -203,13 +233,14 @@ final class MseMediaServer implements AutoCloseable {
     }
 
     void stopHls() {
-        hlsActive = false;
-        sendControl("{\"cmd\":\"stopHls\"}");
+        int epoch = activeHlsEpoch;
+        clearHlsClock(true);
+        sendControl("{\"cmd\":\"stopHls\",\"epoch\":" + epoch + "}");
     }
 
     void stopAll() {
         mirrorActive = false;
-        hlsActive = false;
+        clearHlsClock(true);
         clearPendingNals();
         closeMirrorClients();
         closeAudioClients();
@@ -217,15 +248,49 @@ final class MseMediaServer implements AutoCloseable {
     }
 
     void pause() {
+        if (hlsActive) {
+            positionBaseSeconds = currentHlsPositionSeconds();
+            positionAnchorNanos = 0;
+            hlsPaused = true;
+            scrubHoldSeconds = -1;
+            double dur = hlsDurationSeconds();
+            lastPlayback.set(new PlaybackSnapshot(dur, positionBaseSeconds, 0, "hls"));
+            log.debug("MSE HLS pause at {}s", positionBaseSeconds);
+        }
         sendControl("{\"cmd\":\"pause\"}");
     }
 
     void resume() {
+        if (hlsActive && !hlsEnded) {
+            hlsPaused = false;
+            positionAnchorNanos = System.nanoTime();
+            double dur = hlsDurationSeconds();
+            lastPlayback.set(new PlaybackSnapshot(dur, positionBaseSeconds, 1, "hls"));
+            log.debug("MSE HLS resume from {}s", positionBaseSeconds);
+        }
         sendControl("{\"cmd\":\"resume\"}");
     }
 
     void seek(double seconds) {
+        if (HlsPlaybackMath.isAbsurdSeek(seconds)) {
+            log.warn("MSE ignoring absurd HLS seek to {}s", seconds);
+            return;
+        }
+        if (hlsActive) {
+            positionBaseSeconds = seconds;
+            positionAnchorNanos = System.nanoTime();
+            // Match GST: scrub leaves the transport playing (leading rate=0 is not a pause).
+            hlsPaused = false;
+            hlsEnded = false;
+            scrubHoldSeconds = seconds;
+            scrubHoldUntilNanos = System.nanoTime() + 1_500_000_000L;
+            double dur = hlsDurationSeconds();
+            lastPlayback.set(new PlaybackSnapshot(dur, seconds, 1, "hls"));
+            log.debug("MSE HLS seek to {}s", seconds);
+        }
         sendControl("{\"cmd\":\"seek\",\"seconds\":" + seconds + "}");
+        // Ensure the page is playing after a scrub soft-pause on the wire.
+        sendControl("{\"cmd\":\"resume\"}");
     }
 
     void setVolume(double linear) {
@@ -250,6 +315,40 @@ final class MseMediaServer implements AutoCloseable {
 
     boolean isHlsActive() {
         return hlsActive;
+    }
+
+    private void clearHlsClock(boolean resetSnapshot) {
+        hlsActive = false;
+        hlsPaused = false;
+        hlsEnded = false;
+        positionBaseSeconds = 0;
+        positionAnchorNanos = 0;
+        scrubHoldSeconds = -1;
+        if (resetSnapshot) {
+            lastPlayback.set(new PlaybackSnapshot(0, 0, 0, "idle"));
+        }
+    }
+
+    private double hlsDurationSeconds() {
+        PlaybackSnapshot snap = lastPlayback.get();
+        return Math.max(mediaDurationHint, snap != null ? Math.max(0, snap.duration()) : 0);
+    }
+
+    double currentHlsPositionSeconds() {
+        if (scrubHoldSeconds >= 0 && System.nanoTime() < scrubHoldUntilNanos) {
+            return scrubHoldSeconds;
+        }
+        scrubHoldSeconds = -1;
+        if (hlsPaused || hlsEnded || positionAnchorNanos == 0) {
+            return Math.max(0, positionBaseSeconds);
+        }
+        double elapsed = (System.nanoTime() - positionAnchorNanos) / 1_000_000_000.0;
+        double wall = Math.max(0, positionBaseSeconds + elapsed);
+        double dur = hlsDurationSeconds();
+        if (dur > 0) {
+            wall = Math.min(wall, dur);
+        }
+        return wall;
     }
 
     void sendNal(byte[] nal) {
@@ -332,11 +431,14 @@ final class MseMediaServer implements AutoCloseable {
     }
 
     PlaybackSnapshot playback() {
-        PlaybackSnapshot snap = lastPlayback.get();
-        double duration = snap.duration() > 0 ? snap.duration() : mediaDurationHint;
-        // Never invent rate=1 — a stuck ad VOD with position=0 must report rate=0 or the phone hangs.
-        double rate = hlsActive ? Math.max(0, snap.rate()) : 0;
-        return new PlaybackSnapshot(duration, snap.position(), rate, snap.mode());
+        if (!hlsActive) {
+            return new PlaybackSnapshot(0, 0, 0, "idle");
+        }
+        double duration = hlsDurationSeconds();
+        double position = currentHlsPositionSeconds();
+        // Transport rate is owned here — not the browser readyState.
+        double rate = hlsEnded ? 1 : (hlsPaused ? 0 : 1);
+        return new PlaybackSnapshot(duration, position, rate, "hls");
     }
 
     private void applyVolume() {
@@ -694,27 +796,46 @@ final class MseMediaServer implements AutoCloseable {
         if (payload.contains("\"event\":\"ended\"")) {
             log.info("MSE HLS ended");
             // Keep hlsActive so /playback-info still comes from the player clock.
-            // Clearing it made MsePlayer fall back to zeros while playlist duration stayed ~6s
-            // → phone saw "paused at 0 of 6" and never sent playlistRemove / next /play.
-            PlaybackSnapshot prev = lastPlayback.get();
-            double dur = Math.max(prev.duration(), mediaDurationHint);
+            // Pin D/D/rate=1 — "playing at end", not user pause (same as GStreamer path).
+            hlsEnded = true;
+            hlsPaused = true;
+            double dur = hlsDurationSeconds();
+            if (dur <= 0) {
+                dur = Math.max(positionBaseSeconds, currentHlsPositionSeconds());
+            }
+            positionBaseSeconds = dur;
+            positionAnchorNanos = 0;
+            scrubHoldSeconds = -1;
             if (dur > 0) {
-                // rate=1 at end: "playing at end", not user pause (same as GStreamer path).
                 lastPlayback.set(new PlaybackSnapshot(dur, dur, 1, "hls"));
             }
             onEnded.run();
             return;
         }
         if (payload.contains("\"event\":\"error\"")) {
-            log.warn("MSE page error: {}", payload);
+            // AbortError on play() during rapid startHls/stopHls is expected; not fatal.
+            if (payload.contains("AbortError")) {
+                log.debug("MSE page abort (ignored): {}", payload);
+            } else {
+                log.warn("MSE page error: {}", payload);
+            }
             return;
         }
         if (payload.contains("\"event\":\"playback\"")) {
+            if (!hlsActive) {
+                return;
+            }
             double duration = extractNumber(payload, "duration");
             double position = extractNumber(payload, "position");
-            double rate = extractNumber(payload, "rate");
-            String mode = extractString(payload, "mode");
-            lastPlayback.set(new PlaybackSnapshot(duration, position, rate, mode == null ? "idle" : mode));
+            if (duration > mediaDurationHint) {
+                mediaDurationHint = duration;
+            }
+            // Once the browser has a real media clock, gently sync so we do not drift
+            // forever on wall-clock alone — but never while scrubbing or before first media.
+            if (!hlsPaused && !hlsEnded && scrubHoldSeconds < 0 && position > 0.5) {
+                positionBaseSeconds = position;
+                positionAnchorNanos = System.nanoTime();
+            }
             return;
         }
         if (payload.contains("\"event\":\"log\"")) {

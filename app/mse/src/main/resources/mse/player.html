@@ -36,6 +36,8 @@
   let playbackTimer = null;
   let mirrorFps = 60;
   let lastSpsKey = null;
+  let hlsEpoch = 0;
+  let videoErrorHooked = false;
 
   // Decoded mirror/Music PCM → Web Audio (AAC-ELD/ALAC cannot go through MSE).
   let audioCtx = null;
@@ -64,6 +66,23 @@
   function log(msg) {
     emit({ event: 'log', message: String(msg) });
     console.log('[airplay-mse]', msg);
+  }
+
+  function isAbortError(err) {
+    return err && (err.name === 'AbortError' || String(err).indexOf('AbortError') >= 0);
+  }
+
+  function playSafe() {
+    var p = video.play();
+    if (p && p.catch) {
+      p.catch(function (e) {
+        if (isAbortError(e)) {
+          log('play aborted (ignored)');
+          return;
+        }
+        emit({ event: 'error', message: 'play: ' + e });
+      });
+    }
   }
 
   function ensureAudioGraph(sampleRate, channels) {
@@ -145,7 +164,11 @@
     };
   }
 
-  function stopHls() {
+  function stopHls(epoch) {
+    if (epoch != null && epoch !== hlsEpoch) {
+      log('stopHls ignored stale epoch ' + epoch + ' (current ' + hlsEpoch + ')');
+      return;
+    }
     if (hls) {
       try { hls.detachMedia(); } catch (e) {}
       try { hls.destroy(); } catch (e) {}
@@ -177,7 +200,7 @@
   }
 
   function stopAll() {
-    stopHls();
+    stopHls(hlsEpoch);
     stopMirror();
     mode = 'idle';
     video.classList.add('idle');
@@ -188,20 +211,20 @@
   }
 
   function reportPlayback() {
+    // Duration/position hints only — Java owns rate for /playback-info.
     var duration = isFinite(video.duration) ? video.duration : 0;
     var position = video.currentTime || 0;
     if (mode === 'hls' && video.ended && duration > 0) {
       position = duration;
     }
-    var rate = (mode === 'hls' && !video.paused && !video.ended && !video.error && video.readyState >= 2) ? 1 : 0;
-    emit({ event: 'playback', duration: duration, position: position, rate: rate, mode: mode });
+    emit({ event: 'playback', duration: duration, position: position, rate: 0, mode: mode });
   }
 
   video.addEventListener('ended', function () {
     if (mode === 'hls') {
       log('video ended');
       var duration = isFinite(video.duration) ? video.duration : 0;
-      emit({ event: 'playback', duration: duration, position: duration, rate: 0, mode: 'hls' });
+      emit({ event: 'playback', duration: duration, position: duration, rate: 1, mode: 'hls' });
       emit({ event: 'ended' });
     }
   });
@@ -294,8 +317,9 @@
     };
   }
 
-  function startHls(url) {
+  function startHls(url, epoch) {
     stopAll();
+    hlsEpoch = epoch != null ? Number(epoch) : (hlsEpoch + 1);
     mode = 'hls';
     markActive();
     video.muted = false;
@@ -303,30 +327,37 @@
       emit({ event: 'error', message: 'Hls.js / MSE not supported' });
       return;
     }
-    hls = new Hls({ enableWorker: true, lowLatencyMode: false, backBufferLength: 30 });
+    hls = new Hls({
+      enableWorker: true,
+      lowLatencyMode: false,
+      backBufferLength: 30,
+      // YouTube VOD scrub: jump without waiting forever for a perfect contiguous buffer.
+      maxBufferHole: 1.5,
+      nudgeMaxRetry: 5
+    });
     hls.on(Hls.Events.ERROR, function (_e, data) {
       if (data && data.fatal) {
         emit({ event: 'error', message: 'hls fatal ' + data.type + '/' + data.details });
         try {
           if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
           else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
-          else {
-            try { video.pause(); } catch (e) {}
-          }
         } catch (e) {}
       }
     });
     hls.on(Hls.Events.MANIFEST_PARSED, function () {
-      log('hls manifest parsed');
-      video.play().catch(function (e) { emit({ event: 'error', message: 'play: ' + e }); });
+      log('hls manifest parsed epoch=' + hlsEpoch);
+      playSafe();
     });
-    video.addEventListener('error', function () {
-      emit({ event: 'error', message: 'video element error' });
-      try { video.pause(); } catch (e) {}
-    });
+    if (!videoErrorHooked) {
+      videoErrorHooked = true;
+      video.addEventListener('error', function () {
+        if (mode !== 'hls') return;
+        emit({ event: 'error', message: 'video element error' });
+      });
+    }
     hls.loadSource(url);
     hls.attachMedia(video);
-    log('hls loadSource ' + url);
+    log('hls loadSource epoch=' + hlsEpoch + ' ' + url);
   }
 
   function onCommand(msg) {
@@ -335,23 +366,28 @@
     else if (cmd === 'stopMirror') { stopMirror(); mode = 'idle'; video.classList.add('idle'); }
     else if (cmd === 'configureAudio') {
       ensureAudioGraph(Number(msg.sampleRate) || 44100, Number(msg.channels) || 2);
-    } else if (cmd === 'startHls') startHls(msg.url);
-    else if (cmd === 'stopHls') { stopHls(); mode = 'idle'; video.classList.add('idle'); }
-    else if (cmd === 'stopAll') stopAll();
+    } else if (cmd === 'startHls') startHls(msg.url, msg.epoch);
+    else if (cmd === 'stopHls') {
+      stopHls(msg.epoch);
+      if (msg.epoch == null || msg.epoch === hlsEpoch) {
+        mode = 'idle';
+        video.classList.add('idle');
+      }
+    } else if (cmd === 'stopAll') stopAll();
     else if (cmd === 'pause') {
       try { video.pause(); } catch (e) {}
       try { if (audioCtx) audioCtx.suspend(); } catch (e) {}
     } else if (cmd === 'resume') {
-      video.play().catch(function (e) { emit({ event: 'error', message: 'resume: ' + e }); });
+      playSafe();
       try { if (audioCtx) audioCtx.resume(); } catch (e) {}
     } else if (cmd === 'seek') {
       try {
         if (!isFinite(msg.seconds) || msg.seconds < 0) return;
-        // hls.js: assign currentTime; recover if the buffer gap after a large scrub is fatal.
-        video.currentTime = msg.seconds;
-        if (hls && video.paused) {
-          video.play().catch(function () {});
+        if (hls) {
+          try { hls.startLoad(msg.seconds); } catch (e) {}
         }
+        video.currentTime = msg.seconds;
+        // Java sends resume after seek; do not auto-play here (would fight real pause).
       } catch (e) {
         emit({ event: 'error', message: 'seek: ' + e });
         try { if (hls) hls.recoverMediaError(); } catch (e2) {}
