@@ -21,6 +21,7 @@
   </style>
   <script src="jmuxer.min.js"></script>
   <script src="hls.min.js"></script>
+  <script src="fdk_aac.js"></script>
 </head>
 <body>
 <div id="stage"><video id="player" autoplay playsinline></video></div>
@@ -39,7 +40,7 @@
   let hlsEpoch = 0;
   let videoErrorHooked = false;
 
-  // Decoded mirror/Music PCM → Web Audio (AAC-ELD/ALAC cannot go through MSE).
+  // Raw AAC-ELD/LC → fdk-aac WASM → Web Audio (browsers have no native AAC-ELD).
   let audioCtx = null;
   let gainNode = null;
   let nextAudioTime = 0;
@@ -47,11 +48,19 @@
   let audioChannels = 2;
   let pcmBytesQueued = 0;
   let volumeLinear = 1;
+  let fdkModule = null;
+  let fdkReady = null;
+  let fdkOpen = false;
+  let fdkOutPtr = 0;
+  let fdkOutCap = 0;
+  let aacFramesDecoded = 0;
 
   // Test hooks (Playwright).
   window.__mse = {
     mode: function () { return mode; },
     pcmBytesQueued: function () { return pcmBytesQueued; },
+    aacFramesDecoded: function () { return aacFramesDecoded; },
+    fdkOpen: function () { return fdkOpen; },
     hasJmuxer: function () { return !!jmuxer; },
     hasHls: function () { return !!hls; },
     videoReadyState: function () { return video.readyState; }
@@ -85,6 +94,37 @@
     }
   }
 
+  function hexToBytes(hex) {
+    if (!hex) return new Uint8Array(0);
+    var clean = String(hex).replace(/[^0-9a-fA-F]/g, '');
+    var n = (clean.length / 2) | 0;
+    var out = new Uint8Array(n);
+    for (var i = 0; i < n; i++) {
+      out[i] = parseInt(clean.substr(i * 2, 2), 16);
+    }
+    return out;
+  }
+
+  function ensureFdk() {
+    if (fdkModule) return Promise.resolve(fdkModule);
+    if (fdkReady) return fdkReady;
+    if (typeof createFdkAacModule !== 'function') {
+      return Promise.reject(new Error('fdk_aac.js not loaded'));
+    }
+    fdkReady = createFdkAacModule({
+      locateFile: function (path) { return path; }
+    }).then(function (mod) {
+      fdkModule = mod;
+      log('fdk-aac wasm ready');
+      return mod;
+    }).catch(function (e) {
+      fdkReady = null;
+      emit({ event: 'error', message: 'fdk init: ' + e });
+      throw e;
+    });
+    return fdkReady;
+  }
+
   function ensureAudioGraph(sampleRate, channels) {
     audioSampleRate = sampleRate || 44100;
     audioChannels = channels || 2;
@@ -104,32 +144,37 @@
     }
   }
 
-  function stopPcmAudio() {
+  function closeFdk() {
+    if (fdkModule && fdkOpen) {
+      try { fdkModule._fdk_close(); } catch (e) {}
+    }
+    fdkOpen = false;
+    if (fdkModule && fdkOutPtr) {
+      try { fdkModule._free(fdkOutPtr); } catch (e) {}
+    }
+    fdkOutPtr = 0;
+    fdkOutCap = 0;
+  }
+
+  function stopAacAudio() {
     if (audioWs) {
       try { audioWs.close(); } catch (e) {}
       audioWs = null;
     }
+    closeFdk();
     nextAudioTime = 0;
     try { if (audioCtx) audioCtx.suspend(); } catch (e) {}
   }
 
-  function feedPcm(arrayBuffer) {
-    if (!audioCtx || !gainNode || !arrayBuffer || arrayBuffer.byteLength < 2) return;
-    if (audioCtx.state === 'suspended') {
-      audioCtx.resume().catch(function () {});
-    }
-    var bytes = new Uint8Array(arrayBuffer);
-    // Align to sample frame (channels * 2 bytes).
-    var frameBytes = audioChannels * 2;
-    var usable = bytes.byteLength - (bytes.byteLength % frameBytes);
-    if (usable < frameBytes) return;
-    var view = new DataView(arrayBuffer, 0, usable);
-    var frames = usable / frameBytes;
+  function schedulePcmS16(s16) {
+    if (!audioCtx || !gainNode || !s16 || s16.length < audioChannels) return;
+    var frames = (s16.length / audioChannels) | 0;
+    if (frames < 1) return;
     var buffer = audioCtx.createBuffer(audioChannels, frames, audioSampleRate);
     for (var ch = 0; ch < audioChannels; ch++) {
       var plane = buffer.getChannelData(ch);
       for (var i = 0; i < frames; i++) {
-        plane[i] = view.getInt16((i * audioChannels + ch) * 2, true) / 32768;
+        plane[i] = s16[i * audioChannels + ch] / 32768;
       }
     }
     var src = audioCtx.createBufferSource();
@@ -141,11 +186,76 @@
     }
     src.start(nextAudioTime);
     nextAudioTime += buffer.duration;
-    pcmBytesQueued += usable;
-    // Cap scheduling horizon to avoid unbounded latency under burst.
+    pcmBytesQueued += frames * audioChannels * 2;
     if (nextAudioTime > now + 0.75) {
       nextAudioTime = now + 0.25;
     }
+  }
+
+  function decodeAacAu(arrayBuffer) {
+    if (!fdkModule || !fdkOpen || !arrayBuffer || arrayBuffer.byteLength < 1) return;
+    if (audioCtx && audioCtx.state === 'suspended') {
+      audioCtx.resume().catch(function () {});
+    }
+    var inBytes = new Uint8Array(arrayBuffer);
+    var inPtr = fdkModule._malloc(inBytes.length);
+    if (!inPtr) return;
+    fdkModule.HEAPU8.set(inBytes, inPtr);
+    var need = fdkModule._fdk_frame_samples() * fdkModule._fdk_channels();
+    if (need * 2 > fdkOutCap) {
+      if (fdkOutPtr) fdkModule._free(fdkOutPtr);
+      fdkOutCap = Math.max(need * 2, 8192);
+      fdkOutPtr = fdkModule._malloc(fdkOutCap);
+    }
+    var nbytes = fdkModule._fdk_decode(inPtr, inBytes.length, fdkOutPtr, fdkOutCap / 2);
+    fdkModule._free(inPtr);
+    if (nbytes <= 0) {
+      if (nbytes !== 0) log('fdk_decode err ' + nbytes);
+      return;
+    }
+    var samples = nbytes / 2;
+    var s16 = new Int16Array(fdkModule.HEAP16.buffer, fdkOutPtr, samples);
+    // Copy — HEAP views can move after grow.
+    schedulePcmS16(new Int16Array(s16));
+    aacFramesDecoded++;
+  }
+
+  function openFdkWithAsc(ascBytes) {
+    return ensureFdk().then(function (mod) {
+      closeFdk();
+      var ptr = mod._malloc(ascBytes.length);
+      mod.HEAPU8.set(ascBytes, ptr);
+      var rc = mod._fdk_open(ptr, ascBytes.length);
+      mod._free(ptr);
+      if (rc !== 0) {
+        emit({ event: 'error', message: 'fdk_open failed rc=' + rc });
+        return;
+      }
+      fdkOpen = true;
+      var ch = mod._fdk_channels() || audioChannels;
+      audioChannels = ch > 0 ? ch : audioChannels;
+      ensureAudioGraph(audioSampleRate, audioChannels);
+      log('fdk open ch=' + audioChannels + ' frame=' + mod._fdk_frame_samples());
+    });
+  }
+
+  function configureAac(msg) {
+    var codec = msg.codec || 'none';
+    if (codec === 'none') {
+      closeFdk();
+      return;
+    }
+    audioSampleRate = Number(msg.sampleRate) || 44100;
+    audioChannels = Number(msg.channels) || 2;
+    var asc = hexToBytes(msg.ascHex || '');
+    if (!asc.length) {
+      emit({ event: 'error', message: 'configureAac missing ascHex' });
+      return;
+    }
+    ensureAudioGraph(audioSampleRate, audioChannels);
+    openFdkWithAsc(asc).catch(function (e) {
+      emit({ event: 'error', message: 'configureAac: ' + e });
+    });
   }
 
   function connectAudio(wsUrl) {
@@ -160,7 +270,7 @@
     audioWs.onclose = function () { log('audio ws closed'); };
     audioWs.onerror = function () { emit({ event: 'error', message: 'audio websocket error' }); };
     audioWs.onmessage = function (ev) {
-      if (ev.data instanceof ArrayBuffer) feedPcm(ev.data);
+      if (ev.data instanceof ArrayBuffer) decodeAacAu(ev.data);
     };
   }
 
@@ -196,7 +306,7 @@
       mirrorWs = null;
     }
     destroyJmuxer();
-    stopPcmAudio();
+    stopAacAudio();
   }
 
   function stopAll() {
@@ -304,6 +414,7 @@
       emit({ event: 'error', message: 'MediaSource unsupported' });
       return;
     }
+    ensureFdk().catch(function () {});
     ensureAudioGraph(audioSampleRate, audioChannels);
     createJmuxer(mirrorFps);
     connectAudio(audioWsUrl);
@@ -364,7 +475,9 @@
     var cmd = msg.cmd;
     if (cmd === 'startMirror') startMirror(msg.wsUrl, msg.audioWsUrl, msg.fps);
     else if (cmd === 'stopMirror') { stopMirror(); mode = 'idle'; video.classList.add('idle'); }
+    else if (cmd === 'configureAac') configureAac(msg);
     else if (cmd === 'configureAudio') {
+      // Legacy no-op (PCM path removed); keep for older test pages.
       ensureAudioGraph(Number(msg.sampleRate) || 44100, Number(msg.channels) || 2);
     } else if (cmd === 'startHls') startHls(msg.url, msg.epoch);
     else if (cmd === 'stopHls') {
@@ -423,6 +536,7 @@
     };
   }
 
+  ensureFdk().catch(function () {});
   connectControl();
   video.classList.add('idle');
 })();

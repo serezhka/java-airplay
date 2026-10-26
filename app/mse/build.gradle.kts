@@ -6,8 +6,7 @@ plugins {
 dependencies {
     implementation(projects.app.common)
     implementation(libs.netty.all)
-    implementation(libs.javacv)
-    implementation(libs.ffmpeg.platform)
+    // No javacv/ffmpeg-platform: mirror AAC-ELD/LC is decoded in-browser via fdk-aac WASM.
 
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)

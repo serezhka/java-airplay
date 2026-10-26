@@ -24,9 +24,23 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MseMediaServerTest {
 
+    private static final String[] ASSETS = {
+            "player.html", "hls.min.js", "jmuxer.min.js",
+            "fdk_aac.js", "fdk_aac.wasm", "FDK_AAC_NOTICE.txt"
+    };
+
+    private static void extractAssets(Path dir) throws Exception {
+        for (String name : ASSETS) {
+            try (InputStream in = MseMediaServerTest.class.getResourceAsStream("/mse/" + name)) {
+                assertNotNull(in, name);
+                Files.write(dir.resolve(name), in.readAllBytes());
+            }
+        }
+    }
+
     @Test
     void classpathBundlesPlayerAssets() throws Exception {
-        for (String name : new String[]{"player.html", "hls.min.js", "jmuxer.min.js"}) {
+        for (String name : ASSETS) {
             try (InputStream in = MseMediaServerTest.class.getResourceAsStream("/mse/" + name)) {
                 assertNotNull(in, name);
                 assertTrue(in.readAllBytes().length > 100, name);
@@ -37,11 +51,7 @@ class MseMediaServerTest {
     @Test
     void servesHtmlAndDeliversMirrorNals() throws Exception {
         Path dir = Files.createTempDirectory("mse-test-");
-        for (String name : new String[]{"player.html", "hls.min.js", "jmuxer.min.js"}) {
-            try (InputStream in = MseMediaServerTest.class.getResourceAsStream("/mse/" + name)) {
-                Files.write(dir.resolve(name), in.readAllBytes());
-            }
-        }
+        extractAssets(dir);
         try (MseMediaServer server = new MseMediaServer()) {
             server.start(dir);
             HttpClient client = HttpClient.newHttpClient();
@@ -51,6 +61,15 @@ class MseMediaServerTest {
             assertEquals(200, page.statusCode());
             assertTrue(page.body().contains("hls.min.js"));
             assertTrue(page.body().contains("jmuxer.min.js"));
+            assertTrue(page.body().contains("fdk_aac.js"));
+
+            HttpResponse<byte[]> wasm = client.send(
+                    HttpRequest.newBuilder(URI.create(server.pageUrl() + "fdk_aac.wasm")).GET().build(),
+                    HttpResponse.BodyHandlers.ofByteArray());
+            assertEquals(200, wasm.statusCode());
+            assertTrue(wasm.body().length > 10_000);
+            assertEquals("application/wasm",
+                    wasm.headers().firstValue("content-type").orElse(""));
 
             AtomicReference<byte[]> received = new AtomicReference<>();
             CompletableFuture<Void> got = new CompletableFuture<>();
@@ -106,11 +125,7 @@ class MseMediaServerTest {
     @Test
     void hlsClockReportsPlayingImmediatelyAndHonorsPauseSeek() throws Exception {
         Path dir = Files.createTempDirectory("mse-hls-clock-");
-        for (String name : new String[]{"player.html", "hls.min.js", "jmuxer.min.js"}) {
-            try (InputStream in = MseMediaServerTest.class.getResourceAsStream("/mse/" + name)) {
-                Files.write(dir.resolve(name), in.readAllBytes());
-            }
-        }
+        extractAssets(dir);
         try (MseMediaServer server = new MseMediaServer()) {
             server.start(dir);
             server.startHls("http://127.0.0.1:" + server.port() + "/playlist/master.m3u8");

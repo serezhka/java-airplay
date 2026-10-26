@@ -184,22 +184,42 @@ final class MseMediaServer implements AutoCloseable {
         sendControl("{\"cmd\":\"stopMirror\"}");
     }
 
-    /** Tell the page to (re)configure Web Audio for decoded mirror/Music PCM. */
-    void configureAudio(int sampleRate, int channels) {
-        sendControl("{\"cmd\":\"configureAudio\",\"sampleRate\":" + sampleRate
-                + ",\"channels\":" + channels + "}");
+    /**
+     * Configure in-page fdk-aac WASM for raw AAC-ELD/LC AUs on {@code /audio}.
+     * {@code codec} is {@code aac-eld}, {@code aac-lc}, or {@code none} to tear down.
+     */
+    void configureAac(String codec, int sampleRate, int channels, byte[] asc) {
+        StringBuilder sb = new StringBuilder(128);
+        sb.append("{\"cmd\":\"configureAac\",\"codec\":").append(jsonString(codec == null ? "none" : codec))
+                .append(",\"sampleRate\":").append(sampleRate)
+                .append(",\"channels\":").append(channels)
+                .append(",\"ascHex\":").append(jsonString(toHex(asc)));
+        sb.append('}');
+        sendControl(sb.toString());
     }
 
-    void sendPcm(byte[] s16le, int offset, int length) {
-        if (s16le == null || length <= 0 || audioClients.isEmpty()) {
+    /** Send one raw AAC access unit to the page (decoded by fdk-aac WASM). */
+    void sendAac(byte[] au, int offset, int length) {
+        if (au == null || length <= 0 || audioClients.isEmpty()) {
             return;
         }
         int off = Math.max(0, offset);
-        int len = Math.min(length, s16le.length - off);
+        int len = Math.min(length, au.length - off);
         if (len <= 0) {
             return;
         }
-        audioClients.writeAndFlush(new BinaryWebSocketFrame(Unpooled.copiedBuffer(s16le, off, len)));
+        audioClients.writeAndFlush(new BinaryWebSocketFrame(Unpooled.copiedBuffer(au, off, len)));
+    }
+
+    private static String toHex(byte[] bytes) {
+        if (bytes == null || bytes.length == 0) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) {
+            sb.append(String.format("%02x", b & 0xff));
+        }
+        return sb.toString();
     }
 
     void startHls(String playlistUri) {
@@ -468,8 +488,18 @@ final class MseMediaServer implements AutoCloseable {
     }
 
     private void loadAssets(Path dir) throws IOException {
-        for (String name : new String[]{"player.html", "hls.min.js", "jmuxer.min.js"}) {
-            byte[] bytes = Files.readAllBytes(dir.resolve(name));
+        for (String name : new String[]{
+                "player.html", "hls.min.js", "jmuxer.min.js",
+                "fdk_aac.js", "fdk_aac.wasm", "FDK_AAC_NOTICE.txt"}) {
+            Path file = dir.resolve(name);
+            if (!Files.isRegularFile(file)) {
+                if (name.startsWith("fdk_") || name.startsWith("FDK_")) {
+                    throw new IOException("Missing MSE asset " + name
+                            + " (rebuild with tools/mse-fdk-wasm/build.sh)");
+                }
+                continue;
+            }
+            byte[] bytes = Files.readAllBytes(file);
             staticFiles.put("/" + name, bytes);
             if ("player.html".equals(name)) {
                 staticFiles.put("/", bytes);
@@ -797,6 +827,12 @@ final class MseMediaServer implements AutoCloseable {
             }
             if (path.endsWith(".html") || "/".equals(path)) {
                 return "text/html; charset=utf-8";
+            }
+            if (path.endsWith(".wasm")) {
+                return "application/wasm";
+            }
+            if (path.endsWith(".txt")) {
+                return "text/plain; charset=utf-8";
             }
             return "application/octet-stream";
         }
