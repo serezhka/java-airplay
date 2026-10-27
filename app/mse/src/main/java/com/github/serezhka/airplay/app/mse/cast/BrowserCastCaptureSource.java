@@ -121,9 +121,13 @@ public final class BrowserCastCaptureSource implements CaptureSource {
     }
 
     private static String resolveBrowser() {
-        String override = System.getProperty("airplay.mse.browser");
-        if (override != null && !override.isBlank()) {
-            return override;
+        // Prefer dedicated cast browser override, then general MSE browser, then Chrome
+        // (H.264 WebCodecs is more reliable than distro Chromium on lab hosts).
+        for (String prop : new String[]{"airplay.mse.cast.browser", "airplay.mse.browser"}) {
+            String override = System.getProperty(prop);
+            if (override != null && !override.isBlank()) {
+                return override;
+            }
         }
         String os = System.getProperty("os.name", "").toLowerCase();
         if (os.contains("mac")) {
@@ -138,7 +142,8 @@ public final class BrowserCastCaptureSource implements CaptureSource {
             }
         }
         for (String candidate : new String[]{
-                "chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "chrome", "msedge"
+                "google-chrome-stable", "google-chrome", "chrome",
+                "chromium", "chromium-browser", "msedge"
         }) {
             if (which(candidate)) {
                 return candidate;

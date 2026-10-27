@@ -112,11 +112,9 @@ final class CastCdpSession implements AutoCloseable {
         // With flatten:true, subsequent commands use sessionId in flat mode via sessionId field.
         sendFlat(sessionId, "Page.enable", "{}");
         String escaped = jsonEscape(injectJs);
+        // Only on new documents — do NOT evaluate on about:blank (no mediaDevices).
         sendFlat(sessionId, "Page.addScriptToEvaluateOnNewDocument",
-                "{\"source\":\"" + escaped + "\"}");
-        // Also evaluate now in case document already loaded.
-        sendFlat(sessionId, "Runtime.evaluate",
-                "{\"expression\":\"" + escaped + "\",\"awaitPromise\":false}");
+                "{\"source\":\"" + escaped + "\",\"runImmediately\":false}");
         sendFlat(sessionId, "Page.navigate", "{\"url\":\"" + jsonEscape(homeUrl) + "\"}");
         log.info("MSE cast CDP navigated to {}", homeUrl);
     }

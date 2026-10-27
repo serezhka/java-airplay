@@ -1,7 +1,8 @@
-/* Injected into the cast Chromium tab (top-level navigation, no iframe).
- * Placeholders replaced by Java: __VIDEO_WS__ __CONTROL_WS__
+/* Injected into the cast Chromium tab (top-level only).
+ * Placeholders: __VIDEO_WS__ __CONTROL_WS__
  */
 (function () {
+  if (window !== window.top) return; // never run in iframes (YouTube embeds)
   if (window.__airplayCastBooted) return;
   window.__airplayCastBooted = true;
 
@@ -19,6 +20,7 @@
   var spsPpsAnnexB = null;
   var casting = false;
   var frameIndex = 0;
+  var encodeSize = { w: 960, h: 540 };
 
   function emit(obj) {
     try {
@@ -82,6 +84,19 @@
     videoWs.send(bytes);
   }
 
+  async function tryConfigure(enc, codec, w, h, hw) {
+    await enc.configure({
+      codec: codec,
+      width: w,
+      height: h,
+      bitrate: 2_500_000,
+      framerate: 30,
+      avc: { format: 'avc' },
+      latencyMode: 'realtime',
+      hardwareAcceleration: hw
+    });
+  }
+
   async function ensureEncoder(width, height) {
     if (encoder) {
       try { encoder.close(); } catch (e) {}
@@ -89,38 +104,48 @@
     }
     spsPpsAnnexB = null;
     if (typeof VideoEncoder === 'undefined') throw new Error('VideoEncoder unsupported');
-    var size = fitSize(width, height, 1280, 720);
-    encoder = new VideoEncoder({
-      output: function (chunk, meta) {
-        if (meta && meta.decoderConfig && meta.decoderConfig.description) {
-          spsPpsAnnexB = extractSpsPps(meta.decoderConfig.description);
+    // Cap size — lab displays often report ~1152x720; keep well under level limits.
+    encodeSize = fitSize(width, height, 960, 540);
+    var codecs = ['avc1.42E01F', 'avc1.4D401F', 'avc1.64001F', 'avc1.640028', 'avc1.42E01E'];
+    // Soft first: DISPLAY=:10 / remote sessions often break prefer-hardware.
+    var hwModes = ['prefer-software', 'no-preference', 'prefer-hardware'];
+    var lastErr = null;
+    for (var hi = 0; hi < hwModes.length; hi++) {
+      for (var ci = 0; ci < codecs.length; ci++) {
+        var enc = new VideoEncoder({
+          output: function (chunk, meta) {
+            if (meta && meta.decoderConfig && meta.decoderConfig.description) {
+              spsPpsAnnexB = extractSpsPps(meta.decoderConfig.description);
+            }
+            var buf = new ArrayBuffer(chunk.byteLength);
+            chunk.copyTo(buf);
+            var annex = avccToAnnexB(buf);
+            if (chunk.type === 'key' && spsPpsAnnexB && spsPpsAnnexB.length) {
+              var merged = new Uint8Array(spsPpsAnnexB.length + annex.length);
+              merged.set(spsPpsAnnexB, 0);
+              merged.set(annex, spsPpsAnnexB.length);
+              sendAnnexB(merged);
+            } else {
+              sendAnnexB(annex);
+            }
+          },
+          error: function (e) { emit({ event: 'error', message: 'encoder: ' + e }); }
+        });
+        try {
+          await tryConfigure(enc, codecs[ci], encodeSize.w, encodeSize.h, hwModes[hi]);
+          encoder = enc;
+          emit({
+            event: 'log',
+            message: 'encoder ok ' + codecs[ci] + ' ' + encodeSize.w + 'x' + encodeSize.h + ' ' + hwModes[hi]
+          });
+          return encodeSize;
+        } catch (e) {
+          lastErr = e;
+          try { enc.close(); } catch (e2) {}
         }
-        var buf = new ArrayBuffer(chunk.byteLength);
-        chunk.copyTo(buf);
-        var annex = avccToAnnexB(buf);
-        if (chunk.type === 'key' && spsPpsAnnexB && spsPpsAnnexB.length) {
-          var merged = new Uint8Array(spsPpsAnnexB.length + annex.length);
-          merged.set(spsPpsAnnexB, 0);
-          merged.set(annex, spsPpsAnnexB.length);
-          sendAnnexB(merged);
-        } else {
-          sendAnnexB(annex);
-        }
-      },
-      error: function (e) { emit({ event: 'error', message: 'encoder: ' + e }); }
-    });
-    // High@L4.0 — level 3.0 (…1E) rejects 1152x720 coded area.
-    await encoder.configure({
-      codec: 'avc1.640028',
-      width: size.w,
-      height: size.h,
-      bitrate: 3_500_000,
-      framerate: 30,
-      avc: { format: 'avc' },
-      latencyMode: 'realtime',
-      hardwareAcceleration: 'prefer-hardware'
-    });
-    return size;
+      }
+    }
+    throw lastErr || new Error('no AVC encoder');
   }
 
   function stopCapture() {
@@ -139,6 +164,10 @@
 
   async function startCapture() {
     if (casting) return;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+      emit({ event: 'error', message: 'capture: mediaDevices.getDisplayMedia unavailable' });
+      return;
+    }
     try {
       captureStream = await navigator.mediaDevices.getDisplayMedia({
         video: {
@@ -179,16 +208,20 @@
       frameIndex = 0;
       emit({ event: 'captureStarted', width: size.w, height: size.h });
 
-      captureTimer = setInterval(async function () {
+      captureTimer = setInterval(function () {
         if (!casting || !encoder || encoder.state !== 'configured') return;
         try {
           var srcW = videoEl.videoWidth || rawW;
           var srcH = videoEl.videoHeight || rawH;
-          var next = fitSize(srcW, srcH, 1280, 720);
+          var next = fitSize(srcW, srcH, 960, 540);
           if (next.w !== canvas.width || next.h !== canvas.height) {
             canvas.width = next.w;
             canvas.height = next.h;
-            await ensureEncoder(next.w, next.h);
+            encodeSize = next;
+            ensureEncoder(next.w, next.h).catch(function (e) {
+              emit({ event: 'error', message: 'reconfigure: ' + e });
+            });
+            return;
           }
           ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
           var frame = new VideoFrame(canvas, { timestamp: performance.now() * 1000 });
@@ -212,7 +245,8 @@
       videoWs.binaryType = 'arraybuffer';
       videoWs.onopen = function () {
         emit({ event: 'videoWsOpen' });
-        startCapture();
+        // Defer until after paint — avoids about:blank / early document races.
+        setTimeout(function () { startCapture(); }, 300);
       };
     };
     controlWs.onclose = function () {
@@ -220,5 +254,9 @@
     };
   }
 
-  connect();
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', connect);
+  } else {
+    connect();
+  }
 })();

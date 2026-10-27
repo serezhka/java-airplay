@@ -40,6 +40,7 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
@@ -60,6 +61,8 @@ public final class CastCaptureServer implements AutoCloseable {
     private final ChannelGroup videoClients = new DefaultChannelGroup(GlobalEventExecutor.INSTANCE);
     private final AtomicReference<Channel> serverChannel = new AtomicReference<>();
     private final AtomicReference<Consumer<byte[]>> annexBSink = new AtomicReference<>(b -> {});
+    private final AtomicLong annexBFrames = new AtomicLong();
+    private final AtomicLong annexBBytes = new AtomicLong();
     private volatile CountDownLatch pageReady = new CountDownLatch(1);
     private volatile CountDownLatch captureStarted = new CountDownLatch(1);
     private volatile byte[] castShellHtml = new byte[0];
@@ -110,6 +113,14 @@ public final class CastCaptureServer implements AutoCloseable {
 
     void setAnnexBSink(Consumer<byte[]> sink) {
         annexBSink.set(sink == null ? b -> {} : sink);
+    }
+
+    public long annexBFrames() {
+        return annexBFrames.get();
+    }
+
+    public long annexBBytes() {
+        return annexBBytes.get();
     }
 
     void resetLatches() {
@@ -223,7 +234,9 @@ public final class CastCaptureServer implements AutoCloseable {
                     pageReady.countDown();
                 } else if (payload.contains("\"event\":\"captureStarted\"")) {
                     captureStarted.countDown();
-                    log.info("MSE cast tab capture started");
+                    log.info("MSE cast tab capture started: {}", payload);
+                } else if (payload.contains("\"event\":\"log\"")) {
+                    log.info("MSE cast page: {}", payload);
                 } else if (payload.contains("\"event\":\"error\"")) {
                     log.warn("MSE cast page: {}", payload);
                 }
@@ -233,6 +246,11 @@ public final class CastCaptureServer implements AutoCloseable {
                 byte[] nal = new byte[binary.content().readableBytes()];
                 binary.content().readBytes(nal);
                 if (nal.length > 0) {
+                    long n = annexBFrames.incrementAndGet();
+                    annexBBytes.addAndGet(nal.length);
+                    if (n == 1 || n % 30 == 0) {
+                        log.info("MSE cast Annex-B frames={} bytes={}", n, annexBBytes.get());
+                    }
                     annexBSink.get().accept(nal);
                 }
             }
