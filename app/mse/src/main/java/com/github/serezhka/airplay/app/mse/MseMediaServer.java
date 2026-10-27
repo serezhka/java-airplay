@@ -198,8 +198,15 @@ final class MseMediaServer implements AutoCloseable {
         sendControl(sb.toString());
     }
 
-    /** Send one raw AAC access unit to the page (decoded by fdk-aac WASM). */
-    void sendAac(byte[] au, int offset, int length) {
+    /** Tell the page to open pure-JS ALAC with the 24-byte ALACSpecificConfig. */
+    void configureAlac(int sampleRate, int channels, byte[] cookie) {
+        sendControl("{\"cmd\":\"configureAlac\",\"sampleRate\":" + sampleRate
+                + ",\"channels\":" + channels
+                + ",\"cookieHex\":" + jsonString(toHex(cookie)) + "}");
+    }
+
+    /** Send one raw AAC or ALAC access unit to the page for in-browser decode. */
+    void sendAudioAu(byte[] au, int offset, int length) {
         if (au == null || length <= 0 || audioClients.isEmpty()) {
             return;
         }
@@ -490,12 +497,13 @@ final class MseMediaServer implements AutoCloseable {
     private void loadAssets(Path dir) throws IOException {
         for (String name : new String[]{
                 "player.html", "hls.min.js", "jmuxer.min.js",
-                "fdk_aac.js", "fdk_aac.wasm", "FDK_AAC_NOTICE.txt"}) {
+                "fdk_aac.js", "fdk_aac.wasm", "FDK_AAC_NOTICE.txt",
+                "alac.js", "ALAC_JS_NOTICE.txt"}) {
             Path file = dir.resolve(name);
             if (!Files.isRegularFile(file)) {
-                if (name.startsWith("fdk_") || name.startsWith("FDK_")) {
-                    throw new IOException("Missing MSE asset " + name
-                            + " (rebuild with tools/mse-fdk-wasm/build.sh)");
+                if (name.startsWith("fdk_") || name.startsWith("FDK_")
+                        || name.startsWith("alac") || name.startsWith("ALAC_")) {
+                    throw new IOException("Missing MSE asset " + name);
                 }
                 continue;
             }

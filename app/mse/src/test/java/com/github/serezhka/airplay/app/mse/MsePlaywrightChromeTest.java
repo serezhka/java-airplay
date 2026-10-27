@@ -24,7 +24,8 @@ class MsePlaywrightChromeTest {
 
     private static final String[] ASSETS = {
             "player.html", "hls.min.js", "jmuxer.min.js",
-            "fdk_aac.js", "fdk_aac.wasm", "FDK_AAC_NOTICE.txt"
+            "fdk_aac.js", "fdk_aac.wasm", "FDK_AAC_NOTICE.txt",
+            "alac.js", "ALAC_JS_NOTICE.txt"
     };
 
     @Test
@@ -76,7 +77,7 @@ class MsePlaywrightChromeTest {
                     new Page.WaitForFunctionOptions().setTimeout(15_000));
 
             for (byte[] frame : PlaybackFixture.aacEldFrames()) {
-                server.sendAac(frame, 0, frame.length);
+                server.sendAudioAu(frame, 0, frame.length);
             }
 
             page.waitForFunction("() => window.__mse.pcmBytesQueued() > 1000", null,
@@ -87,6 +88,54 @@ class MsePlaywrightChromeTest {
             Number frames = (Number) page.evaluate("() => window.__mse.aacFramesDecoded()");
             assertTrue(pcm.longValue() > 1000, "pcm queued=" + pcm);
             assertTrue(frames.longValue() > 0, "aac frames=" + frames);
+
+            browser.close();
+        }
+    }
+
+    @Test
+    @Timeout(value = 180, unit = TimeUnit.SECONDS)
+    void chromeDecodesAlacWithVendoredJs() throws Exception {
+        Path dir = Files.createTempDirectory("mse-pw-alac-");
+        for (String name : ASSETS) {
+            try (InputStream in = MsePlaywrightChromeTest.class.getResourceAsStream("/mse/" + name)) {
+                if (in == null) {
+                    throw new IllegalStateException("Missing classpath /mse/" + name);
+                }
+                Files.write(dir.resolve(name), in.readAllBytes());
+            }
+        }
+
+        try (MseMediaServer server = new MseMediaServer();
+             Playwright playwright = Playwright.create()) {
+            server.start(dir);
+
+            Browser browser = playwright.chromium().launch(new BrowserType.LaunchOptions()
+                    .setHeadless(true)
+                    .setArgs(List.of("--autoplay-policy=no-user-gesture-required")));
+            Page page = browser.newPage();
+            page.navigate(server.pageUrl());
+            page.waitForFunction("() => window.__mse && typeof window.__mse.mode === 'function'");
+            assertTrue(server.awaitReady(20, TimeUnit.SECONDS), "page ready via /control");
+
+            server.startMirror(30);
+            page.waitForFunction("() => window.__mse.mode() === 'mirror'", null,
+                    new Page.WaitForFunctionOptions().setTimeout(10_000));
+
+            // 24-byte ALACSpecificConfig: 352 frames, 16-bit, stereo, 44100.
+            server.configureAlac(44_100, 2, hex(
+                    "000001600010280a0e0200ff00000000000000000000ac44"));
+            page.waitForFunction("() => window.__mse.alacOpen() === true", null,
+                    new Page.WaitForFunctionOptions().setTimeout(10_000));
+
+            for (byte[] frame : PlaybackFixture.alacFrames()) {
+                server.sendAudioAu(frame, 0, frame.length);
+            }
+
+            page.waitForFunction("() => window.__mse.pcmBytesQueued() > 1000", null,
+                    new Page.WaitForFunctionOptions().setTimeout(15_000));
+            Number frames = (Number) page.evaluate("() => window.__mse.alacFramesDecoded()");
+            assertTrue(frames.longValue() > 0, "alac frames=" + frames);
 
             browser.close();
         }

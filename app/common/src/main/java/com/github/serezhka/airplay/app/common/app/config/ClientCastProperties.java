@@ -14,7 +14,7 @@ import java.util.Set;
 @ConfigurationProperties(prefix = "client")
 public class ClientCastProperties {
 
-    private static final Set<String> VIDEO_SRC = Set.of("videotest", "screencapture", "none");
+    private static final Set<String> VIDEO_SRC = Set.of("videotest", "screencapture", "browser", "none");
     private static final Set<String> AUDIO_SRC = Set.of("audiotest", "none");
 
     private final Video video = new Video();
@@ -27,7 +27,7 @@ public class ClientCastProperties {
         if (!VIDEO_SRC.contains(v)) {
             throw new IllegalStateException(
                     "Invalid client.video.src='" + video.getSrc()
-                            + "'; expected videotest|screencapture|none");
+                            + "'; expected videotest|screencapture|browser|none");
         }
         if (!AUDIO_SRC.contains(a)) {
             throw new IllegalStateException(
@@ -52,7 +52,7 @@ public class ClientCastProperties {
 
     @Data
     public static class Video {
-        /** {@code videotest} | {@code screencapture} | {@code none} */
+        /** {@code videotest} | {@code screencapture} | {@code browser} | {@code none} */
         private String src = "videotest";
     }
 

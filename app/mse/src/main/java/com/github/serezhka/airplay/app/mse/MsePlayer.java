@@ -14,8 +14,8 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Browser MSE player: Chromium + hls.js (HTTP-Live) + jmuxer (mirror H.264).
- * Mirror AAC-ELD / AAC-LC is decoded in-page with bundled fdk-aac WASM → Web Audio
- * (browsers have no native AAC-ELD). ALAC / tray cast capture are not supported here.
+ * Mirror AAC-ELD / AAC-LC: fdk-aac WASM → Web Audio. Music ALAC: vendored pure-JS
+ * decoder ({@code alac.js}). Tray cast uses a separate navigable Chromium window.
  *
  * <p>Chromium starts lazily on the first mirror/HLS/audio session.
  */
@@ -28,8 +28,31 @@ public class MsePlayer implements Playback, AutoCloseable {
 
     private static final String[] ASSETS = {
             "player.html", "hls.min.js", "jmuxer.min.js",
-            "fdk_aac.js", "fdk_aac.wasm", "FDK_AAC_NOTICE.txt"
+            "fdk_aac.js", "fdk_aac.wasm", "FDK_AAC_NOTICE.txt",
+            "alac.js", "ALAC_JS_NOTICE.txt"
     };
+
+    /** Same ALACSpecificConfig as CAF / libav Music path (24 bytes after alac atom). */
+    private static byte[] alacCookie(AudioStreamInfo info) {
+        int frameLength = info != null && info.getSamplesPerFrame() > 0 ? info.getSamplesPerFrame() : 352;
+        int bitDepth = 16;
+        int channels = 2;
+        int sampleRate = sampleRate(info);
+        // ALACSpecificConfig only (createALAC parseConfig); not the 36-byte QuickTime atom.
+        java.nio.ByteBuffer cookie = java.nio.ByteBuffer.allocate(24).order(java.nio.ByteOrder.BIG_ENDIAN);
+        cookie.putInt(frameLength);
+        cookie.put((byte) 0);
+        cookie.put((byte) bitDepth);
+        cookie.put((byte) 40);
+        cookie.put((byte) 10);
+        cookie.put((byte) 14);
+        cookie.put((byte) channels);
+        cookie.putShort((short) 0x00ff);
+        cookie.putInt(0);
+        cookie.putInt(0);
+        cookie.putInt(sampleRate);
+        return cookie.array();
+    }
 
     private final MseMediaServer media;
     private final ChromiumHost chromium;
@@ -156,7 +179,11 @@ public class MsePlayer implements Playback, AutoCloseable {
                 audioConfigured = true;
                 log.info("MSE audio fdk-wasm AAC-LC {}Hz x{}", rate, ch);
             }
-            case ALAC -> log.warn("MSE ALAC not supported (fdk-wasm path is AAC only); Music audio skipped");
+            case ALAC -> {
+                media.configureAlac(rate, ch, alacCookie(audioStreamInfo));
+                audioConfigured = true;
+                log.info("MSE audio alac.js ALAC {}Hz x{}", rate, ch);
+            }
             default -> log.warn("MSE unsupported audio compression {}", audioCompressionType);
         }
     }
@@ -172,10 +199,11 @@ public class MsePlayer implements Playback, AutoCloseable {
             return;
         }
         if (audioCompressionType != AudioStreamInfo.CompressionType.AAC_ELD
-                && audioCompressionType != AudioStreamInfo.CompressionType.AAC) {
+                && audioCompressionType != AudioStreamInfo.CompressionType.AAC
+                && audioCompressionType != AudioStreamInfo.CompressionType.ALAC) {
             return;
         }
-        media.sendAac(bytes, offset, length);
+        media.sendAudioAu(bytes, offset, length);
     }
 
     @Override

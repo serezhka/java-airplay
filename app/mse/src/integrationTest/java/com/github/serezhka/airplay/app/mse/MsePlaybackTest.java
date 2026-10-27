@@ -134,17 +134,11 @@ class MsePlaybackTest {
 
     @Test
     @Timeout(60)
-    void alacIsSkippedWithoutNativeDecoder() throws Exception {
-        // Option A: no javacv — ALAC (Music) is not decoded in the browser path.
+    void alacOnlyThenDisconnect() throws Exception {
         assumeBrowser();
         MsePlayer player = new MsePlayer(30);
         try {
-            player.onAudioFormat(PlaybackFixture.alacStreamInfo());
-            assertFalse(player.isAudioDecoderOpen(), "ALAC must stay closed on MSE");
-            PlaybackFixture.playAlac(player);
-            assertFalse(player.isAudioDecoderOpen());
-            player.onAudioSrcDisconnect();
-            assertFalse(player.isAudioDecoderOpen());
+            PlaybackLifecycleHarness.alacOnlyThenDisconnect(probe(player));
         } finally {
             player.close();
         }

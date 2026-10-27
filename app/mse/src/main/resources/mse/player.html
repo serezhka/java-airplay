@@ -22,6 +22,7 @@
   <script src="jmuxer.min.js"></script>
   <script src="hls.min.js"></script>
   <script src="fdk_aac.js"></script>
+  <script src="alac.js"></script>
 </head>
 <body>
 <div id="stage"><video id="player" autoplay playsinline></video></div>
@@ -40,7 +41,7 @@
   let hlsEpoch = 0;
   let videoErrorHooked = false;
 
-  // Raw AAC-ELD/LC → fdk-aac WASM → Web Audio (browsers have no native AAC-ELD).
+  // AAC-ELD/LC → fdk-aac WASM; ALAC → alac.js; both → Web Audio.
   let audioCtx = null;
   let gainNode = null;
   let nextAudioTime = 0;
@@ -54,13 +55,18 @@
   let fdkOutPtr = 0;
   let fdkOutCap = 0;
   let aacFramesDecoded = 0;
+  let alacDecoder = null;
+  let alacFramesDecoded = 0;
+  let audioCodec = 'none'; // aac | alac | none
 
   // Test hooks (Playwright).
   window.__mse = {
     mode: function () { return mode; },
     pcmBytesQueued: function () { return pcmBytesQueued; },
     aacFramesDecoded: function () { return aacFramesDecoded; },
+    alacFramesDecoded: function () { return alacFramesDecoded; },
     fdkOpen: function () { return fdkOpen; },
+    alacOpen: function () { return !!alacDecoder; },
     hasJmuxer: function () { return !!jmuxer; },
     hasHls: function () { return !!hls; },
     videoReadyState: function () { return video.readyState; }
@@ -156,26 +162,28 @@
     fdkOutCap = 0;
   }
 
+  function closeAlac() {
+    alacDecoder = null;
+  }
+
   function stopAacAudio() {
     if (audioWs) {
       try { audioWs.close(); } catch (e) {}
       audioWs = null;
     }
     closeFdk();
+    closeAlac();
+    audioCodec = 'none';
     nextAudioTime = 0;
     try { if (audioCtx) audioCtx.suspend(); } catch (e) {}
   }
 
-  function schedulePcmS16(s16) {
-    if (!audioCtx || !gainNode || !s16 || s16.length < audioChannels) return;
-    var frames = (s16.length / audioChannels) | 0;
-    if (frames < 1) return;
-    var buffer = audioCtx.createBuffer(audioChannels, frames, audioSampleRate);
-    for (var ch = 0; ch < audioChannels; ch++) {
-      var plane = buffer.getChannelData(ch);
-      for (var i = 0; i < frames; i++) {
-        plane[i] = s16[i * audioChannels + ch] / 32768;
-      }
+  function scheduleFloatPlanes(planes, numSamples) {
+    if (!audioCtx || !gainNode || !planes || !planes.length || numSamples < 1) return;
+    var chCount = Math.min(audioChannels, planes.length);
+    var buffer = audioCtx.createBuffer(chCount, numSamples, audioSampleRate);
+    for (var ch = 0; ch < chCount; ch++) {
+      buffer.copyToChannel(planes[ch].subarray(0, numSamples), ch);
     }
     var src = audioCtx.createBufferSource();
     src.buffer = buffer;
@@ -186,10 +194,25 @@
     }
     src.start(nextAudioTime);
     nextAudioTime += buffer.duration;
-    pcmBytesQueued += frames * audioChannels * 2;
+    pcmBytesQueued += numSamples * chCount * 2;
     if (nextAudioTime > now + 0.75) {
       nextAudioTime = now + 0.25;
     }
+  }
+
+  function schedulePcmS16(s16) {
+    if (!audioCtx || !gainNode || !s16 || s16.length < audioChannels) return;
+    var frames = (s16.length / audioChannels) | 0;
+    if (frames < 1) return;
+    var planes = [];
+    for (var ch = 0; ch < audioChannels; ch++) {
+      var plane = new Float32Array(frames);
+      for (var i = 0; i < frames; i++) {
+        plane[i] = s16[i * audioChannels + ch] / 32768;
+      }
+      planes.push(plane);
+    }
+    scheduleFloatPlanes(planes, frames);
   }
 
   function decodeAacAu(arrayBuffer) {
@@ -220,9 +243,30 @@
     aacFramesDecoded++;
   }
 
+  function decodeAlacAu(arrayBuffer) {
+    if (!alacDecoder || !arrayBuffer || arrayBuffer.byteLength < 1) return;
+    if (audioCtx && audioCtx.state === 'suspended') {
+      audioCtx.resume().catch(function () {});
+    }
+    try {
+      var out = alacDecoder.decodeFrame(new Uint8Array(arrayBuffer));
+      if (!out || !out.numSamples) return;
+      scheduleFloatPlanes(out.channelData, out.numSamples);
+      alacFramesDecoded++;
+    } catch (e) {
+      log('alac decode: ' + e);
+    }
+  }
+
+  function decodeAudioAu(arrayBuffer) {
+    if (audioCodec === 'alac') decodeAlacAu(arrayBuffer);
+    else if (audioCodec === 'aac') decodeAacAu(arrayBuffer);
+  }
+
   function openFdkWithAsc(ascBytes) {
     return ensureFdk().then(function (mod) {
       closeFdk();
+      closeAlac();
       var ptr = mod._malloc(ascBytes.length);
       mod.HEAPU8.set(ascBytes, ptr);
       var rc = mod._fdk_open(ptr, ascBytes.length);
@@ -232,6 +276,7 @@
         return;
       }
       fdkOpen = true;
+      audioCodec = 'aac';
       var ch = mod._fdk_channels() || audioChannels;
       audioChannels = ch > 0 ? ch : audioChannels;
       ensureAudioGraph(audioSampleRate, audioChannels);
@@ -243,6 +288,8 @@
     var codec = msg.codec || 'none';
     if (codec === 'none') {
       closeFdk();
+      closeAlac();
+      audioCodec = 'none';
       return;
     }
     audioSampleRate = Number(msg.sampleRate) || 44100;
@@ -258,6 +305,30 @@
     });
   }
 
+  function configureAlac(msg) {
+    closeFdk();
+    closeAlac();
+    audioSampleRate = Number(msg.sampleRate) || 44100;
+    audioChannels = Number(msg.channels) || 2;
+    var cookie = hexToBytes(msg.cookieHex || '');
+    if (!cookie.length || typeof createALAC !== 'function') {
+      emit({ event: 'error', message: 'configureAlac missing cookie or alac.js' });
+      return;
+    }
+    try {
+      alacDecoder = createALAC(cookie);
+      if (alacDecoder.config) {
+        if (alacDecoder.config.sampleRate) audioSampleRate = alacDecoder.config.sampleRate;
+        if (alacDecoder.config.numChannels) audioChannels = alacDecoder.config.numChannels;
+      }
+      audioCodec = 'alac';
+      ensureAudioGraph(audioSampleRate, audioChannels);
+      log('alac open ' + audioSampleRate + 'Hz x' + audioChannels);
+    } catch (e) {
+      emit({ event: 'error', message: 'configureAlac: ' + e });
+    }
+  }
+
   function connectAudio(wsUrl) {
     if (audioWs) {
       try { audioWs.close(); } catch (e) {}
@@ -270,7 +341,7 @@
     audioWs.onclose = function () { log('audio ws closed'); };
     audioWs.onerror = function () { emit({ event: 'error', message: 'audio websocket error' }); };
     audioWs.onmessage = function (ev) {
-      if (ev.data instanceof ArrayBuffer) decodeAacAu(ev.data);
+      if (ev.data instanceof ArrayBuffer) decodeAudioAu(ev.data);
     };
   }
 
@@ -476,6 +547,7 @@
     if (cmd === 'startMirror') startMirror(msg.wsUrl, msg.audioWsUrl, msg.fps);
     else if (cmd === 'stopMirror') { stopMirror(); mode = 'idle'; video.classList.add('idle'); }
     else if (cmd === 'configureAac') configureAac(msg);
+    else if (cmd === 'configureAlac') configureAlac(msg);
     else if (cmd === 'configureAudio') {
       // Legacy no-op (PCM path removed); keep for older test pages.
       ensureAudioGraph(Number(msg.sampleRate) || 44100, Number(msg.channels) || 2);

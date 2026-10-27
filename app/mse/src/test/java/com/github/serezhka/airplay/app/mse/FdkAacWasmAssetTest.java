@@ -20,4 +20,14 @@ class FdkAacWasmAssetTest {
             }
         }
     }
+
+    @Test
+    void alacJsAndCastShellAreOnClasspath() throws Exception {
+        for (String name : new String[]{"alac.js", "ALAC_JS_NOTICE.txt", "cast-shell.html"}) {
+            try (InputStream in = FdkAacWasmAssetTest.class.getResourceAsStream("/mse/" + name)) {
+                assertNotNull(in, "missing /mse/" + name);
+                assertTrue(in.readAllBytes().length > 100, name);
+            }
+        }
+    }
 }

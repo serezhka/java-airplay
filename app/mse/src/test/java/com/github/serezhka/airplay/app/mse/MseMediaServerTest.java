@@ -26,7 +26,8 @@ class MseMediaServerTest {
 
     private static final String[] ASSETS = {
             "player.html", "hls.min.js", "jmuxer.min.js",
-            "fdk_aac.js", "fdk_aac.wasm", "FDK_AAC_NOTICE.txt"
+            "fdk_aac.js", "fdk_aac.wasm", "FDK_AAC_NOTICE.txt",
+            "alac.js", "ALAC_JS_NOTICE.txt"
     };
 
     private static void extractAssets(Path dir) throws Exception {
