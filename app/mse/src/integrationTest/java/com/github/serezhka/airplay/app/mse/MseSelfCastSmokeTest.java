@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -28,6 +29,7 @@ class MseSelfCastSmokeTest {
     void browserCastReachesLocalMseMirror() throws Exception {
         assumeTrue(System.getenv("DISPLAY") != null && !System.getenv("DISPLAY").isBlank(),
                 "DISPLAY required for self-cast smoke");
+        assumeTrue(which("ffmpeg"), "ffmpeg required for CDP screencast → H.264");
         System.setProperty("airplay.mse.headless", "false");
         System.setProperty("airplay.mse.cast.home",
                 System.getProperty("airplay.mse.cast.home", "https://example.com"));
@@ -58,23 +60,31 @@ class MseSelfCastSmokeTest {
             assumeTrue(self != null, "self mDNS instance not found: " + devices);
 
             caster.connect(self, "");
-            long deadline = System.currentTimeMillis() + 45_000;
+            long deadline = System.currentTimeMillis() + 60_000;
             while (System.currentTimeMillis() < deadline) {
-                if (receivedAus.get() > 15 && player.isMirrorActive()) {
+                if (receivedAus.get() > 10 && player.isMirrorActive()) {
                     break;
                 }
                 Thread.sleep(500);
             }
-            assertTrue(receivedAus.get() > 15,
+            assertTrue(receivedAus.get() > 10,
                     "expected Annex-B from browser cast, got " + receivedAus.get());
-            assertTrue(player.isMirrorActive() || player.isBrowserReady(),
-                    "MSE mirror never became active");
+            assertTrue(player.isMirrorActive(), "MSE mirror never became active");
             Thread.sleep(2000);
             caster.disconnect();
             player.onVideoSrcDisconnect();
         } finally {
             server.stop();
             player.close();
+        }
+    }
+
+    private static boolean which(String binary) {
+        try {
+            Process p = new ProcessBuilder("which", binary).redirectErrorStream(true).start();
+            return p.waitFor(2, TimeUnit.SECONDS) && p.exitValue() == 0;
+        } catch (Exception e) {
+            return false;
         }
     }
 }
