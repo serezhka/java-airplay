@@ -15,7 +15,7 @@ import java.util.Set;
 public class ClientCastProperties {
 
     private static final Set<String> VIDEO_SRC = Set.of("videotest", "screencapture", "browser", "none");
-    private static final Set<String> AUDIO_SRC = Set.of("audiotest", "none");
+    private static final Set<String> AUDIO_SRC = Set.of("audiotest", "browser", "none");
 
     private final Video video = new Video();
     private final Audio audio = new Audio();
@@ -32,7 +32,7 @@ public class ClientCastProperties {
         if (!AUDIO_SRC.contains(a)) {
             throw new IllegalStateException(
                     "Invalid client.audio.src='" + audio.getSrc()
-                            + "'; expected audiotest|none");
+                            + "'; expected audiotest|browser|none");
         }
         video.setSrc(v);
         audio.setSrc(a);
@@ -58,7 +58,7 @@ public class ClientCastProperties {
 
     @Data
     public static class Audio {
-        /** {@code audiotest} | {@code none} */
+        /** {@code audiotest} | {@code browser} (MSE tab capture) | {@code none} */
         private String src = "audiotest";
     }
 }

@@ -1,18 +1,18 @@
-/* Injected into the cast Chromium tab (top-level only).
- * Placeholders: __VIDEO_WS__ __CONTROL_WS__
+/* Injected on every top-level document in the cast Chromium tab.
+ * Placeholders: __BINDING_NAME__ __ENABLE_AUDIO__
  */
 (function () {
-  if (window !== window.top) return; // never run in iframes (YouTube embeds)
+  if (window !== window.top) return;
   if (window.__airplayCastBooted) return;
   window.__airplayCastBooted = true;
 
-  var VIDEO_WS = '__VIDEO_WS__';
-  var CONTROL_WS = '__CONTROL_WS__';
-  var controlWs = null;
-  var videoWs = null;
+  var BINDING = '__BINDING_NAME__';
+  var ENABLE_AUDIO = __ENABLE_AUDIO__;
   var captureStream = null;
   var videoTrack = null;
+  var audioTrack = null;
   var encoder = null;
+  var audioEncoder = null;
   var captureTimer = null;
   var videoEl = null;
   var canvas = null;
@@ -21,11 +21,36 @@
   var casting = false;
   var frameIndex = 0;
   var encodeSize = { w: 960, h: 540 };
+  var audioConfigured = false;
 
-  function emit(obj) {
+  function post(obj) {
     try {
-      if (controlWs && controlWs.readyState === 1) controlWs.send(JSON.stringify(obj));
+      var fn = window[BINDING];
+      if (typeof fn === 'function') fn(JSON.stringify(obj));
     } catch (e) {}
+  }
+
+  function emit(event, message) {
+    post({ t: 'e', event: event, message: message || '' });
+  }
+
+  function b64FromU8(u8) {
+    var bin = '';
+    var step = 0x8000;
+    for (var i = 0; i < u8.length; i += step) {
+      bin += String.fromCharCode.apply(null, u8.subarray(i, i + step));
+    }
+    return btoa(bin);
+  }
+
+  function sendVideoAnnexB(u8) {
+    if (!u8 || !u8.length) return;
+    post({ t: 'v', b: b64FromU8(u8) });
+  }
+
+  function sendAudioAdts(u8) {
+    if (!u8 || !u8.length) return;
+    post({ t: 'a', b: b64FromU8(u8) });
   }
 
   function even(n) { n = n | 0; return n % 2 === 0 ? n : n - 1; }
@@ -79,9 +104,17 @@
     return new Uint8Array(out);
   }
 
-  function sendAnnexB(bytes) {
-    if (!videoWs || videoWs.readyState !== 1 || !bytes || !bytes.length) return;
-    videoWs.send(bytes);
+  function adtsHeader(aacLength, sampleRateIndex, channelConfig) {
+    var frameLen = aacLength + 7;
+    var hdr = new Uint8Array(7);
+    hdr[0] = 0xff;
+    hdr[1] = 0xf1;
+    hdr[2] = (0x01 << 6) | ((sampleRateIndex & 0x0f) << 2) | ((channelConfig >> 2) & 0x01);
+    hdr[3] = ((channelConfig & 0x03) << 6) | ((frameLen >> 11) & 0x03);
+    hdr[4] = (frameLen >> 3) & 0xff;
+    hdr[5] = ((frameLen & 0x07) << 5) | 0x1f;
+    hdr[6] = 0xfc;
+    return hdr;
   }
 
   async function tryConfigure(enc, codec, w, h, hw) {
@@ -104,10 +137,8 @@
     }
     spsPpsAnnexB = null;
     if (typeof VideoEncoder === 'undefined') throw new Error('VideoEncoder unsupported');
-    // Cap size — lab displays often report ~1152x720; keep well under level limits.
     encodeSize = fitSize(width, height, 960, 540);
     var codecs = ['avc1.42E01F', 'avc1.4D401F', 'avc1.64001F', 'avc1.640028', 'avc1.42E01E'];
-    // Soft first: DISPLAY=:10 / remote sessions often break prefer-hardware.
     var hwModes = ['prefer-software', 'no-preference', 'prefer-hardware'];
     var lastErr = null;
     for (var hi = 0; hi < hwModes.length; hi++) {
@@ -124,20 +155,17 @@
               var merged = new Uint8Array(spsPpsAnnexB.length + annex.length);
               merged.set(spsPpsAnnexB, 0);
               merged.set(annex, spsPpsAnnexB.length);
-              sendAnnexB(merged);
+              sendVideoAnnexB(merged);
             } else {
-              sendAnnexB(annex);
+              sendVideoAnnexB(annex);
             }
           },
-          error: function (e) { emit({ event: 'error', message: 'encoder: ' + e }); }
+          error: function (e) { emit('error', 'encoder: ' + e); }
         });
         try {
           await tryConfigure(enc, codecs[ci], encodeSize.w, encodeSize.h, hwModes[hi]);
           encoder = enc;
-          emit({
-            event: 'log',
-            message: 'encoder ok ' + codecs[ci] + ' ' + encodeSize.w + 'x' + encodeSize.h + ' ' + hwModes[hi]
-          });
+          emit('log', 'encoder ok ' + codecs[ci] + ' ' + encodeSize.w + 'x' + encodeSize.h + ' ' + hwModes[hi]);
           return encodeSize;
         } catch (e) {
           lastErr = e;
@@ -148,11 +176,60 @@
     throw lastErr || new Error('no AVC encoder');
   }
 
+  async function ensureAudioEncoder() {
+    if (audioEncoder || !ENABLE_AUDIO) return;
+    if (typeof AudioEncoder === 'undefined') {
+      emit('log', 'AudioEncoder unavailable — tab audio off');
+      return;
+    }
+    audioEncoder = new AudioEncoder({
+      output: function (chunk) {
+        var raw = new Uint8Array(chunk.byteLength);
+        chunk.copyTo(raw);
+        var hdr = adtsHeader(raw.length, 4, 2);
+        var adts = new Uint8Array(hdr.length + raw.length);
+        adts.set(hdr, 0);
+        adts.set(raw, hdr.length);
+        sendAudioAdts(adts);
+      },
+      error: function (e) { emit('error', 'audio encoder: ' + e); }
+    });
+    await audioEncoder.configure({
+      codec: 'mp4a.40.2',
+      sampleRate: 44100,
+      numberOfChannels: 2,
+      bitrate: 128_000
+    });
+    audioConfigured = true;
+    emit('log', 'audio encoder ok mp4a.40.2');
+  }
+
+  async function pumpAudio() {
+    if (!audioTrack || !audioConfigured || !audioEncoder) return;
+    try {
+      var processor = new MediaStreamTrackProcessor({ track: audioTrack });
+      var reader = processor.readable.getReader();
+      while (casting) {
+        var step = await reader.read();
+        if (step.done) break;
+        var data = step.value;
+        if (audioEncoder.state === 'configured') {
+          audioEncoder.encode(data);
+        }
+        data.close();
+      }
+    } catch (e) {
+      emit('error', 'audio pump: ' + e);
+    }
+  }
+
   function stopCapture() {
     casting = false;
     if (captureTimer) { clearInterval(captureTimer); captureTimer = null; }
     if (encoder) { try { encoder.close(); } catch (e) {} encoder = null; }
+    if (audioEncoder) { try { audioEncoder.close(); } catch (e) {} audioEncoder = null; }
     if (videoTrack) { try { videoTrack.stop(); } catch (e) {} videoTrack = null; }
+    if (audioTrack) { try { audioTrack.stop(); } catch (e) {} audioTrack = null; }
     if (captureStream) {
       try { captureStream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {}
       captureStream = null;
@@ -165,7 +242,7 @@
   async function startCapture() {
     if (casting) return;
     if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-      emit({ event: 'error', message: 'capture: mediaDevices.getDisplayMedia unavailable' });
+      emit('error', 'capture: mediaDevices.getDisplayMedia unavailable');
       return;
     }
     try {
@@ -176,7 +253,7 @@
           width: { ideal: 1280 },
           height: { ideal: 720 }
         },
-        audio: false,
+        audio: ENABLE_AUDIO,
         preferCurrentTab: true,
         selfBrowserSurface: 'include',
         surfaceSwitching: 'exclude',
@@ -184,9 +261,12 @@
       });
       videoTrack = captureStream.getVideoTracks()[0];
       if (!videoTrack) throw new Error('no video track');
+      if (ENABLE_AUDIO) {
+        audioTrack = captureStream.getAudioTracks()[0] || null;
+      }
       videoTrack.addEventListener('ended', function () {
         stopCapture();
-        emit({ event: 'captureEnded' });
+        emit('captureEnded', '');
       });
 
       videoEl = document.createElement('video');
@@ -199,6 +279,10 @@
       var rawW = settings.width || videoEl.videoWidth || 1280;
       var rawH = settings.height || videoEl.videoHeight || 720;
       var size = await ensureEncoder(rawW, rawH);
+      if (ENABLE_AUDIO && audioTrack) {
+        await ensureAudioEncoder();
+        pumpAudio();
+      }
       canvas = document.createElement('canvas');
       canvas.width = size.w;
       canvas.height = size.h;
@@ -206,7 +290,7 @@
 
       casting = true;
       frameIndex = 0;
-      emit({ event: 'captureStarted', width: size.w, height: size.h });
+      emit('captureStarted', size.w + 'x' + size.h);
 
       captureTimer = setInterval(function () {
         if (!casting || !encoder || encoder.state !== 'configured') return;
@@ -219,7 +303,7 @@
             canvas.height = next.h;
             encodeSize = next;
             ensureEncoder(next.w, next.h).catch(function (e) {
-              emit({ event: 'error', message: 'reconfigure: ' + e });
+              emit('error', 'reconfigure: ' + e);
             });
             return;
           }
@@ -228,35 +312,32 @@
           encoder.encode(frame, { keyFrame: (frameIndex++ % 30) === 0 });
           frame.close();
         } catch (e) {
-          emit({ event: 'error', message: 'frame: ' + e });
+          emit('error', 'frame: ' + e);
         }
       }, 33);
     } catch (e) {
       stopCapture();
-      emit({ event: 'error', message: 'capture: ' + e });
+      emit('error', 'capture: ' + e);
     }
   }
 
-  function connect() {
-    controlWs = new WebSocket(CONTROL_WS);
-    controlWs.onopen = function () {
-      emit({ event: 'ready' });
-      videoWs = new WebSocket(VIDEO_WS);
-      videoWs.binaryType = 'arraybuffer';
-      videoWs.onopen = function () {
-        emit({ event: 'videoWsOpen' });
-        // Defer until after paint — avoids about:blank / early document races.
-        setTimeout(function () { startCapture(); }, 300);
-      };
-    };
-    controlWs.onclose = function () {
-      setTimeout(connect, 800);
-    };
+  window.__airplayCastEnableAudio = function () {
+    ENABLE_AUDIO = true;
+    if (casting && audioTrack && !audioConfigured) {
+      ensureAudioEncoder().then(function () { pumpAudio(); }).catch(function (e) {
+        emit('error', 'late audio: ' + e);
+      });
+    }
+  };
+
+  function boot() {
+    emit('ready', '');
+    setTimeout(function () { startCapture(); }, 400);
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', connect);
+    document.addEventListener('DOMContentLoaded', boot);
   } else {
-    connect();
+    boot();
   }
 })();

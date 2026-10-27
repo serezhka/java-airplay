@@ -11,22 +11,19 @@ import java.net.http.WebSocket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.util.Base64;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
 /**
- * Chrome DevTools Protocol: navigate a top-level tab and stream JPEG screencast
- * frames (no in-page WebSocket — HTTPS pages block {@code ws://127.0.0.1}).
+ * Chrome DevTools Protocol for the cast tab: inject {@code cast-inject.js} on each
+ * document and receive Annex-B / ADTS via {@code Runtime.addBinding} (HTTPS-safe).
  * <p>
  * Connects to the <em>page</em> debugger WebSocket ({@code /json/list}), not the
- * browser-level socket with {@code Target.attachToTarget(flatten)}. Flattened
- * sessions accept {@code Page.startScreencast} but never emit frames on current
- * Chromium builds used for cast.
+ * browser-level socket with {@code Target.attachToTarget(flatten)}.
  */
 @Slf4j
 final class CastCdpSession implements AutoCloseable {
@@ -34,9 +31,9 @@ final class CastCdpSession implements AutoCloseable {
     private final WebSocket ws;
     private final AtomicInteger nextId = new AtomicInteger(1);
     private final AtomicReference<Pending> pending = new AtomicReference<>();
-    private final AtomicReference<BiConsumer<byte[], Integer>> onJpeg =
-            new AtomicReference<>((jpeg, sessionId) -> {});
-    private volatile boolean screencastStarted;
+    private final AtomicReference<Consumer<String>> onBinding =
+            new AtomicReference<>(payload -> {});
+    private volatile boolean pipelineInstalled;
 
     private record Pending(int id, CompletableFuture<String> future) {
     }
@@ -174,25 +171,39 @@ final class CastCdpSession implements AutoCloseable {
         return -1;
     }
 
-    void setJpegListener(BiConsumer<byte[], Integer> listener) {
-        onJpeg.set(listener == null ? (j, s) -> {} : listener);
+    void setBindingListener(Consumer<String> listener) {
+        onBinding.set(listener == null ? p -> {} : listener);
     }
 
-    void navigateAndScreencast(String homeUrl) throws Exception {
+    void installCastPipeline(String injectScriptSource) throws Exception {
+        if (pipelineInstalled) {
+            return;
+        }
+        send("Runtime.enable", "{}");
         send("Page.enable", "{}");
+        send("Runtime.addBinding", "{\"name\":\"" + CastBindingCodec.BINDING_NAME + "\"}");
+        String escaped = jsonEscape(injectScriptSource);
+        send("Page.addScriptToEvaluateOnNewDocument", "{\"source\":\"" + escaped + "\"}");
+        pipelineInstalled = true;
+        log.info("MSE cast CDP binding + inject installed");
+    }
+
+    void setCaptureAudio(boolean enable) throws Exception {
+        if (!enable) {
+            return;
+        }
+        send("Runtime.evaluate", "{\"expression\":\"if(typeof __airplayCastEnableAudio==='function')"
+                + "__airplayCastEnableAudio();\",\"awaitPromise\":false}");
+    }
+
+    void navigateAndStartCapture(String homeUrl) throws Exception {
         try {
             send("Page.bringToFront", "{}");
         } catch (Exception e) {
             log.debug("Page.bringToFront: {}", e.toString());
         }
         send("Page.navigate", "{\"url\":\"" + jsonEscape(homeUrl) + "\"}");
-        // Give the document a moment before screencast (fonts/layout).
-        Thread.sleep(1000);
-        String start = send("Page.startScreencast",
-                "{\"format\":\"jpeg\",\"quality\":55,\"maxWidth\":960,\"maxHeight\":540,\"everyNthFrame\":1}");
-        screencastStarted = true;
-        log.info("MSE cast CDP screencast started → {} ({})", homeUrl,
-                start.length() > 120 ? start.substring(0, 120) : start);
+        log.info("MSE cast CDP navigate → {}", homeUrl);
     }
 
     private String send(String method, String paramsJson) throws Exception {
@@ -218,9 +229,18 @@ final class CastCdpSession implements AutoCloseable {
             // check order so events that arrive while an RPC is pending are handled.
             return;
         }
-        if (msg.contains("Page.screencastFrame")) {
-            handleScreencastFrame(msg);
+        if (msg.contains("Runtime.bindingCalled")) {
+            handleBindingCalled(msg);
         }
+    }
+
+    private void handleBindingCalled(String msg) {
+        String payload = extractJsonString(msg, "payload");
+        if (payload == null) {
+            log.warn("CDP bindingCalled missing payload");
+            return;
+        }
+        onBinding.get().accept(payload);
     }
 
     /** Exact {@code "id":N} token match (avoids {@code id=1} matching {@code "id":10}). */
@@ -240,25 +260,6 @@ final class CastCdpSession implements AutoCloseable {
         }
         char c = msg.charAt(after);
         return c == ',' || c == '}' || c == ' ';
-    }
-
-    private void handleScreencastFrame(String msg) {
-        try {
-            String data = extractJsonString(msg, "data");
-            Integer sid = extractScreencastSessionId(msg);
-            if (data == null || sid == null) {
-                log.warn("CDP screencastFrame missing data/sessionId (len={})", msg.length());
-                return;
-            }
-            byte[] jpeg = Base64.getDecoder().decode(data);
-            onJpeg.get().accept(jpeg, sid);
-            // Ack so Chrome keeps sending frames (params.sessionId is numeric).
-            int id = nextId.getAndIncrement();
-            ws.sendText("{\"id\":" + id + ",\"method\":\"Page.screencastFrameAck\","
-                    + "\"params\":{\"sessionId\":" + sid + "}}", true);
-        } catch (Exception e) {
-            log.warn("screencast frame handle failed: {}", e.toString());
-        }
     }
 
     /**
@@ -350,12 +351,6 @@ final class CastCdpSession implements AutoCloseable {
 
     @Override
     public void close() {
-        try {
-            if (screencastStarted) {
-                send("Page.stopScreencast", "{}");
-            }
-        } catch (Exception ignored) {
-        }
         try {
             ws.sendClose(WebSocket.NORMAL_CLOSURE, "done");
         } catch (Exception ignored) {

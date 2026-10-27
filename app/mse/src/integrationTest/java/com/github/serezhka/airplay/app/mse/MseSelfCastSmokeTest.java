@@ -29,8 +29,8 @@ class MseSelfCastSmokeTest {
     void browserCastReachesLocalMseMirror() throws Exception {
         assumeTrue(System.getenv("DISPLAY") != null && !System.getenv("DISPLAY").isBlank(),
                 "DISPLAY required for self-cast smoke");
-        assumeTrue(which("ffmpeg"), "ffmpeg required for CDP screencast → H.264");
         System.setProperty("airplay.mse.headless", "false");
+        System.setProperty("airplay.mse.cast.autoCapture", "true");
         System.setProperty("airplay.mse.cast.home",
                 System.getProperty("airplay.mse.cast.home", "https://example.com"));
 
