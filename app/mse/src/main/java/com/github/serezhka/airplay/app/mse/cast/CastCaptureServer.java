@@ -100,8 +100,12 @@ public final class CastCaptureServer implements AutoCloseable {
         return "http://127.0.0.1:" + port + "/cast";
     }
 
-    String videoWsUrl() {
+    public String videoWsUrl() {
         return "ws://127.0.0.1:" + port + "/cast-video";
+    }
+
+    public String controlWsUrl() {
+        return "ws://127.0.0.1:" + port + "/cast-control";
     }
 
     void setAnnexBSink(Consumer<byte[]> sink) {

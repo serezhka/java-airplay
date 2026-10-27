@@ -162,11 +162,15 @@
         setStatus('enc err');
       }
     });
+    // High@L4.0 — level 3.0 (avc1.42E01E) rejects ~1152x720 coded area on Chromium.
+    function even(n) { n = n | 0; return n % 2 === 0 ? n : n - 1; }
+    var w = even(Math.min(1280, Math.max(2, width | 0)));
+    var h = even(Math.min(720, Math.max(2, height | 0)));
     await encoder.configure({
-      codec: 'avc1.42E01E',
-      width: width,
-      height: height,
-      bitrate: 4_000_000,
+      codec: 'avc1.640028',
+      width: w,
+      height: h,
+      bitrate: 3_500_000,
       framerate: 30,
       avc: { format: 'avc' },
       latencyMode: 'realtime',
