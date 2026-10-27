@@ -9,9 +9,12 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 /**
@@ -28,8 +31,10 @@ public final class BrowserCastCaptureSource implements CaptureSource {
     private final Process browser;
     private final CastCdpSession cdp;
     private final FfmpegH264Pipe ffmpeg;
+    private final ScheduledExecutorService pace;
     private final AtomicBoolean closed = new AtomicBoolean();
     private final AtomicLong jpegFrames = new AtomicLong();
+    private final AtomicReference<byte[]> lastJpeg = new AtomicReference<>();
     private final CountDownLatch firstFrame = new CountDownLatch(1);
 
     public BrowserCastCaptureSource(Consumer<byte[]> onAnnexB) {
@@ -37,6 +42,7 @@ public final class BrowserCastCaptureSource implements CaptureSource {
         Process proc = null;
         CastCdpSession session = null;
         FfmpegH264Pipe pipe = null;
+        ScheduledExecutorService scheduler = null;
         try {
             data = Files.createTempDirectory("airplay-mse-cast-");
             data.toFile().deleteOnExit();
@@ -45,6 +51,7 @@ public final class BrowserCastCaptureSource implements CaptureSource {
             session = CastCdpSession.connect(data, 25_000);
             FfmpegH264Pipe pipeRef = pipe;
             session.setJpegListener((jpeg, sid) -> {
+                lastJpeg.set(jpeg);
                 try {
                     pipeRef.writeJpeg(jpeg);
                     if (jpegFrames.incrementAndGet() == 1) {
@@ -60,12 +67,38 @@ public final class BrowserCastCaptureSource implements CaptureSource {
             if (!firstFrame.await(30, TimeUnit.SECONDS)) {
                 log.warn("No CDP screencast frames within timeout");
             }
+            // Chromium often emits only one screencast JPEG for a still tab; image2pipe
+            // needs a steady cadence or libx264 never leaves the first frame.
+            scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "mse-cast-jpeg-pace");
+                t.setDaemon(true);
+                return t;
+            });
+            FfmpegH264Pipe paced = pipe;
+            scheduler.scheduleAtFixedRate(() -> {
+                if (closed.get()) {
+                    return;
+                }
+                byte[] jpeg = lastJpeg.get();
+                if (jpeg == null) {
+                    return;
+                }
+                try {
+                    paced.writeJpeg(jpeg);
+                } catch (IOException e) {
+                    log.debug("ffmpeg paced jpeg: {}", e.toString());
+                }
+            }, 80, 66, TimeUnit.MILLISECONDS);
             log.info("MSE browser cast capture started home={} jpegs={}", home, jpegFrames.get());
             this.userData = data;
             this.browser = proc;
             this.cdp = session;
             this.ffmpeg = pipe;
+            this.pace = scheduler;
         } catch (Exception e) {
+            if (scheduler != null) {
+                scheduler.shutdownNow();
+            }
             if (session != null) {
                 try {
                     session.close();
@@ -161,6 +194,9 @@ public final class BrowserCastCaptureSource implements CaptureSource {
     public void close() {
         if (!closed.compareAndSet(false, true)) {
             return;
+        }
+        if (pace != null) {
+            pace.shutdownNow();
         }
         try {
             cdp.close();

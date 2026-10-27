@@ -5,6 +5,8 @@ import lombok.extern.slf4j.Slf4j;
 import java.io.BufferedReader;
 import java.net.URI;
 import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.net.http.WebSocket;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -20,6 +22,11 @@ import java.util.function.BiConsumer;
 /**
  * Chrome DevTools Protocol: navigate a top-level tab and stream JPEG screencast
  * frames (no in-page WebSocket — HTTPS pages block {@code ws://127.0.0.1}).
+ * <p>
+ * Connects to the <em>page</em> debugger WebSocket ({@code /json/list}), not the
+ * browser-level socket with {@code Target.attachToTarget(flatten)}. Flattened
+ * sessions accept {@code Page.startScreencast} but never emit frames on current
+ * Chromium builds used for cast.
  */
 @Slf4j
 final class CastCdpSession implements AutoCloseable {
@@ -29,7 +36,7 @@ final class CastCdpSession implements AutoCloseable {
     private final AtomicReference<Pending> pending = new AtomicReference<>();
     private final AtomicReference<BiConsumer<byte[], Integer>> onJpeg =
             new AtomicReference<>((jpeg, sessionId) -> {});
-    private volatile String pageSessionId;
+    private volatile boolean screencastStarted;
 
     private record Pending(int id, CompletableFuture<String> future) {
     }
@@ -39,33 +46,14 @@ final class CastCdpSession implements AutoCloseable {
     }
 
     static CastCdpSession connect(Path userDataDir, long timeoutMs) throws Exception {
-        Path portFile = userDataDir.resolve("DevToolsActivePort");
-        long deadline = System.currentTimeMillis() + timeoutMs;
-        while (System.currentTimeMillis() < deadline) {
-            if (Files.isRegularFile(portFile)) {
-                break;
-            }
-            Thread.sleep(100);
-        }
-        if (!Files.isRegularFile(portFile)) {
-            throw new IllegalStateException("Chromium DevToolsActivePort missing under " + userDataDir);
-        }
-        String portLine;
-        String pathLine;
-        try (BufferedReader r = Files.newBufferedReader(portFile)) {
-            portLine = r.readLine();
-            pathLine = r.readLine();
-        }
-        if (portLine == null || pathLine == null) {
-            throw new IllegalStateException("DevToolsActivePort incomplete");
-        }
-        String browserWs = "ws://127.0.0.1:" + portLine.trim() + pathLine.trim();
-        log.info("MSE cast CDP connecting {}", browserWs);
+        int port = waitForDevToolsPort(userDataDir, timeoutMs);
+        String pageWs = waitForPageWebSocket(port, timeoutMs);
+        log.info("MSE cast CDP connecting {}", pageWs);
 
         CompletableFuture<CastCdpSession> ready = new CompletableFuture<>();
         HttpClient.newHttpClient().newWebSocketBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
-                .buildAsync(URI.create(browserWs), new WebSocket.Listener() {
+                .buildAsync(URI.create(pageWs), new WebSocket.Listener() {
                     private final StringBuilder buf = new StringBuilder();
                     private CastCdpSession session;
 
@@ -92,6 +80,7 @@ final class CastCdpSession implements AutoCloseable {
 
                     @Override
                     public void onError(WebSocket webSocket, Throwable error) {
+                        log.warn("MSE cast CDP WebSocket error: {}", error.toString());
                         ready.completeExceptionally(error);
                     }
                 })
@@ -99,45 +88,119 @@ final class CastCdpSession implements AutoCloseable {
         return ready.get(timeoutMs, TimeUnit.MILLISECONDS);
     }
 
+    private static int waitForDevToolsPort(Path userDataDir, long timeoutMs) throws Exception {
+        Path portFile = userDataDir.resolve("DevToolsActivePort");
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < deadline) {
+            if (Files.isRegularFile(portFile)) {
+                try (BufferedReader r = Files.newBufferedReader(portFile)) {
+                    String portLine = r.readLine();
+                    String pathLine = r.readLine();
+                    if (portLine != null && pathLine != null) {
+                        return Integer.parseInt(portLine.trim());
+                    }
+                }
+            }
+            Thread.sleep(100);
+        }
+        throw new IllegalStateException("Chromium DevToolsActivePort missing under " + userDataDir);
+    }
+
+    private static String waitForPageWebSocket(int port, long timeoutMs) throws Exception {
+        HttpClient http = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(5))
+                .build();
+        URI listUri = URI.create("http://127.0.0.1:" + port + "/json/list");
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                HttpResponse<String> resp = http.send(
+                        HttpRequest.newBuilder(listUri).timeout(Duration.ofSeconds(3)).GET().build(),
+                        HttpResponse.BodyHandlers.ofString());
+                String pageWs = extractPageWebSocketUrl(resp.body());
+                if (pageWs != null) {
+                    return pageWs;
+                }
+            } catch (Exception e) {
+                log.debug("CDP /json/list not ready: {}", e.toString());
+            }
+            Thread.sleep(150);
+        }
+        throw new IllegalStateException("No CDP page target on port " + port);
+    }
+
+    /** Prefer a normal tab ({@code type=page}), not extension/background targets. */
+    static String extractPageWebSocketUrl(String jsonListBody) {
+        int idx = 0;
+        while (true) {
+            int typePage = indexOfExactTypePage(jsonListBody, idx);
+            if (typePage < 0) {
+                break;
+            }
+            // Stay inside this list entry so we do not pick a neighbouring target's WS URL.
+            int objStart = jsonListBody.lastIndexOf('{', typePage);
+            int objEnd = jsonListBody.indexOf('}', typePage);
+            if (objStart >= 0 && objEnd > objStart) {
+                String ws = extractJsonString(jsonListBody.substring(objStart, objEnd + 1), "webSocketDebuggerUrl");
+                if (ws != null && ws.startsWith("ws://")) {
+                    return ws;
+                }
+            }
+            idx = typePage + 1;
+        }
+        return null;
+    }
+
+    /** {@code "type":"page"} / {@code "type": "page"} — not {@code background_page}. */
+    private static int indexOfExactTypePage(String json, int from) {
+        for (String marker : new String[]{"\"type\":\"page\"", "\"type\": \"page\""}) {
+            int i = from;
+            while (true) {
+                i = json.indexOf(marker, i);
+                if (i < 0) {
+                    break;
+                }
+                int after = i + marker.length();
+                if (after >= json.length()) {
+                    return i;
+                }
+                char c = json.charAt(after);
+                if (c == ',' || c == '}' || Character.isWhitespace(c)) {
+                    return i;
+                }
+                i++;
+            }
+        }
+        return -1;
+    }
+
     void setJpegListener(BiConsumer<byte[], Integer> listener) {
         onJpeg.set(listener == null ? (j, s) -> {} : listener);
     }
 
     void navigateAndScreencast(String homeUrl) throws Exception {
-        String targets = send("Target.getTargets", "{}");
-        String targetId = extractTargetId(targets);
-        if (targetId == null) {
-            String created = send("Target.createTarget", "{\"url\":\"about:blank\"}");
-            targetId = extractJsonString(created, "targetId");
+        send("Page.enable", "{}");
+        try {
+            send("Page.bringToFront", "{}");
+        } catch (Exception e) {
+            log.debug("Page.bringToFront: {}", e.toString());
         }
-        if (targetId == null) {
-            throw new IllegalStateException("No CDP page target");
-        }
-        String attached = send("Target.attachToTarget",
-                "{\"targetId\":\"" + targetId + "\",\"flatten\":true}");
-        pageSessionId = extractJsonString(attached, "sessionId");
-        sendFlat(pageSessionId, "Page.enable", "{}");
-        sendFlat(pageSessionId, "Page.navigate", "{\"url\":\"" + jsonEscape(homeUrl) + "\"}");
+        send("Page.navigate", "{\"url\":\"" + jsonEscape(homeUrl) + "\"}");
         // Give the document a moment before screencast (fonts/layout).
-        Thread.sleep(800);
-        sendFlat(pageSessionId, "Page.startScreencast",
-                "{\"format\":\"jpeg\",\"quality\":55,\"maxWidth\":960,\"maxHeight\":540,\"everyNthFrame\":2}");
-        log.info("MSE cast CDP screencast started → {}", homeUrl);
+        Thread.sleep(1000);
+        String start = send("Page.startScreencast",
+                "{\"format\":\"jpeg\",\"quality\":55,\"maxWidth\":960,\"maxHeight\":540,\"everyNthFrame\":1}");
+        screencastStarted = true;
+        log.info("MSE cast CDP screencast started → {} ({})", homeUrl,
+                start.length() > 120 ? start.substring(0, 120) : start);
     }
 
     private String send(String method, String paramsJson) throws Exception {
-        return sendFlat(null, method, paramsJson);
-    }
-
-    private String sendFlat(String sessionId, String method, String paramsJson) throws Exception {
         int id = nextId.getAndIncrement();
         CompletableFuture<String> fut = new CompletableFuture<>();
         pending.set(new Pending(id, fut));
         StringBuilder sb = new StringBuilder(128 + paramsJson.length());
         sb.append("{\"id\":").append(id).append(",\"method\":\"").append(method).append("\"");
-        if (sessionId != null) {
-            sb.append(",\"sessionId\":\"").append(sessionId).append("\"");
-        }
         sb.append(",\"params\":").append(paramsJson).append('}');
         ws.sendText(sb.toString(), true);
         String resp = fut.get(20, TimeUnit.SECONDS);
@@ -149,9 +212,10 @@ final class CastCdpSession implements AutoCloseable {
 
     private void onMessage(String msg) {
         Pending p = pending.get();
-        if (p != null && !p.future().isDone()
-                && (msg.contains("\"id\":" + p.id()) || msg.contains("\"id\": " + p.id()))) {
+        if (p != null && !p.future().isDone() && matchesResponseId(msg, p.id())) {
             p.future().complete(msg);
+            // Fall through: a response never carries screencast frames, but keep the
+            // check order so events that arrive while an RPC is pending are handled.
             return;
         }
         if (msg.contains("Page.screencastFrame")) {
@@ -159,52 +223,67 @@ final class CastCdpSession implements AutoCloseable {
         }
     }
 
+    /** Exact {@code "id":N} token match (avoids {@code id=1} matching {@code "id":10}). */
+    static boolean matchesResponseId(String msg, int id) {
+        String marker = "\"id\":" + id;
+        int i = msg.indexOf(marker);
+        if (i < 0) {
+            marker = "\"id\": " + id;
+            i = msg.indexOf(marker);
+            if (i < 0) {
+                return false;
+            }
+        }
+        int after = i + marker.length();
+        if (after >= msg.length()) {
+            return true;
+        }
+        char c = msg.charAt(after);
+        return c == ',' || c == '}' || c == ' ';
+    }
+
     private void handleScreencastFrame(String msg) {
         try {
             String data = extractJsonString(msg, "data");
-            String sessionIdStr = extractJsonNumber(msg, "sessionId");
-            if (data == null || sessionIdStr == null) {
+            Integer sid = extractScreencastSessionId(msg);
+            if (data == null || sid == null) {
+                log.warn("CDP screencastFrame missing data/sessionId (len={})", msg.length());
                 return;
             }
-            int sid = Integer.parseInt(sessionIdStr);
             byte[] jpeg = Base64.getDecoder().decode(data);
             onJpeg.get().accept(jpeg, sid);
-            // Ack so Chrome keeps sending frames.
-            String ackParams = "{\"sessionId\":" + sid + "}";
+            // Ack so Chrome keeps sending frames (params.sessionId is numeric).
             int id = nextId.getAndIncrement();
-            StringBuilder sb = new StringBuilder();
-            sb.append("{\"id\":").append(id).append(",\"method\":\"Page.screencastFrameAck\"");
-            if (pageSessionId != null) {
-                sb.append(",\"sessionId\":\"").append(pageSessionId).append("\"");
-            }
-            sb.append(",\"params\":").append(ackParams).append('}');
-            ws.sendText(sb.toString(), true);
+            ws.sendText("{\"id\":" + id + ",\"method\":\"Page.screencastFrameAck\","
+                    + "\"params\":{\"sessionId\":" + sid + "}}", true);
         } catch (Exception e) {
-            log.debug("screencast frame handle failed: {}", e.toString());
+            log.warn("screencast frame handle failed: {}", e.toString());
         }
     }
 
-    private static String extractTargetId(String targetsJson) {
-        int idx = 0;
-        while (true) {
-            int typePage = targetsJson.indexOf("\"type\":\"page\"", idx);
-            if (typePage < 0) {
-                break;
-            }
-            int start = Math.max(0, typePage - 200);
-            int end = Math.min(targetsJson.length(), typePage + 200);
-            String id = extractJsonString(targetsJson.substring(start, end), "targetId");
-            if (id != null) {
-                return id;
-            }
-            idx = typePage + 1;
+    /**
+     * Screencast ack id lives under {@code params.sessionId} (number). Ignore any
+     * string {@code sessionId} (flatten leftovers).
+     */
+    static Integer extractScreencastSessionId(String msg) {
+        String fromParams = extractJsonNumber(msg, "sessionId");
+        if (fromParams == null) {
+            return null;
         }
-        return extractJsonString(targetsJson, "targetId");
+        try {
+            return Integer.parseInt(fromParams);
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private static String extractJsonString(String json, String key) {
         String marker = "\"" + key + "\":\"";
         int i = json.indexOf(marker);
+        if (i < 0) {
+            marker = "\"" + key + "\": \"";
+            i = json.indexOf(marker);
+        }
         if (i < 0) {
             return null;
         }
@@ -219,7 +298,11 @@ final class CastCdpSession implements AutoCloseable {
         while (true) {
             int i = json.indexOf(marker, from);
             if (i < 0) {
-                return null;
+                marker = "\"" + key + "\": ";
+                i = json.indexOf(marker, from);
+                if (i < 0) {
+                    return null;
+                }
             }
             int start = i + marker.length();
             while (start < json.length() && json.charAt(start) == ' ') {
@@ -268,8 +351,8 @@ final class CastCdpSession implements AutoCloseable {
     @Override
     public void close() {
         try {
-            if (pageSessionId != null) {
-                sendFlat(pageSessionId, "Page.stopScreencast", "{}");
+            if (screencastStarted) {
+                send("Page.stopScreencast", "{}");
             }
         } catch (Exception ignored) {
         }
