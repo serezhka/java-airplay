@@ -14,9 +14,12 @@ import java.net.NetworkInterface;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -28,16 +31,24 @@ import java.util.function.Consumer;
  * Browse {@code _airplay._tcp} on up IPv4 interfaces.
  * Loopback only when constructed with {@code includeLoopback=true} (self-cast / CI).
  * Supports one-shot {@link #discover()} and a continuous {@link #start(Consumer)} watch.
+ * <p>
+ * Some receivers (notably TVs whose instance name contains {@code "}) flap in JmDNS:
+ * {@code serviceRemoved} fires while the service is still on the LAN. We keep entries
+ * until several periodic browses miss them, and heal a poisoned long-lived cache with
+ * a short-lived {@link JmDNS} when that happens.
  */
 @Slf4j
 public class ServiceDiscovery implements AutoCloseable {
 
     private static final String AIRPLAY_SERVICE_TYPE = "_airplay._tcp.local.";
+    /** Consecutive refresh misses before dropping a previously resolved device. */
+    private static final int REMOVE_AFTER_MISSES = 3;
 
     private final boolean includeLoopback;
     private final AtomicBoolean watching = new AtomicBoolean();
     private final List<JmDNS> jmdnsHandles = new CopyOnWriteArrayList<>();
     private final Map<String, Info> devices = new LinkedHashMap<>();
+    private final Map<String, Integer> missCounts = new HashMap<>();
     private volatile Consumer<List<Info>> listener;
     private ScheduledExecutorService refresher;
 
@@ -104,7 +115,13 @@ public class ServiceDiscovery implements AutoCloseable {
 
                     @Override
                     public void serviceRemoved(ServiceEvent event) {
-                        removeService(event.getInfo());
+                        // Do not drop from the tray on a single remove: TVs often flap here
+                        // while still advertising (JmDNS TTL / quoted instance names).
+                        String name = event.getName();
+                        log.debug("mDNS serviceRemoved (deferred): {}", name);
+                        if (name != null && !name.isBlank()) {
+                            jmdns.requestServiceInfo(event.getType(), name, true, 3_000);
+                        }
                     }
 
                     @Override
@@ -131,31 +148,66 @@ public class ServiceDiscovery implements AutoCloseable {
         if (!watching.get()) {
             return;
         }
+        Set<String> seenKeys = new HashSet<>();
         for (JmDNS jmdns : jmdnsHandles) {
             try {
                 ServiceInfo[] found = jmdns.list(AIRPLAY_SERVICE_TYPE, 3_000);
                 for (ServiceInfo info : found) {
-                    upsertService(info);
+                    seenKeys.addAll(upsertService(info));
                 }
             } catch (Exception e) {
                 log.debug("Periodic browse: {}", e.toString());
             }
         }
-        publish();
+        boolean needHeal;
+        synchronized (devices) {
+            needHeal = !seenKeys.containsAll(devices.keySet());
+        }
+        if (needHeal) {
+            // Long-lived JmDNS cache can drop a still-live TV; a fresh browser recovers it.
+            seenKeys.addAll(ephemeralBrowse());
+        }
+        boolean changed = false;
+        synchronized (devices) {
+            for (String key : seenKeys) {
+                missCounts.remove(key);
+            }
+            List<String> drop = new ArrayList<>();
+            for (String key : devices.keySet()) {
+                if (seenKeys.contains(key)) {
+                    continue;
+                }
+                int misses = missCounts.merge(key, 1, Integer::sum);
+                if (misses >= REMOVE_AFTER_MISSES) {
+                    drop.add(key);
+                }
+            }
+            for (String key : drop) {
+                Info gone = devices.remove(key);
+                missCounts.remove(key);
+                changed = true;
+                log.info("Discovery drop after {} misses: {}", REMOVE_AFTER_MISSES, gone);
+            }
+        }
+        if (changed || !seenKeys.isEmpty()) {
+            publish();
+        }
     }
 
-    private void upsertService(ServiceInfo serviceInfo) {
+    /** @return keys upserted (address:port) */
+    private Set<String> upsertService(ServiceInfo serviceInfo) {
         if (serviceInfo == null) {
-            return;
+            return Set.of();
         }
         synchronized (devices) {
             Map<String, Info> scratch = new LinkedHashMap<>();
             mergeInto(scratch, serviceInfo, includeLoopback);
             if (scratch.isEmpty()) {
-                return;
+                return Set.of();
             }
             boolean changed = false;
             for (Map.Entry<String, Info> e : scratch.entrySet()) {
+                missCounts.remove(e.getKey());
                 Info prev = devices.put(e.getKey(), e.getValue());
                 if (prev == null || !prev.equals(e.getValue())) {
                     changed = true;
@@ -164,20 +216,26 @@ public class ServiceDiscovery implements AutoCloseable {
             if (changed) {
                 publish();
             }
+            return Set.copyOf(scratch.keySet());
         }
     }
 
-    private void removeService(ServiceInfo serviceInfo) {
-        if (serviceInfo == null) {
-            return;
-        }
-        synchronized (devices) {
-            boolean removed = devices.entrySet().removeIf(e ->
-                    e.getValue().name().equals(serviceInfo.getName()));
-            if (removed) {
-                publish();
+    private Set<String> ephemeralBrowse() {
+        Set<String> keys = new HashSet<>();
+        for (InetAddress bind : ipv4Binds(includeLoopback)) {
+            try (JmDNS fresh = JmDNS.create(bind)) {
+                ServiceInfo[] found = fresh.list(AIRPLAY_SERVICE_TYPE, 2_500);
+                for (ServiceInfo info : found) {
+                    keys.addAll(upsertService(info));
+                }
+            } catch (Exception e) {
+                log.debug("Ephemeral browse on {}: {}", bind.getHostAddress(), e.toString());
             }
         }
+        if (!keys.isEmpty()) {
+            log.info("Discovery healed {} device(s) via ephemeral browse", keys.size());
+        }
+        return keys;
     }
 
     private void publish() {
@@ -213,6 +271,7 @@ public class ServiceDiscovery implements AutoCloseable {
         jmdnsHandles.clear();
         synchronized (devices) {
             devices.clear();
+            missCounts.clear();
         }
     }
 
