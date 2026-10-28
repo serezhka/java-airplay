@@ -41,4 +41,18 @@ class CastCdpSessionTest {
         assertNull(CastCdpSession.extractScreencastSessionId(
                 "{\"method\":\"Page.screencastFrame\",\"params\":{\"data\":\"abc\"},\"sessionId\":\"UUID\"}"));
     }
+
+    @Test
+    void extractsEscapedBindingPayloadFromCdpEvent() {
+        // Chrome sends payload as a JSON string; inner quotes are backslash-escaped.
+        String cdp = "{\"method\":\"Runtime.bindingCalled\",\"params\":{"
+                + "\"name\":\"airplayCast\","
+                + "\"payload\":\"{\\\"t\\\":\\\"e\\\",\\\"event\\\":\\\"ready\\\",\\\"message\\\":\\\"\\\"}\","
+                + "\"executionContextId\":1}}";
+        String payload = CastCdpSession.extractBindingPayload(cdp);
+        assertEquals("{\"t\":\"e\",\"event\":\"ready\",\"message\":\"\"}", payload);
+        CastBindingCodec.Message msg = CastBindingCodec.parse(payload);
+        assertTrue(msg instanceof CastBindingCodec.Event);
+        assertEquals("ready", ((CastBindingCodec.Event) msg).kind());
+    }
 }

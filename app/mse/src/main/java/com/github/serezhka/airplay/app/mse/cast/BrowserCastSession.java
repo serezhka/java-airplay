@@ -156,7 +156,9 @@ final class BrowserCastSession implements AutoCloseable {
                 }
             }
         } catch (Exception e) {
-            log.warn("cast binding parse failed: {}", e.toString());
+            String snippet = payload == null ? "null"
+                    : payload.length() > 120 ? payload.substring(0, 120) + "…" : payload;
+            log.warn("cast binding parse failed: {} payload={}", e.toString(), snippet);
         }
     }
 

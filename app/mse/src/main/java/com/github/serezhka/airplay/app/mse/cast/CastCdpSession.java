@@ -235,12 +235,21 @@ final class CastCdpSession implements AutoCloseable {
     }
 
     private void handleBindingCalled(String msg) {
-        String payload = extractJsonString(msg, "payload");
+        String payload = extractBindingPayload(msg);
         if (payload == null) {
             log.warn("CDP bindingCalled missing payload");
             return;
         }
         onBinding.get().accept(payload);
+    }
+
+    /**
+     * CDP embeds the page string as a JSON string ({@code \"} escapes). Must unescape
+     * before {@link CastBindingCodec#parse}; a naive cut-at-first-quote yields garbage
+     * and drops every Annex-B / ADTS frame (black TV).
+     */
+    static String extractBindingPayload(String bindingCalledMessage) {
+        return CastBindingCodec.extractJsonString(bindingCalledMessage, "payload");
     }
 
     /** Exact {@code "id":N} token match (avoids {@code id=1} matching {@code "id":10}). */
