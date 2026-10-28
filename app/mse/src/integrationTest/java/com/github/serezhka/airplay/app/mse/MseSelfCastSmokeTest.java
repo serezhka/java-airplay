@@ -28,11 +28,18 @@ class MseSelfCastSmokeTest {
     @Timeout(120)
     void browserCastReachesLocalMseMirror() throws Exception {
         assumeTrue(System.getenv("DISPLAY") != null && !System.getenv("DISPLAY").isBlank(),
-                "DISPLAY required for self-cast smoke");
+                "DISPLAY required for self-cast smoke (CI: xvfb-run)");
+        // Cast window must be headed under xvfb; player Chromium may stay headless.
         System.setProperty("airplay.mse.headless", "false");
         System.setProperty("airplay.mse.cast.autoCapture", "true");
-        System.setProperty("airplay.mse.cast.home",
-                System.getProperty("airplay.mse.cast.home", "https://example.com"));
+        // Secure context required for getDisplayMedia (https). Reset so a prior test
+        // cannot leave a data: URL that makes mediaDevices unavailable.
+        System.setProperty("airplay.mse.cast.home", "https://example.com");
+        String browser = System.getProperty("airplay.mse.cast.browser",
+                System.getProperty("airplay.mse.browser", ""));
+        assumeTrue(browser.isBlank() || which(browser) || java.nio.file.Files.isExecutable(
+                        java.nio.file.Path.of(browser)),
+                "cast browser not found: " + browser);
 
         AtomicInteger receivedAus = new AtomicInteger();
         CaptureSources.install(onAnnexB -> new BrowserCastCaptureSource(au -> {

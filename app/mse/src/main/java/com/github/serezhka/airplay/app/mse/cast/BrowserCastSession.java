@@ -197,6 +197,9 @@ final class BrowserCastSession implements AutoCloseable {
         cmd.add("--window-size=1280,800");
         cmd.add("--enable-features=UserMediaScreenCapturingWithSelfBrowserSurface");
         if (Boolean.parseBoolean(System.getProperty("airplay.mse.cast.autoCapture", "false"))) {
+            // CI / smoke: accept getDisplayMedia without a picker (synthetic track).
+            // Do not pair with --auto-accept-camera-and-microphone-capture — that combo
+            // aborts Chrome before DevToolsActivePort appears on current builds.
             cmd.add("--use-fake-ui-for-media-stream");
         }
         if (Boolean.parseBoolean(System.getProperty("airplay.mse.headless", "false"))) {

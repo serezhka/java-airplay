@@ -55,4 +55,29 @@ class CastCdpSessionTest {
         assertTrue(msg instanceof CastBindingCodec.Event);
         assertEquals("ready", ((CastBindingCodec.Event) msg).kind());
     }
+
+    @Test
+    void escapedCdpVideoPayloadRoundTripsAnnexB() {
+        byte[] annex = new byte[]{0, 0, 0, 1, 0x67, 0x42, 0x00, 0x0a};
+        String b64 = java.util.Base64.getEncoder().encodeToString(annex);
+        String inner = "{\"t\":\"v\",\"b\":\"" + b64 + "\"}";
+        String escaped = CastBindingCodec.jsonEscape(inner);
+        String cdp = "{\"method\":\"Runtime.bindingCalled\",\"params\":{"
+                + "\"name\":\"airplayCast\",\"payload\":\"" + escaped + "\"}}";
+        String payload = CastCdpSession.extractBindingPayload(cdp);
+        CastBindingCodec.Message msg = CastBindingCodec.parse(payload);
+        assertTrue(msg instanceof CastBindingCodec.VideoAnnexB);
+        org.junit.jupiter.api.Assertions.assertArrayEquals(
+                annex, ((CastBindingCodec.VideoAnnexB) msg).annexB());
+    }
+
+    @Test
+    void naiveQuoteCutWouldCorruptEscapedPayload() {
+        String cdp = "{\"params\":{\"payload\":\"{\\\"t\\\":\\\"v\\\"}\"}}";
+        // Bug we hit in production: first " after payload": truncates to "{".
+        int start = cdp.indexOf("\"payload\":\"") + "\"payload\":\"".length();
+        String naive = cdp.substring(start, cdp.indexOf('"', start));
+        assertEquals("{\\", naive);
+        assertNull(CastBindingCodec.extractJsonString(naive, "t"));
+    }
 }
