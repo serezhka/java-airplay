@@ -24,6 +24,8 @@ public class MseCaptureConfig {
     @Bean
     @ConditionalOnProperty(name = "client.audio.src", havingValue = "browser")
     public AudioSourceFactory browserCastAudioSourceFactory() {
+        // Cast inject reads this before getDisplayMedia so the tab includes an audio track.
+        System.setProperty("airplay.mse.cast.enableAudio", "true");
         AudioSourceFactory factory = BrowserCastAudioSource::new;
         AudioSources.install(factory);
         return factory;

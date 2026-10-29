@@ -22,6 +22,8 @@
   var frameIndex = 0;
   var encodeSize = { w: 960, h: 540 };
   var audioConfigured = false;
+  var audioReader = null;
+  var encoderBusy = null;
 
   function post(obj) {
     try {
@@ -208,26 +210,34 @@
     if (!audioTrack || !audioConfigured || !audioEncoder) return;
     try {
       var processor = new MediaStreamTrackProcessor({ track: audioTrack });
-      var reader = processor.readable.getReader();
+      audioReader = processor.readable.getReader();
       while (casting) {
-        var step = await reader.read();
+        var step = await audioReader.read();
         if (step.done) break;
         var data = step.value;
-        if (audioEncoder.state === 'configured') {
+        if (audioEncoder && audioEncoder.state === 'configured') {
           audioEncoder.encode(data);
         }
         data.close();
       }
     } catch (e) {
-      emit('error', 'audio pump: ' + e);
+      if (casting) emit('error', 'audio pump: ' + e);
+    } finally {
+      audioReader = null;
     }
   }
 
   function stopCapture() {
     casting = false;
     if (captureTimer) { clearInterval(captureTimer); captureTimer = null; }
+    if (audioReader) {
+      try { audioReader.cancel(); } catch (e) {}
+      audioReader = null;
+    }
     if (encoder) { try { encoder.close(); } catch (e) {} encoder = null; }
     if (audioEncoder) { try { audioEncoder.close(); } catch (e) {} audioEncoder = null; }
+    audioConfigured = false;
+    encoderBusy = null;
     if (videoTrack) { try { videoTrack.stop(); } catch (e) {} videoTrack = null; }
     if (audioTrack) { try { audioTrack.stop(); } catch (e) {} audioTrack = null; }
     if (captureStream) {
@@ -302,11 +312,14 @@
             canvas.width = next.w;
             canvas.height = next.h;
             encodeSize = next;
-            ensureEncoder(next.w, next.h).catch(function (e) {
-              emit('error', 'reconfigure: ' + e);
-            });
+            if (!encoderBusy) {
+              encoderBusy = ensureEncoder(next.w, next.h).catch(function (e) {
+                emit('error', 'reconfigure: ' + e);
+              }).finally(function () { encoderBusy = null; });
+            }
             return;
           }
+          if (encoderBusy || !encoder) return;
           ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
           var frame = new VideoFrame(canvas, { timestamp: performance.now() * 1000 });
           encoder.encode(frame, { keyFrame: (frameIndex++ % 30) === 0 });
@@ -323,10 +336,17 @@
 
   window.__airplayCastEnableAudio = function () {
     ENABLE_AUDIO = true;
-    if (casting && audioTrack && !audioConfigured) {
+    if (!casting) return;
+    if (audioTrack && !audioConfigured) {
       ensureAudioEncoder().then(function () { pumpAudio(); }).catch(function (e) {
         emit('error', 'late audio: ' + e);
       });
+      return;
+    }
+    // Capture started without an audio track — must re-request getDisplayMedia.
+    if (!audioTrack) {
+      stopCapture();
+      startCapture();
     }
   };
 

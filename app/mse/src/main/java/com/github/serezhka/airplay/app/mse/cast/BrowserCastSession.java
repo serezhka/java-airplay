@@ -85,10 +85,10 @@ final class BrowserCastSession implements AutoCloseable {
     }
 
     void release() {
-        if (refCount.decrementAndGet() > 0) {
-            return;
-        }
         synchronized (START_LOCK) {
+            if (refCount.decrementAndGet() > 0) {
+                return;
+            }
             if (shared == this) {
                 shared = null;
             }
@@ -107,11 +107,15 @@ final class BrowserCastSession implements AutoCloseable {
         BrowserCastSession hub = new BrowserCastSession(proc, session, splitter);
         ref[0] = hub;
         session.setBindingListener(hub::onBindingPayload);
-        String inject = loadInjectScript(false);
+        // getDisplayMedia(audio) must be true at first capture — late __airplayCastEnableAudio
+        // cannot add a track without re-capture (set by MseCaptureConfig when audio.src=browser).
+        boolean enableAudio = Boolean.parseBoolean(
+                System.getProperty("airplay.mse.cast.enableAudio", "false"));
+        String inject = loadInjectScript(enableAudio);
         session.installCastPipeline(inject);
         String home = System.getProperty("airplay.mse.cast.home", "https://www.youtube.com");
         session.navigateAndStartCapture(home);
-        log.info("MSE browser cast (WebCodecs + CDP binding) home={}", home);
+        log.info("MSE browser cast (WebCodecs + CDP binding) home={} audio={}", home, enableAudio);
         return hub;
     }
 

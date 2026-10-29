@@ -22,10 +22,10 @@ no private hosts, credentials, session dumps, or lab-only war stories.
 
 ## Cross-platform product
 
-This repo ships **two** GitHub release fat jars (`app/gstreamer`, `app/ffmpeg`).
-End users install only GStreamer **or** FFmpeg per the README and run
-`java -jar …`. Receiver, tray, discovery, cast, HLS, and mirror must work from
-that default jar on macOS / Linux / Windows.
+This repo ships GitHub release fat jars (`app/gstreamer`, `app/ffmpeg`, and
+`app/mse`). GST/FFmpeg jars need the matching native stack; MSE uses bundled
+Chromium assets (no GST/FFmpeg runtime). Receiver, tray, discovery, cast, HLS,
+and mirror must work from the chosen jar on macOS / Linux / Windows.
 
 **Do not** treat host/lab tweaks as the product fix:
 
@@ -41,17 +41,18 @@ that default jar on macOS / Linux / Windows.
 protocol/      FairPlay, pairing, RTSP, mirror framing, key labels
 server/        session, Netty, HLS, mDNS, Playback port
 client/        cast/send, CaptureSource SPI (no gst/ffmpeg)
-app/common     Spring/tray/dump shared by both fat jars (no native)
+app/common     Spring/tray/dump shared by player fat jars (no native)
 app/gstreamer  one fat jar: Playback + CaptureSource (GStreamer)
 app/ffmpeg     one fat jar: Playback + CaptureSource (FFmpeg)
+app/mse        one fat jar: Playback + browser cast (Chromium / WebCodecs)
 ```
 
 - `protocol` must not know about `server`, `client`, or any app.
 - `server` depends on `Playback` (and protocol), not on which native stack is wired.
 - `client` must not depend on `server` or gst/ffmpeg.
 - `app/common` must not depend on gstreamer or ffmpeg libraries.
-- `app/gstreamer` and `app/ffmpeg` must not depend on each other.
-- Only the two app modules are Spring Boot entrypoints.
+- `app/gstreamer`, `app/ffmpeg`, and `app/mse` must not depend on each other.
+- Only the app player modules are Spring Boot entrypoints.
 
 Comments and errors describe the **local** invariant, not a downstream native
 crash (“drop invalid AUs before `onVideo`”, not “or GStreamer will SIGSEGV”).

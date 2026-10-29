@@ -225,8 +225,6 @@ final class CastCdpSession implements AutoCloseable {
         Pending p = pending.get();
         if (p != null && !p.future().isDone() && matchesResponseId(msg, p.id())) {
             p.future().complete(msg);
-            // Fall through: a response never carries screencast frames, but keep the
-            // check order so events that arrive while an RPC is pending are handled.
             return;
         }
         if (msg.contains("Runtime.bindingCalled")) {
@@ -271,22 +269,6 @@ final class CastCdpSession implements AutoCloseable {
         return c == ',' || c == '}' || c == ' ';
     }
 
-    /**
-     * Screencast ack id lives under {@code params.sessionId} (number). Ignore any
-     * string {@code sessionId} (flatten leftovers).
-     */
-    static Integer extractScreencastSessionId(String msg) {
-        String fromParams = extractJsonNumber(msg, "sessionId");
-        if (fromParams == null) {
-            return null;
-        }
-        try {
-            return Integer.parseInt(fromParams);
-        } catch (NumberFormatException e) {
-            return null;
-        }
-    }
-
     private static String extractJsonString(String json, String key) {
         String marker = "\"" + key + "\":\"";
         int i = json.indexOf(marker);
@@ -300,40 +282,6 @@ final class CastCdpSession implements AutoCloseable {
         int start = i + marker.length();
         int end = json.indexOf('"', start);
         return end < 0 ? null : json.substring(start, end);
-    }
-
-    private static String extractJsonNumber(String json, String key) {
-        String marker = "\"" + key + "\":";
-        int from = 0;
-        while (true) {
-            int i = json.indexOf(marker, from);
-            if (i < 0) {
-                marker = "\"" + key + "\": ";
-                i = json.indexOf(marker, from);
-                if (i < 0) {
-                    return null;
-                }
-            }
-            int start = i + marker.length();
-            while (start < json.length() && json.charAt(start) == ' ') {
-                start++;
-            }
-            // Skip string values (flattened CDP sessionId is a UUID string).
-            if (start < json.length() && json.charAt(start) == '"') {
-                from = start + 1;
-                continue;
-            }
-            int end = start;
-            while (end < json.length()) {
-                char c = json.charAt(end);
-                if ((c >= '0' && c <= '9') || c == '-') {
-                    end++;
-                } else {
-                    break;
-                }
-            }
-            return end > start ? json.substring(start, end) : null;
-        }
     }
 
     private static String jsonEscape(String s) {
