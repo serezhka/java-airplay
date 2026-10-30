@@ -183,14 +183,11 @@ final class ChromiumHost implements AutoCloseable {
         if (p == null) {
             return;
         }
-        p.destroy();
+        p.destroyForcibly();
         try {
-            if (!p.waitFor(2, TimeUnit.SECONDS)) {
-                p.destroyForcibly();
-            }
+            p.waitFor(5, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            p.destroyForcibly();
         }
     }
 

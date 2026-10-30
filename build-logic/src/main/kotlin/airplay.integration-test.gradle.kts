@@ -29,6 +29,11 @@ val forwardedProperties = listOf(
     "airplay.mse.headless",
     "airplay.mse.browser",
     "airplay.mse.allow-file-hls",
+    "airplay.mse.cast.browser",
+    "airplay.mse.cast.home",
+    "airplay.mse.cast.autoCapture",
+    "airplay.mse.cast.enableAudio",
+    "airplay.mse.chrome.noSandbox",
     "gstreamer.path",
     "jna.library.path"
 )

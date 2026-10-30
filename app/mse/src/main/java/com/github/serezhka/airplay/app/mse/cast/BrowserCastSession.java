@@ -267,14 +267,12 @@ final class BrowserCastSession implements AutoCloseable {
         } catch (Exception ignored) {
         }
         if (browser != null) {
-            browser.destroy();
+            // Windows: destroy() alone can leave GPU/utility children that block the next Chrome.
+            browser.destroyForcibly();
             try {
-                if (!browser.waitFor(2, TimeUnit.SECONDS)) {
-                    browser.destroyForcibly();
-                }
+                browser.waitFor(5, TimeUnit.SECONDS);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                browser.destroyForcibly();
             }
         }
     }

@@ -10,7 +10,6 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -286,28 +285,15 @@ class MsePlaybackTest {
     }
 
     private static void assumeBrowser() {
-        assumeTrue(
-                System.getProperty("airplay.mse.browser") != null
-                        || which("chromium")
-                        || which("chromium-browser")
-                        || which("google-chrome")
-                        || which("google-chrome-stable")
-                        || Files.isExecutable(Path.of(
-                        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")),
+        assumeTrue(MseBrowsers.resolveForPlayback() != null,
                 "Chromium/Chrome required for MSE playback tests");
     }
 
-    private static boolean which(String binary) {
-        try {
-            Process p = new ProcessBuilder("which", binary).redirectErrorStream(true).start();
-            return p.waitFor(2, TimeUnit.SECONDS) && p.exitValue() == 0;
-        } catch (Exception e) {
-            return false;
-        }
-    }
-
     private static boolean awaitBrowser(MsePlayer player) throws InterruptedException {
-        long deadline = System.currentTimeMillis() + 20_000;
+        // Windows GHA Chrome cold-start + control WS can exceed 20s under load.
+        long waitMs = System.getProperty("os.name", "").toLowerCase().contains("win")
+                ? 45_000 : 20_000;
+        long deadline = System.currentTimeMillis() + waitMs;
         while (System.currentTimeMillis() < deadline) {
             if (player.isBrowserReady() || player.isMirrorActive() || player.isHlsActive()) {
                 // Mirror/HLS start ensures browser; give control WS a moment after first format.
