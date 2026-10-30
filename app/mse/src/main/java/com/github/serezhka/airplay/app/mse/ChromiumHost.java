@@ -133,6 +133,10 @@ final class ChromiumHost implements AutoCloseable {
             cmd.add("--headless=new");
             cmd.add("--disable-gpu");
         }
+        if (Boolean.parseBoolean(System.getProperty("airplay.mse.chrome.noSandbox", "false"))) {
+            cmd.add("--no-sandbox");
+            cmd.add("--disable-dev-shm-usage");
+        }
         // Never --start-fullscreen: empty black fullscreen is worse than a tiny idle window.
         cmd.add("--app=" + pageUrl);
         ProcessBuilder pb = new ProcessBuilder(cmd);

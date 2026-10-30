@@ -172,9 +172,12 @@ final class BrowserCastSession implements AutoCloseable {
             if (in == null) {
                 throw new IOException("Missing /mse/cast-inject.js");
             }
+            boolean fakeAudio = Boolean.parseBoolean(
+                    System.getProperty("airplay.mse.cast.autoCapture", "false"));
             String js = new String(in.readAllBytes(), StandardCharsets.UTF_8);
             return js.replace("__BINDING_NAME__", CastBindingCodec.BINDING_NAME)
-                    .replace("__ENABLE_AUDIO__", enableAudio ? "true" : "false");
+                    .replace("__ENABLE_AUDIO__", enableAudio ? "true" : "false")
+                    .replace("__ALLOW_FAKE_AUDIO__", fakeAudio ? "true" : "false");
         }
     }
 
@@ -211,6 +214,11 @@ final class BrowserCastSession implements AutoCloseable {
         if (Boolean.parseBoolean(System.getProperty("airplay.mse.headless", "false"))) {
             cmd.add("--headless=new");
             cmd.add("--disable-gpu");
+        }
+        // GitHub Windows runners need this for headless Chrome; harmless elsewhere in CI.
+        if (Boolean.parseBoolean(System.getProperty("airplay.mse.chrome.noSandbox", "false"))) {
+            cmd.add("--no-sandbox");
+            cmd.add("--disable-dev-shm-usage");
         }
         cmd.add("about:blank");
         ProcessBuilder pb = new ProcessBuilder(cmd);

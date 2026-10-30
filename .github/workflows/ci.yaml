@@ -76,8 +76,10 @@ jobs:
           if [ "${{ matrix.player }}" = "mse" ]; then
             # Player Chromium stays headless; cast smoke forces headed under xvfb and
             # auto-accepts getDisplayMedia (no picker) so MseSelfCastSmokeTest is real e2e.
+            # noSandbox: required for stable headless Chrome on Windows GHA runners.
             EXTRA+=("-Dairplay.mse.headless=true" "-Dairplay.mse.allow-file-hls=true"
-                    "-Dairplay.mse.cast.autoCapture=true")
+                    "-Dairplay.mse.cast.autoCapture=true"
+                    "-Dairplay.mse.chrome.noSandbox=true")
             if [ -n "${AIRPLAY_MSE_BROWSER:-}" ]; then
               EXTRA+=("-Dairplay.mse.browser=$AIRPLAY_MSE_BROWSER"
                       "-Dairplay.mse.cast.browser=$AIRPLAY_MSE_BROWSER")

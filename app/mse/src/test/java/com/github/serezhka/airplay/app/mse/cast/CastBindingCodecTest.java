@@ -52,5 +52,6 @@ class CastBindingCodecTest {
         org.junit.jupiter.api.Assertions.assertTrue(js.contains(CastBindingCodec.BINDING_NAME));
         org.junit.jupiter.api.Assertions.assertFalse(js.contains("__VIDEO_WS__"));
         org.junit.jupiter.api.Assertions.assertTrue(js.contains("var ENABLE_AUDIO = false"));
+        org.junit.jupiter.api.Assertions.assertTrue(js.contains("var ALLOW_FAKE_AUDIO = false"));
     }
 }
