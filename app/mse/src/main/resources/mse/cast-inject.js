@@ -11,7 +11,6 @@
   // CI autoCapture: display capture often has no audio track — use a tone generator.
   var ALLOW_FAKE_AUDIO = __ALLOW_FAKE_AUDIO__;
   var captureStream = null;
-  var fakeAudioCtx = null;
   var videoTrack = null;
   var audioTrack = null;
   var encoder = null;
@@ -27,6 +26,8 @@
   var audioConfigured = false;
   var audioReader = null;
   var encoderBusy = null;
+  var syntheticAudioTimer = null;
+  var synthSampleIndex = 0;
 
   function post(obj) {
     try {
@@ -230,28 +231,44 @@
     }
   }
 
-  async function ensureAudioTrack() {
-    if (audioTrack) return audioTrack;
-    if (!ALLOW_FAKE_AUDIO) return null;
-    try {
-      fakeAudioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 });
-      var osc = fakeAudioCtx.createOscillator();
-      osc.frequency.value = 440;
-      var dest = fakeAudioCtx.createMediaStreamDestination();
-      osc.connect(dest);
-      osc.start();
-      audioTrack = dest.stream.getAudioTracks()[0] || null;
-      if (audioTrack) emit('log', 'audio: synthetic tone (no display audio track)');
-      return audioTrack;
-    } catch (e) {
-      emit('error', 'synthetic audio: ' + e);
-      return null;
-    }
+  /** CI autoCapture: feed AudioEncoder with AudioData when display capture has no audio track. */
+  function pumpSyntheticAudio() {
+    if (!ALLOW_FAKE_AUDIO || !audioEncoder || syntheticAudioTimer) return;
+    var sampleRate = 44100;
+    var frames = 1024;
+    var channels = 2;
+    emit('log', 'audio: synthetic AudioData pump (no display audio track)');
+    syntheticAudioTimer = setInterval(function () {
+      if (!casting || !audioEncoder || audioEncoder.state !== 'configured') return;
+      try {
+        var buf = new Float32Array(frames * channels);
+        for (var i = 0; i < frames; i++) {
+          var s = 0.15 * Math.sin(2 * Math.PI * 440 * (synthSampleIndex + i) / sampleRate);
+          buf[i * 2] = s;
+          buf[i * 2 + 1] = s;
+        }
+        var ts = Math.floor(synthSampleIndex * 1e6 / sampleRate);
+        synthSampleIndex += frames;
+        var data = new AudioData({
+          format: 'f32',
+          sampleRate: sampleRate,
+          numberOfFrames: frames,
+          numberOfChannels: channels,
+          timestamp: ts,
+          data: buf
+        });
+        audioEncoder.encode(data);
+        data.close();
+      } catch (e) {
+        emit('error', 'synthetic audio: ' + e);
+      }
+    }, Math.max(10, Math.floor(1000 * frames / sampleRate)));
   }
 
   function stopCapture() {
     casting = false;
     if (captureTimer) { clearInterval(captureTimer); captureTimer = null; }
+    if (syntheticAudioTimer) { clearInterval(syntheticAudioTimer); syntheticAudioTimer = null; }
     if (audioReader) {
       try { audioReader.cancel(); } catch (e) {}
       audioReader = null;
@@ -262,10 +279,6 @@
     encoderBusy = null;
     if (videoTrack) { try { videoTrack.stop(); } catch (e) {} videoTrack = null; }
     if (audioTrack) { try { audioTrack.stop(); } catch (e) {} audioTrack = null; }
-    if (fakeAudioCtx) {
-      try { fakeAudioCtx.close(); } catch (e) {}
-      fakeAudioCtx = null;
-    }
     if (captureStream) {
       try { captureStream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {}
       captureStream = null;
@@ -299,9 +312,6 @@
       if (!videoTrack) throw new Error('no video track');
       if (ENABLE_AUDIO) {
         audioTrack = captureStream.getAudioTracks()[0] || null;
-        if (!audioTrack) {
-          await ensureAudioTrack();
-        }
       }
       videoTrack.addEventListener('ended', function () {
         stopCapture();
@@ -318,11 +328,15 @@
       var rawW = settings.width || videoEl.videoWidth || 1280;
       var rawH = settings.height || videoEl.videoHeight || 720;
       var size = await ensureEncoder(rawW, rawH);
-      if (ENABLE_AUDIO && audioTrack) {
+      if (ENABLE_AUDIO) {
         await ensureAudioEncoder();
-        pumpAudio();
-      } else if (ENABLE_AUDIO && !audioTrack) {
-        emit('log', 'audio: no track (enable display audio or CI autoCapture)');
+        if (audioTrack) {
+          pumpAudio();
+        } else if (ALLOW_FAKE_AUDIO) {
+          pumpSyntheticAudio();
+        } else {
+          emit('log', 'audio: no display audio track');
+        }
       }
       canvas = document.createElement('canvas');
       canvas.width = size.w;

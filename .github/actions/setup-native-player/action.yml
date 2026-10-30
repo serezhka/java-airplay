@@ -105,11 +105,24 @@ runs:
       if: runner.os == 'Windows' && inputs.player == 'ffmpeg'
       shell: pwsh
       run: |
-        # Floating "latest" zip — leave uncached (no pin).
+        # Floating "latest" zip — leave uncached (no pin). Retry transient CDN blips.
         $dest = "$env:RUNNER_TEMP\ffmpeg"
+        $zip = "$env:RUNNER_TEMP\ffmpeg.zip"
+        $uri = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip'
         New-Item -ItemType Directory -Force -Path $dest | Out-Null
-        Invoke-WebRequest -Uri 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip' -OutFile "$env:RUNNER_TEMP\ffmpeg.zip"
-        Expand-Archive "$env:RUNNER_TEMP\ffmpeg.zip" "$env:RUNNER_TEMP\ffmpeg-extract" -Force
+        $ok = $false
+        foreach ($i in 1..3) {
+          try {
+            Invoke-WebRequest -Uri $uri -OutFile $zip
+            $ok = $true
+            break
+          } catch {
+            Write-Warning "FFmpeg download attempt $i failed: $_"
+            Start-Sleep -Seconds (3 * $i)
+          }
+        }
+        if (-not $ok) { throw "Failed to download FFmpeg after retries" }
+        Expand-Archive $zip "$env:RUNNER_TEMP\ffmpeg-extract" -Force
         $inner = Get-ChildItem "$env:RUNNER_TEMP\ffmpeg-extract" | Select-Object -First 1
         Copy-Item -Recurse -Force "$($inner.FullName)\*" $dest
         Add-Content $env:GITHUB_PATH "$dest\bin"
@@ -133,9 +146,22 @@ runs:
         Add-Content $env:GITHUB_ENV "AIRPLAY_MSE_BROWSER=$chrome"
         Write-Host "MSE browser: $chrome"
         $ff = "$env:RUNNER_TEMP\ffmpeg"
+        $zip = "$env:RUNNER_TEMP\ffmpeg.zip"
+        $uri = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip'
         New-Item -ItemType Directory -Force -Path $ff | Out-Null
-        Invoke-WebRequest -Uri 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip' -OutFile "$env:RUNNER_TEMP\ffmpeg.zip"
-        Expand-Archive "$env:RUNNER_TEMP\ffmpeg.zip" "$env:RUNNER_TEMP\ffmpeg-extract" -Force
+        $ok = $false
+        foreach ($i in 1..3) {
+          try {
+            Invoke-WebRequest -Uri $uri -OutFile $zip
+            $ok = $true
+            break
+          } catch {
+            Write-Warning "FFmpeg download attempt $i failed: $_"
+            Start-Sleep -Seconds (3 * $i)
+          }
+        }
+        if (-not $ok) { throw "Failed to download FFmpeg after retries" }
+        Expand-Archive $zip "$env:RUNNER_TEMP\ffmpeg-extract" -Force
         $inner = Get-ChildItem "$env:RUNNER_TEMP\ffmpeg-extract" | Select-Object -First 1
         Copy-Item -Recurse -Force "$($inner.FullName)\*" $ff
         Add-Content $env:GITHUB_PATH "$ff\bin"
@@ -170,11 +196,24 @@ runs:
         Add-Content $env:GITHUB_PATH $bin
         Add-Content $env:GITHUB_ENV "GSTREAMER_1_0_ROOT_MSVC_X86_64=$root"
         Add-Content $env:GITHUB_ENV "GSTREAMER_BIN=$bin"
-        # ffmpeg for HLS fixture generation — floating latest, uncached
+        # ffmpeg for HLS fixture generation — floating latest, uncached (retry CDN blips)
         $ff = "$env:RUNNER_TEMP\ffmpeg"
+        $zip = "$env:RUNNER_TEMP\ffmpeg.zip"
+        $uri = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip'
         New-Item -ItemType Directory -Force -Path $ff | Out-Null
-        Invoke-WebRequest -Uri 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip' -OutFile "$env:RUNNER_TEMP\ffmpeg.zip"
-        Expand-Archive "$env:RUNNER_TEMP\ffmpeg.zip" "$env:RUNNER_TEMP\ffmpeg-extract" -Force
+        $ok = $false
+        foreach ($i in 1..3) {
+          try {
+            Invoke-WebRequest -Uri $uri -OutFile $zip
+            $ok = $true
+            break
+          } catch {
+            Write-Warning "FFmpeg download attempt $i failed: $_"
+            Start-Sleep -Seconds (3 * $i)
+          }
+        }
+        if (-not $ok) { throw "Failed to download FFmpeg after retries" }
+        Expand-Archive $zip "$env:RUNNER_TEMP\ffmpeg-extract" -Force
         $inner = Get-ChildItem "$env:RUNNER_TEMP\ffmpeg-extract" | Select-Object -First 1
         Copy-Item -Recurse -Force "$($inner.FullName)\*" $ff
         Add-Content $env:GITHUB_PATH "$ff\bin"
