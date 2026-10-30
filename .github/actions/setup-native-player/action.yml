@@ -1,10 +1,10 @@
 name: Setup native player
 
-description: Install ffmpeg or gstreamer for harness tests
+description: Install ffmpeg, gstreamer, or Chromium (mse) for harness tests
 
 inputs:
   player:
-    description: ffmpeg or gstreamer
+    description: ffmpeg, gstreamer, or mse
     required: true
 
 runs:
@@ -74,6 +74,30 @@ runs:
             pactl load-module module-null-sink sink_name=ci_null 2>/dev/null || true
             pactl set-default-sink ci_null 2>/dev/null || true
             ;;
+          mse)
+            # Chromium for ChromiumHost + ffmpeg for HLS fixtures; Playwright unit tests
+            # download their own browser. Prefer google-chrome-stable when present.
+            sudo apt-get install -y --no-install-recommends "${APT_OPTS[@]}" \
+              xvfb ffmpeg
+            if ! command -v google-chrome-stable >/dev/null 2>&1 \
+               && ! command -v chromium-browser >/dev/null 2>&1 \
+               && ! command -v chromium >/dev/null 2>&1; then
+              # Deb from Google — snap chromium is flaky on GHA.
+              curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
+                | sudo gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg
+              echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
+                | sudo tee /etc/apt/sources.list.d/google-chrome.list >/dev/null
+              sudo apt-get update "${APT_OPTS[@]}"
+              sudo apt-get install -y --no-install-recommends "${APT_OPTS[@]}" google-chrome-stable
+            fi
+            BROWSER="$(command -v google-chrome-stable || command -v chromium-browser || command -v chromium || true)"
+            if [ -z "$BROWSER" ]; then
+              echo "No Chromium/Chrome after mse setup" >&2
+              exit 1
+            fi
+            echo "AIRPLAY_MSE_BROWSER=$BROWSER" >> "$GITHUB_ENV"
+            echo "MSE browser: $BROWSER"
+            ;;
           *) echo "Unknown player: ${{ inputs.player }}"; exit 1 ;;
         esac
 
@@ -81,14 +105,66 @@ runs:
       if: runner.os == 'Windows' && inputs.player == 'ffmpeg'
       shell: pwsh
       run: |
-        # Floating "latest" zip — leave uncached (no pin).
+        # Floating "latest" zip — leave uncached (no pin). Retry transient CDN blips.
         $dest = "$env:RUNNER_TEMP\ffmpeg"
+        $zip = "$env:RUNNER_TEMP\ffmpeg.zip"
+        $uri = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip'
         New-Item -ItemType Directory -Force -Path $dest | Out-Null
-        Invoke-WebRequest -Uri 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip' -OutFile "$env:RUNNER_TEMP\ffmpeg.zip"
-        Expand-Archive "$env:RUNNER_TEMP\ffmpeg.zip" "$env:RUNNER_TEMP\ffmpeg-extract" -Force
+        $ok = $false
+        foreach ($i in 1..3) {
+          try {
+            Invoke-WebRequest -Uri $uri -OutFile $zip
+            $ok = $true
+            break
+          } catch {
+            Write-Warning "FFmpeg download attempt $i failed: $_"
+            Start-Sleep -Seconds (3 * $i)
+          }
+        }
+        if (-not $ok) { throw "Failed to download FFmpeg after retries" }
+        Expand-Archive $zip "$env:RUNNER_TEMP\ffmpeg-extract" -Force
         $inner = Get-ChildItem "$env:RUNNER_TEMP\ffmpeg-extract" | Select-Object -First 1
         Copy-Item -Recurse -Force "$($inner.FullName)\*" $dest
         Add-Content $env:GITHUB_PATH "$dest\bin"
+
+    # Same Chrome the product expects on Windows (stable channel), plus ffmpeg for HLS fixtures.
+    - name: Windows Chrome (MSE)
+      if: runner.os == 'Windows' && inputs.player == 'mse'
+      id: chrome
+      uses: browser-actions/setup-chrome@v2
+      with:
+        chrome-version: stable
+
+    - name: Windows MSE FFmpeg + browser env
+      if: runner.os == 'Windows' && inputs.player == 'mse'
+      shell: pwsh
+      run: |
+        $chrome = '${{ steps.chrome.outputs.chrome-path }}'
+        if (-not $chrome -or -not (Test-Path $chrome)) {
+          throw "Chrome missing after setup-chrome: '$chrome'"
+        }
+        Add-Content $env:GITHUB_ENV "AIRPLAY_MSE_BROWSER=$chrome"
+        Write-Host "MSE browser: $chrome"
+        $ff = "$env:RUNNER_TEMP\ffmpeg"
+        $zip = "$env:RUNNER_TEMP\ffmpeg.zip"
+        $uri = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip'
+        New-Item -ItemType Directory -Force -Path $ff | Out-Null
+        $ok = $false
+        foreach ($i in 1..3) {
+          try {
+            Invoke-WebRequest -Uri $uri -OutFile $zip
+            $ok = $true
+            break
+          } catch {
+            Write-Warning "FFmpeg download attempt $i failed: $_"
+            Start-Sleep -Seconds (3 * $i)
+          }
+        }
+        if (-not $ok) { throw "Failed to download FFmpeg after retries" }
+        Expand-Archive $zip "$env:RUNNER_TEMP\ffmpeg-extract" -Force
+        $inner = Get-ChildItem "$env:RUNNER_TEMP\ffmpeg-extract" | Select-Object -First 1
+        Copy-Item -Recurse -Force "$($inner.FullName)\*" $ff
+        Add-Content $env:GITHUB_PATH "$ff\bin"
 
     # MSI URL is already versioned; cache that one file. apt and FFmpeg "latest" stay uncached.
     - name: Cache Windows GStreamer MSI
@@ -120,11 +196,24 @@ runs:
         Add-Content $env:GITHUB_PATH $bin
         Add-Content $env:GITHUB_ENV "GSTREAMER_1_0_ROOT_MSVC_X86_64=$root"
         Add-Content $env:GITHUB_ENV "GSTREAMER_BIN=$bin"
-        # ffmpeg for HLS fixture generation — floating latest, uncached
+        # ffmpeg for HLS fixture generation — floating latest, uncached (retry CDN blips)
         $ff = "$env:RUNNER_TEMP\ffmpeg"
+        $zip = "$env:RUNNER_TEMP\ffmpeg.zip"
+        $uri = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip'
         New-Item -ItemType Directory -Force -Path $ff | Out-Null
-        Invoke-WebRequest -Uri 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip' -OutFile "$env:RUNNER_TEMP\ffmpeg.zip"
-        Expand-Archive "$env:RUNNER_TEMP\ffmpeg.zip" "$env:RUNNER_TEMP\ffmpeg-extract" -Force
+        $ok = $false
+        foreach ($i in 1..3) {
+          try {
+            Invoke-WebRequest -Uri $uri -OutFile $zip
+            $ok = $true
+            break
+          } catch {
+            Write-Warning "FFmpeg download attempt $i failed: $_"
+            Start-Sleep -Seconds (3 * $i)
+          }
+        }
+        if (-not $ok) { throw "Failed to download FFmpeg after retries" }
+        Expand-Archive $zip "$env:RUNNER_TEMP\ffmpeg-extract" -Force
         $inner = Get-ChildItem "$env:RUNNER_TEMP\ffmpeg-extract" | Select-Object -First 1
         Copy-Item -Recurse -Force "$($inner.FullName)\*" $ff
         Add-Content $env:GITHUB_PATH "$ff\bin"

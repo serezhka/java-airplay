@@ -1,0 +1,8 @@
+alac.js — Apple Lossless decoder (pure JavaScript)
+
+Vendored from @audio/decode-aac (https://github.com/audiojs/decode),
+itself a port of Apple's ALAC reference decoder.
+
+License: Apache License 2.0
+Copyright (c) 2011 Apple Inc. and contributors of the JS port.
+See https://github.com/macosforge/alac and the @audio/decode-aac package.
