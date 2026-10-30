@@ -328,16 +328,6 @@
       var rawW = settings.width || videoEl.videoWidth || 1280;
       var rawH = settings.height || videoEl.videoHeight || 720;
       var size = await ensureEncoder(rawW, rawH);
-      if (ENABLE_AUDIO) {
-        await ensureAudioEncoder();
-        if (audioTrack) {
-          pumpAudio();
-        } else if (ALLOW_FAKE_AUDIO) {
-          pumpSyntheticAudio();
-        } else {
-          emit('log', 'audio: no display audio track');
-        }
-      }
       canvas = document.createElement('canvas');
       canvas.width = size.w;
       canvas.height = size.h;
@@ -346,6 +336,21 @@
       casting = true;
       frameIndex = 0;
       emit('captureStarted', size.w + 'x' + size.h);
+
+      if (ENABLE_AUDIO) {
+        try {
+          await ensureAudioEncoder();
+          if (audioTrack) {
+            pumpAudio();
+          } else if (ALLOW_FAKE_AUDIO) {
+            pumpSyntheticAudio();
+          } else {
+            emit('log', 'audio: no display audio track');
+          }
+        } catch (ae) {
+          emit('error', 'audio setup: ' + ae);
+        }
+      }
 
       captureTimer = setInterval(function () {
         if (!casting || !encoder || encoder.state !== 'configured') return;

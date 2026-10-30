@@ -1,6 +1,6 @@
 package com.github.serezhka.airplay.app.mse;
 
-import com.github.serezhka.airplay.app.mse.cast.BrowserCastAudioSource;
+import com.github.serezhka.airplay.client.audio.AudioSource;
 import com.github.serezhka.airplay.client.audio.AudioSources;
 import com.github.serezhka.airplay.client.hap.HapAudioClient;
 import org.junit.jupiter.api.Tag;
@@ -14,29 +14,22 @@ import java.net.SocketTimeoutException;
 import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Tab ADTS → {@link HapAudioClient} SHK encrypt → local UDP (no TV). Covers the HAP audio send path.
+ * Canned ADTS → {@link HapAudioClient} SHK encrypt → local UDP (no TV / no Chromium).
+ * Browser ADTS path is covered by {@link BrowserCastAudioAdtsSmokeTest}.
  */
 @Tag("mse")
 class HapTabAudioUdpSmokeTest {
 
     @Test
-    @Timeout(120)
+    @Timeout(30)
     void encryptedRtpReachesLocalUdp() throws Exception {
-        MseCastTestSupport.assumeCastEnvironment();
-        MseCastTestSupport.prepareBrowserCastProperties();
-        System.setProperty("airplay.mse.cast.enableAudio", "true");
-
-        AtomicInteger adts = new AtomicInteger();
-        AudioSources.install(onFrame -> new BrowserCastAudioSource(frame -> {
-            if (frame != null && frame.length > 0) {
-                adts.incrementAndGet();
-            }
-            onFrame.accept(frame);
-        }));
+        AtomicInteger fed = new AtomicInteger();
+        AudioSources.install(onFrame -> new PulsingAdtsSource(onFrame, fed));
 
         byte[] shk = new byte[16];
         Arrays.fill(shk, (byte) 0x5a);
@@ -44,7 +37,7 @@ class HapTabAudioUdpSmokeTest {
         AtomicInteger udpPackets = new AtomicInteger();
         AtomicBoolean running = new AtomicBoolean(true);
         try (DatagramSocket sock = new DatagramSocket(new InetSocketAddress("127.0.0.1", 0))) {
-            sock.setSoTimeout(500);
+            sock.setSoTimeout(200);
             int port = sock.getLocalPort();
             Thread recv = new Thread(() -> {
                 byte[] buf = new byte[4096];
@@ -52,7 +45,6 @@ class HapTabAudioUdpSmokeTest {
                     try {
                         DatagramPacket packet = new DatagramPacket(buf, buf.length);
                         sock.receive(packet);
-                        // RTP header is 12 bytes; encrypted AAC payload follows.
                         if (packet.getLength() > 12) {
                             udpPackets.incrementAndGet();
                         }
@@ -66,18 +58,52 @@ class HapTabAudioUdpSmokeTest {
             recv.start();
 
             try (HapAudioClient client = new HapAudioClient("127.0.0.1", port, shk)) {
-                long deadline = System.currentTimeMillis() + 60_000;
+                long deadline = System.currentTimeMillis() + 10_000;
                 while (System.currentTimeMillis() < deadline
-                        && (adts.get() < 5 || udpPackets.get() < 5)) {
-                    Thread.sleep(250);
+                        && (fed.get() < 5 || udpPackets.get() < 5)) {
+                    Thread.sleep(50);
                 }
-                assertTrue(adts.get() >= 5, "expected ADTS from tab, got " + adts.get());
+                assertTrue(fed.get() >= 5, "expected ADTS fed into HapAudioClient, got " + fed.get());
                 assertTrue(udpPackets.get() >= 5,
                         "expected HAP RTP UDP packets, got " + udpPackets.get());
             } finally {
                 running.set(false);
                 recv.join(2_000);
             }
+        }
+    }
+
+    /** Minimal ADTS frame (AAC-LC silence-ish payload) paced for HAP send. */
+    private static final class PulsingAdtsSource implements AudioSource {
+        private final AtomicBoolean run = new AtomicBoolean(true);
+        private final Thread thread;
+
+        PulsingAdtsSource(Consumer<byte[]> onFrame, AtomicInteger fed) {
+            // 7-byte ADTS header + 16 bytes payload (padded by HapAudioClient).
+            byte[] frame = new byte[]{
+                    (byte) 0xff, (byte) 0xf1, 0x50, 0x40, 0x01, (byte) 0xbf, (byte) 0xfc,
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+            };
+            thread = new Thread(() -> {
+                while (run.get()) {
+                    onFrame.accept(frame.clone());
+                    fed.incrementAndGet();
+                    try {
+                        Thread.sleep(20);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+            }, "pulsing-adts");
+            thread.setDaemon(true);
+            thread.start();
+        }
+
+        @Override
+        public void close() {
+            run.set(false);
+            thread.interrupt();
         }
     }
 }

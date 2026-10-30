@@ -24,13 +24,13 @@ class BrowserCastAudioAdtsSmokeTest {
         System.setProperty("airplay.mse.cast.enableAudio", "true");
 
         AtomicInteger adts = new AtomicInteger();
-        // Video acquire shares the same Chromium session; audio sink must see ADTS.
-        try (BrowserCastCaptureSource video = new BrowserCastCaptureSource(au -> {});
-             BrowserCastAudioSource audio = new BrowserCastAudioSource(frame -> {
-                 if (frame != null && frame.length > 0) {
-                     adts.incrementAndGet();
-                 }
-             })) {
+        // Audio sink first so capture starts with a listener already registered.
+        try (BrowserCastAudioSource audio = new BrowserCastAudioSource(frame -> {
+            if (frame != null && frame.length > 0) {
+                adts.incrementAndGet();
+            }
+        });
+             BrowserCastCaptureSource video = new BrowserCastCaptureSource(au -> { })) {
             long deadline = System.currentTimeMillis() + 45_000;
             while (System.currentTimeMillis() < deadline && adts.get() < 5) {
                 Thread.sleep(250);

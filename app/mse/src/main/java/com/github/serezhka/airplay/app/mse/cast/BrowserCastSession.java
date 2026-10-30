@@ -35,14 +35,18 @@ final class BrowserCastSession implements AutoCloseable {
     private final AtomicBoolean closed = new AtomicBoolean();
     private final CountDownLatch firstVideo = new CountDownLatch(1);
     private final AtomicBoolean audioEnabled = new AtomicBoolean();
+    private final AtomicBoolean captureStarted = new AtomicBoolean();
+    private final String homeUrl;
 
     private BrowserCastSession(
             Process browser,
             CastCdpSession cdp,
-            AnnexBAccessUnitSplitter splitter) {
+            AnnexBAccessUnitSplitter splitter,
+            String homeUrl) {
         this.browser = browser;
         this.cdp = cdp;
         this.annexBSplitter = splitter;
+        this.homeUrl = homeUrl;
     }
 
     static BrowserCastSession acquire() throws Exception {
@@ -60,6 +64,7 @@ final class BrowserCastSession implements AutoCloseable {
 
     void addVideoSink(Consumer<byte[]> sink) {
         videoSinks.add(sink);
+        ensureCaptureStarted();
     }
 
     void removeVideoSink(Consumer<byte[]> sink) {
@@ -68,12 +73,27 @@ final class BrowserCastSession implements AutoCloseable {
 
     void addAudioSink(Consumer<byte[]> sink) {
         audioSinks.add(sink);
+        ensureCaptureStarted();
         if (audioEnabled.compareAndSet(false, true)) {
             try {
                 cdp.setCaptureAudio(true);
             } catch (Exception e) {
                 log.warn("Could not enable tab audio capture: {}", e.toString());
             }
+        }
+    }
+
+    /** Navigate + getDisplayMedia only after at least one sink is registered. */
+    private void ensureCaptureStarted() {
+        if (!captureStarted.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            cdp.navigateAndStartCapture(homeUrl);
+            log.info("MSE browser cast capture started home={}", homeUrl);
+        } catch (Exception e) {
+            captureStarted.set(false);
+            throw new IllegalStateException("Failed to start browser cast capture", e);
         }
     }
 
@@ -105,18 +125,18 @@ final class BrowserCastSession implements AutoCloseable {
         BrowserCastSession[] ref = new BrowserCastSession[1];
         AnnexBAccessUnitSplitter splitter =
                 new AnnexBAccessUnitSplitter(au -> ref[0].dispatchVideo(au));
-        BrowserCastSession hub = new BrowserCastSession(proc, session, splitter);
-        ref[0] = hub;
-        session.setBindingListener(hub::onBindingPayload);
         // getDisplayMedia(audio) must be true at first capture — late __airplayCastEnableAudio
         // cannot add a track without re-capture (set by MseCaptureConfig when audio.src=browser).
         boolean enableAudio = Boolean.parseBoolean(
                 System.getProperty("airplay.mse.cast.enableAudio", "false"));
+        String home = System.getProperty("airplay.mse.cast.home", "https://www.youtube.com");
+        BrowserCastSession hub = new BrowserCastSession(proc, session, splitter, home);
+        ref[0] = hub;
+        session.setBindingListener(hub::onBindingPayload);
         String inject = loadInjectScript(enableAudio);
         session.installCastPipeline(inject);
-        String home = System.getProperty("airplay.mse.cast.home", "https://www.youtube.com");
-        session.navigateAndStartCapture(home);
-        log.info("MSE browser cast (WebCodecs + CDP binding) home={} audio={}", home, enableAudio);
+        // Capture starts on first addVideoSink/addAudioSink so listeners are already registered.
+        log.info("MSE browser cast (WebCodecs + CDP binding) ready home={} audio={}", home, enableAudio);
         return hub;
     }
 
