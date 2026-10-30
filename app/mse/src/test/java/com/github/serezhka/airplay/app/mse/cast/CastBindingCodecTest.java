@@ -54,4 +54,17 @@ class CastBindingCodecTest {
         org.junit.jupiter.api.Assertions.assertTrue(js.contains("var ENABLE_AUDIO = false"));
         org.junit.jupiter.api.Assertions.assertTrue(js.contains("var ALLOW_FAKE_AUDIO = false"));
     }
+
+    @Test
+    void injectScriptEnablesAudioAndFakeFlagsForCi() throws Exception {
+        System.setProperty("airplay.mse.cast.autoCapture", "true");
+        try {
+            String js = BrowserCastSession.loadInjectScriptForTest(true);
+            org.junit.jupiter.api.Assertions.assertTrue(js.contains("var ENABLE_AUDIO = true"));
+            org.junit.jupiter.api.Assertions.assertTrue(js.contains("var ALLOW_FAKE_AUDIO = true"));
+            org.junit.jupiter.api.Assertions.assertTrue(js.contains("pumpSyntheticAudio"));
+        } finally {
+            System.clearProperty("airplay.mse.cast.autoCapture");
+        }
+    }
 }

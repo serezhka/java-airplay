@@ -205,6 +205,10 @@ final class BrowserCastSession implements AutoCloseable {
         return loadInjectScript(false);
     }
 
+    static String loadInjectScriptForTest(boolean enableAudio) throws IOException {
+        return loadInjectScript(enableAudio);
+    }
+
     private static Process startBrowser(Path userData) throws IOException {
         String bin = resolveBrowser();
         if (bin == null) {

@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Canned ADTS → {@link HapAudioClient} SHK encrypt → local UDP (no TV / no Chromium).
- * Browser ADTS path is covered by {@link BrowserCastAudioAdtsSmokeTest}.
+ * Inject audio flags / ADTS parse: {@code CastBindingCodecTest}. Live tab audio: lab.
  */
 @Tag("mse")
 class HapTabAudioUdpSmokeTest {
