@@ -1,5 +1,6 @@
 package com.github.serezhka.airplay.app.mse.cast;
 
+import com.github.serezhka.airplay.app.mse.MseBrowsers;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
@@ -201,10 +202,11 @@ final class BrowserCastSession implements AutoCloseable {
         cmd.add("--window-size=1280,800");
         cmd.add("--enable-features=UserMediaScreenCapturingWithSelfBrowserSurface");
         if (Boolean.parseBoolean(System.getProperty("airplay.mse.cast.autoCapture", "false"))) {
-            // CI / smoke: accept getDisplayMedia without a picker (synthetic track).
+            // CI / smoke: accept getDisplayMedia without a picker (synthetic A/V tracks).
             // Do not pair with --auto-accept-camera-and-microphone-capture — that combo
             // aborts Chrome before DevToolsActivePort appears on current builds.
             cmd.add("--use-fake-ui-for-media-stream");
+            cmd.add("--use-fake-device-for-media-stream");
         }
         if (Boolean.parseBoolean(System.getProperty("airplay.mse.headless", "false"))) {
             cmd.add("--headless=new");
@@ -220,44 +222,7 @@ final class BrowserCastSession implements AutoCloseable {
     }
 
     private static String resolveBrowser() {
-        for (String prop : new String[]{"airplay.mse.cast.browser", "airplay.mse.browser"}) {
-            String override = System.getProperty(prop);
-            if (override != null && !override.isBlank()) {
-                return override;
-            }
-        }
-        String os = System.getProperty("os.name", "").toLowerCase();
-        if (os.contains("mac")) {
-            for (String candidate : new String[]{
-                    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-                    "/Applications/Chromium.app/Contents/MacOS/Chromium",
-                    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
-            }) {
-                if (Files.isExecutable(Path.of(candidate))) {
-                    return candidate;
-                }
-            }
-        }
-        for (String candidate : new String[]{
-                "google-chrome-stable", "google-chrome", "chrome",
-                "chromium", "chromium-browser", "msedge"
-        }) {
-            if (which(candidate)) {
-                return candidate;
-            }
-        }
-        return null;
-    }
-
-    private static boolean which(String binary) {
-        try {
-            Process p = new ProcessBuilder("which", binary).redirectErrorStream(true).start();
-            boolean ok = p.waitFor(2, TimeUnit.SECONDS) && p.exitValue() == 0;
-            p.destroyForcibly();
-            return ok;
-        } catch (Exception e) {
-            return false;
-        }
+        return MseBrowsers.resolveForCast();
     }
 
     @Override

@@ -114,6 +114,32 @@ runs:
         Copy-Item -Recurse -Force "$($inner.FullName)\*" $dest
         Add-Content $env:GITHUB_PATH "$dest\bin"
 
+    # Same Chrome the product expects on Windows (stable channel), plus ffmpeg for HLS fixtures.
+    - name: Windows Chrome (MSE)
+      if: runner.os == 'Windows' && inputs.player == 'mse'
+      id: chrome
+      uses: browser-actions/setup-chrome@v2
+      with:
+        chrome-version: stable
+
+    - name: Windows MSE FFmpeg + browser env
+      if: runner.os == 'Windows' && inputs.player == 'mse'
+      shell: pwsh
+      run: |
+        $chrome = '${{ steps.chrome.outputs.chrome-path }}'
+        if (-not $chrome -or -not (Test-Path $chrome)) {
+          throw "Chrome missing after setup-chrome: '$chrome'"
+        }
+        Add-Content $env:GITHUB_ENV "AIRPLAY_MSE_BROWSER=$chrome"
+        Write-Host "MSE browser: $chrome"
+        $ff = "$env:RUNNER_TEMP\ffmpeg"
+        New-Item -ItemType Directory -Force -Path $ff | Out-Null
+        Invoke-WebRequest -Uri 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip' -OutFile "$env:RUNNER_TEMP\ffmpeg.zip"
+        Expand-Archive "$env:RUNNER_TEMP\ffmpeg.zip" "$env:RUNNER_TEMP\ffmpeg-extract" -Force
+        $inner = Get-ChildItem "$env:RUNNER_TEMP\ffmpeg-extract" | Select-Object -First 1
+        Copy-Item -Recurse -Force "$($inner.FullName)\*" $ff
+        Add-Content $env:GITHUB_PATH "$ff\bin"
+
     # MSI URL is already versioned; cache that one file. apt and FFmpeg "latest" stay uncached.
     - name: Cache Windows GStreamer MSI
       if: runner.os == 'Windows' && inputs.player == 'gstreamer'

@@ -35,7 +35,7 @@ jobs:
 
   # OS × player: production Playback path (mirror, A/V, reconnect, HLS round-trip).
   # Healthy runs finish in ~2–4 min; long waits were azure apt Ign storms on GST Linux.
-  # mse = Chromium + hls.js / jmuxer (Linux only — system Chrome install on Windows is out of scope).
+  # mse = system Chrome/Chromium + hls.js / jmuxer (Linux apt + Windows setup-chrome).
   playback:
     needs: unit
     timeout-minutes: 20
@@ -44,9 +44,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
         player: [ffmpeg, gstreamer, mse]
-        exclude:
-          - os: windows-latest
-            player: mse
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7

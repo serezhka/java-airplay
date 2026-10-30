@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * Cast capture only (no mirror/TV): CDP binding + in-tab WebCodecs must emit Annex-B.
- * Runs under CI xvfb with {@code -Dairplay.mse.cast.autoCapture=true}.
+ * CI: Linux {@code xvfb-run} + {@code -Dairplay.mse.cast.autoCapture=true}; Windows headed/headless Chrome.
  */
 @Tag("mse")
 class BrowserCastAnnexBSmokeTest {
@@ -20,14 +20,9 @@ class BrowserCastAnnexBSmokeTest {
     @Test
     @Timeout(90)
     void webCodecsBindingYieldsAnnexB() throws Exception {
-        assumeTrue(System.getenv("DISPLAY") != null && !System.getenv("DISPLAY").isBlank(),
-                "DISPLAY required (xvfb-run in CI)");
+        MseCastTestSupport.assumeCastEnvironment();
         assumeTrue(BrowserCastCaptureSource.class.getResource("/mse/cast-inject.js") != null);
-
-        System.setProperty("airplay.mse.headless", "false");
-        System.setProperty("airplay.mse.cast.autoCapture", "true");
-        // getDisplayMedia requires a secure context (https / localhost) — not data:.
-        System.setProperty("airplay.mse.cast.home", "https://example.com");
+        MseCastTestSupport.prepareBrowserCastProperties();
 
         AtomicInteger aus = new AtomicInteger();
         try (BrowserCastCaptureSource src = new BrowserCastCaptureSource(au -> {

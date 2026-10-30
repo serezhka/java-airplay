@@ -170,43 +170,7 @@ final class ChromiumHost implements AutoCloseable {
     }
 
     private static String resolveBrowser() {
-        String override = System.getProperty("airplay.mse.browser");
-        if (override != null && !override.isBlank()) {
-            return override;
-        }
-        String os = System.getProperty("os.name", "").toLowerCase();
-        if (os.contains("mac")) {
-            for (String candidate : new String[]{
-                    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-                    "/Applications/Chromium.app/Contents/MacOS/Chromium",
-                    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
-            }) {
-                if (Files.isExecutable(Path.of(candidate))) {
-                    return candidate;
-                }
-            }
-        }
-        for (String candidate : new String[]{
-                "chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "chrome", "msedge"
-        }) {
-            if (which(candidate)) {
-                return candidate;
-            }
-        }
-        return null;
-    }
-
-    private static boolean which(String binary) {
-        try {
-            Process p = new ProcessBuilder("which", binary)
-                    .redirectErrorStream(true)
-                    .start();
-            boolean ok = p.waitFor(2, TimeUnit.SECONDS) && p.exitValue() == 0;
-            p.destroyForcibly();
-            return ok;
-        } catch (Exception e) {
-            return false;
-        }
+        return MseBrowsers.resolveForPlayback();
     }
 
     private void destroyQuietly() {
