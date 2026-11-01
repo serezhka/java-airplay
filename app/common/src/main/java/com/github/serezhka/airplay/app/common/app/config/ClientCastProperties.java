@@ -5,37 +5,28 @@ import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.util.Locale;
-import java.util.Set;
 
 /**
  * Tray / CLI cast sender sources ({@code client.video.src}, {@code client.audio.src}).
+ * Allowed values depend on the player jar ({@link CastSourcePolicy}).
  */
 @Data
 @ConfigurationProperties(prefix = "client")
 public class ClientCastProperties {
 
-    private static final Set<String> VIDEO_SRC = Set.of("videotest", "screencapture", "browser", "none");
-    private static final Set<String> AUDIO_SRC = Set.of("audiotest", "browser", "none");
-
+    private final CastSourcePolicy castSourcePolicy;
     private final Video video = new Video();
     private final Audio audio = new Audio();
 
+    public ClientCastProperties(CastSourcePolicy castSourcePolicy) {
+        this.castSourcePolicy = castSourcePolicy;
+    }
+
     @PostConstruct
     void validate() {
-        String v = normalize(video.getSrc());
-        String a = normalize(audio.getSrc());
-        if (!VIDEO_SRC.contains(v)) {
-            throw new IllegalStateException(
-                    "Invalid client.video.src='" + video.getSrc()
-                            + "'; expected videotest|screencapture|browser|none");
-        }
-        if (!AUDIO_SRC.contains(a)) {
-            throw new IllegalStateException(
-                    "Invalid client.audio.src='" + audio.getSrc()
-                            + "'; expected audiotest|browser|none");
-        }
-        video.setSrc(v);
-        audio.setSrc(a);
+        castSourcePolicy.validate(video.getSrc(), audio.getSrc());
+        video.setSrc(normalize(video.getSrc()));
+        audio.setSrc(normalize(audio.getSrc()));
     }
 
     public boolean videoEnabled() {
@@ -52,13 +43,13 @@ public class ClientCastProperties {
 
     @Data
     public static class Video {
-        /** {@code videotest} | {@code screencapture} | {@code browser} | {@code none} */
+        /** {@code videotest} | {@code screencapture} | {@code none} (MSE jar: {@code browser}) */
         private String src = "videotest";
     }
 
     @Data
     public static class Audio {
-        /** {@code audiotest} | {@code browser} (MSE tab capture) | {@code none} */
+        /** {@code audiotest} | {@code none} (MSE jar: {@code browser} tab capture) */
         private String src = "audiotest";
     }
 }

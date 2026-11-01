@@ -1,5 +1,6 @@
 package com.github.serezhka.airplay.app.mse.app;
 
+import com.github.serezhka.airplay.app.common.app.config.CastSourcePolicy;
 import com.github.serezhka.airplay.app.mse.cast.BrowserCastAudioSource;
 import com.github.serezhka.airplay.app.mse.cast.BrowserCastCaptureSource;
 import com.github.serezhka.airplay.client.audio.AudioSourceFactory;
@@ -9,9 +10,16 @@ import com.github.serezhka.airplay.client.capture.CaptureSources;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 
 @Configuration
 public class MseCaptureConfig {
+
+    @Bean
+    @Primary
+    CastSourcePolicy mseCastSourcePolicy() {
+        return CastSourcePolicy.MSE_PLAYER;
+    }
 
     @Bean
     @ConditionalOnProperty(name = "client.video.src", havingValue = "browser")

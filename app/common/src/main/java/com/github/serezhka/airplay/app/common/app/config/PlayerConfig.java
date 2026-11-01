@@ -7,6 +7,7 @@ import com.github.serezhka.airplay.server.AirPlayConfig;
 import com.github.serezhka.airplay.server.AirPlayServer;
 import com.github.serezhka.airplay.server.Playback;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -18,6 +19,12 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 @EnableConfigurationProperties(ClientCastProperties.class)
 public class PlayerConfig {
+
+    @Bean
+    @ConditionalOnMissingBean(CastSourcePolicy.class)
+    CastSourcePolicy castSourcePolicy() {
+        return CastSourcePolicy.NATIVE_PLAYER;
+    }
 
     @Bean
     @ConfigurationProperties(prefix = "airplay")
