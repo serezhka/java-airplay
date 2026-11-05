@@ -10,20 +10,24 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 @Slf4j
 @Configuration
-@EnableConfigurationProperties(ClientCastProperties.class)
 public class PlayerConfig {
 
     @Bean
     @ConditionalOnMissingBean(CastSourcePolicy.class)
     CastSourcePolicy castSourcePolicy() {
         return CastSourcePolicy.NATIVE_PLAYER;
+    }
+
+    @Bean
+    @ConfigurationProperties(prefix = "client")
+    ClientCastProperties clientCastProperties(CastSourcePolicy castSourcePolicy) {
+        return new ClientCastProperties(castSourcePolicy);
     }
 
     @Bean

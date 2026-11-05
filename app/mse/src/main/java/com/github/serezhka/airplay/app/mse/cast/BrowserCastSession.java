@@ -62,6 +62,16 @@ final class BrowserCastSession implements AutoCloseable {
         }
     }
 
+    /** Integration tests only — drop a leaked singleton between cast smokes. */
+    public static void resetSharedForTests() {
+        synchronized (START_LOCK) {
+            if (shared != null) {
+                shared.close();
+                shared = null;
+            }
+        }
+    }
+
     void addVideoSink(Consumer<byte[]> sink) {
         videoSinks.add(sink);
         ensureCaptureStarted();
@@ -235,7 +245,9 @@ final class BrowserCastSession implements AutoCloseable {
             cmd.add("--use-fake-ui-for-media-stream");
             cmd.add("--use-fake-device-for-media-stream");
         }
-        if (Boolean.parseBoolean(System.getProperty("airplay.mse.headless", "false"))) {
+        if (Boolean.parseBoolean(System.getProperty(
+                "airplay.mse.cast.headless",
+                System.getProperty("airplay.mse.headless", "false")))) {
             cmd.add("--headless=new");
             cmd.add("--disable-gpu");
         }

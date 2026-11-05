@@ -26,7 +26,12 @@ class MseSelfCastSmokeTest {
     @Timeout(120)
     void browserCastReachesLocalMseMirror() throws Exception {
         MseCastTestSupport.assumeCastEnvironment();
+        MseCastTestSupport.resetSharedCastSession();
         MseCastTestSupport.prepareBrowserCastProperties();
+        if (System.getProperty("os.name", "").toLowerCase().contains("win")) {
+            // Self-cast runs receiver + cast Chromium; headed player + headless cast on Windows GHA.
+            System.setProperty("airplay.mse.headless", "false");
+        }
 
         AtomicInteger receivedAus = new AtomicInteger();
         CaptureSources.install(onAnnexB -> new BrowserCastCaptureSource(au -> {

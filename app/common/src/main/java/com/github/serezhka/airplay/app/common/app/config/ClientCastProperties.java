@@ -2,7 +2,6 @@ package com.github.serezhka.airplay.app.common.app.config;
 
 import jakarta.annotation.PostConstruct;
 import lombok.Data;
-import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.util.Locale;
 
@@ -11,7 +10,6 @@ import java.util.Locale;
  * Allowed values depend on the player jar ({@link CastSourcePolicy}).
  */
 @Data
-@ConfigurationProperties(prefix = "client")
 public class ClientCastProperties {
 
     private final CastSourcePolicy castSourcePolicy;

@@ -25,16 +25,22 @@ final class MseCastTestSupport {
     }
 
     /**
-     * Headed under Xvfb; headless+fake-UI on Windows CI (no DISPLAY).
-     * Always secure-context home + autoCapture for getDisplayMedia.
+     * Cast Chromium flags only ({@code airplay.mse.cast.headless}); playback uses
+     * {@code airplay.mse.headless} from CI or the host session.
      */
     static void prepareBrowserCastProperties() {
         String os = System.getProperty("os.name", "").toLowerCase();
         boolean windows = os.contains("win");
         String display = System.getenv("DISPLAY");
         boolean hasDisplay = display != null && !display.isBlank();
-        System.setProperty("airplay.mse.headless", windows && !hasDisplay ? "true" : "false");
+        if (windows && !hasDisplay) {
+            System.setProperty("airplay.mse.cast.headless", "true");
+        }
         System.setProperty("airplay.mse.cast.autoCapture", "true");
         System.setProperty("airplay.mse.cast.home", "https://example.com");
+    }
+
+    static void resetSharedCastSession() {
+        BrowserCastSession.resetSharedForTests();
     }
 }

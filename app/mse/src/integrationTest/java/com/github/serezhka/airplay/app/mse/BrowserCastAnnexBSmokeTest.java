@@ -22,6 +22,7 @@ class BrowserCastAnnexBSmokeTest {
     void webCodecsBindingYieldsAnnexB() throws Exception {
         MseCastTestSupport.assumeCastEnvironment();
         assumeTrue(BrowserCastCaptureSource.class.getResource("/mse/cast-inject.js") != null);
+        MseCastTestSupport.resetSharedCastSession();
         MseCastTestSupport.prepareBrowserCastProperties();
 
         AtomicInteger aus = new AtomicInteger();
