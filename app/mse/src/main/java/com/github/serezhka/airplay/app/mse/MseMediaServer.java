@@ -9,11 +9,13 @@ import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.SimpleChannelInboundHandler;
+import io.netty.channel.epoll.Epoll;
+import io.netty.channel.epoll.EpollServerSocketChannel;
 import io.netty.channel.group.ChannelGroup;
 import io.netty.channel.group.DefaultChannelGroup;
-import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
+import com.github.serezhka.airplay.client.netty.NettyEventLoops;
 import io.netty.handler.codec.http.DefaultFullHttpResponse;
 import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.HttpHeaderNames;
@@ -72,8 +74,8 @@ final class MseMediaServer implements AutoCloseable {
     /** Pre-WS mirror NALs (SPS often arrives ~300ms before Chromium connects after HLS→mirror). */
     private static final int MAX_PENDING_NAL_BYTES = 2 * 1024 * 1024;
 
-    private final EventLoopGroup boss = new NioEventLoopGroup(1);
-    private final EventLoopGroup worker = new NioEventLoopGroup(2);
+    private final EventLoopGroup boss = NettyEventLoops.create();
+    private final EventLoopGroup worker = NettyEventLoops.create();
     private final ChannelGroup mirrorClients = new DefaultChannelGroup(GlobalEventExecutor.INSTANCE);
     private final ChannelGroup audioClients = new DefaultChannelGroup(GlobalEventExecutor.INSTANCE);
     private final ChannelGroup controlClients = new DefaultChannelGroup(GlobalEventExecutor.INSTANCE);
@@ -117,7 +119,7 @@ final class MseMediaServer implements AutoCloseable {
         loadAssets(assetDir);
         Channel channel = new ServerBootstrap()
                 .group(boss, worker)
-                .channel(NioServerSocketChannel.class)
+                .channel(Epoll.isAvailable() ? EpollServerSocketChannel.class : NioServerSocketChannel.class)
                 .childHandler(new ChannelInitializer<SocketChannel>() {
                     @Override
                     protected void initChannel(SocketChannel ch) {
