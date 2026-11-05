@@ -35,4 +35,9 @@ public final class BrowserCastCaptureSource implements CaptureSource {
         session.removeVideoSink(onAnnexB);
         session.release();
     }
+
+    /** Integration tests: drop a leaked singleton between cast smokes. */
+    public static void resetSharedSessionForTests() {
+        BrowserCastSession.resetSharedForTests();
+    }
 }

@@ -1,5 +1,7 @@
 package com.github.serezhka.airplay.app.mse;
 
+import com.github.serezhka.airplay.app.mse.cast.BrowserCastCaptureSource;
+
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /** Shared assumptions / properties for browser-cast integration smokes (Linux xvfb + Windows CI). */
@@ -41,6 +43,6 @@ final class MseCastTestSupport {
     }
 
     static void resetSharedCastSession() {
-        BrowserCastSession.resetSharedForTests();
+        BrowserCastCaptureSource.resetSharedSessionForTests();
     }
 }
