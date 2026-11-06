@@ -25,7 +25,7 @@
 - AirPlay audio and screen mirroring (FairPlay decrypt)
 - HLS video playback
 - Volume control
-- Two native playback backends: GStreamer and FFmpeg (`ffplay`)
+- Three playback backends: GStreamer, FFmpeg (`ffplay`), and browser MSE (Chromium)
 - Optional session dump (protocol + decrypted media) for debugging
 - System tray with cast picker (discover LAN receivers and send a stream)
 
@@ -35,6 +35,8 @@
   to another AirPlay receiver from the tray menu — useful for end-to-end send-path
   checks without a camera or screen capture. AAC audiotest is sent on the legacy
   FairPlay path; HAP/DataStream sessions are video-only today
+- **MSE jar only:** cast a navigable Chromium tab (`client.video.src=browser`) and
+  optional tab audio to HAP receivers (`client.audio.src=browser`)
 
 ## Quick start
 
@@ -47,7 +49,8 @@ cd java-airplay
 ```
 
 FFmpeg backend: `./gradlew :app:ffmpeg:bootRun`.  
-`./gradlew bootJar` builds both fat jars.
+MSE backend: `./gradlew :app:mse:bootRun` (needs Google Chrome, Chromium, or Edge on `PATH`).  
+`./gradlew :app:gstreamer:bootJar :app:ffmpeg:bootJar :app:mse:bootJar` builds all fat jars.
 
 ### Pre-built jar
 
@@ -56,6 +59,7 @@ Download the [latest release](https://github.com/serezhka/java-airplay/releases/
 ```shell
 java -jar java-airplay-gstreamer-{version}.jar
 java -jar java-airplay-ffmpeg-{version}.jar
+java -jar java-airplay-mse-{version}.jar
 ```
 
 On the phone, tablet, or Mac, open **Screen Mirroring** (or AirPlay from a video app)
@@ -63,7 +67,7 @@ and pick the advertised name (default: `JavaAirPlay`).
 
 ## Configuration
 
-Each fat jar ships its own `application.properties` (`app/gstreamer`, `app/ffmpeg`).
+Each fat jar ships its own `application.properties` (`app/gstreamer`, `app/ffmpeg`, `app/mse`).
 Override by placing `application.properties` in the working directory:
 
 ```properties
@@ -75,7 +79,8 @@ airplay.fps=60
 airplay.hls-enabled=true
 airplay.mdns-loopback=false
 airplay.tray-enabled=true
-# Cast sender: videotest|screencapture|none  /  audiotest|none
+# Cast sender (gst/ffmpeg): videotest|screencapture|none  /  audiotest|none
+# MSE jar: browser|none for video and audio (see app/mse/application.properties)
 client.video.src=videotest
 client.audio.src=audiotest
 # Dump (optional receive-side sidecar)
@@ -91,7 +96,7 @@ dump.videoFps=60
 
 ## Playback backends
 
-GStreamer and FFmpeg are separate apps. Install the native stack that matches the jar
+GStreamer, FFmpeg, and MSE are separate apps. Install the runtime that matches the jar
 or `bootRun` task you start.
 
 ### GStreamer
@@ -110,6 +115,15 @@ trusted; for HLS on Windows use the FFmpeg backend, turn SAC off or disable hls 
 Uses `ffplay` on `PATH`.
 
 Install: [FFmpeg download](https://ffmpeg.org/download.html)
+
+### MSE (Chromium)
+
+Uses a bundled localhost page (hls.js, jmuxer, WebCodecs) inside a system Chromium
+class browser — no GStreamer or FFmpeg install required for **receive** playback.
+Mirror AAC-ELD/LC and ALAC are decoded in the page (WASM helpers ship in the jar).
+
+Install a recent **Google Chrome**, **Chromium**, or **Microsoft Edge**, or set
+`-Dairplay.mse.browser=` to the binary path.
 
 ## Session dump
 
