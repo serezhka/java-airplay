@@ -28,6 +28,10 @@
   var encoderBusy = null;
   var syntheticAudioTimer = null;
   var synthSampleIndex = 0;
+  /** Locked encode dimensions for the session — avoids tearing down VideoEncoder on every UI resize twitch. */
+  var lockedEncodeSize = null;
+  var resizeDebounceTimer = null;
+  var lastResizeCheckSize = null;
 
   function post(obj) {
     try {
@@ -145,7 +149,8 @@
     if (typeof VideoEncoder === 'undefined') throw new Error('VideoEncoder unsupported');
     encodeSize = fitSize(width, height, 960, 540);
     var codecs = ['avc1.42E01F', 'avc1.4D401F', 'avc1.64001F', 'avc1.640028', 'avc1.42E01E'];
-    var hwModes = ['prefer-software', 'no-preference', 'prefer-hardware'];
+    // Lab / desktop: try hardware first (lower CPU, fewer dropouts); CI headless falls back to software.
+    var hwModes = ['no-preference', 'prefer-hardware', 'prefer-software'];
     var lastErr = null;
     for (var hi = 0; hi < hwModes.length; hi++) {
       for (var ci = 0; ci < codecs.length; ci++) {
@@ -267,6 +272,9 @@
 
   function stopCapture() {
     casting = false;
+    if (resizeDebounceTimer) { clearTimeout(resizeDebounceTimer); resizeDebounceTimer = null; }
+    lastResizeCheckSize = null;
+    lockedEncodeSize = null;
     if (captureTimer) { clearInterval(captureTimer); captureTimer = null; }
     if (syntheticAudioTimer) { clearInterval(syntheticAudioTimer); syntheticAudioTimer = null; }
     if (audioReader) {
@@ -328,6 +336,7 @@
       var rawW = settings.width || videoEl.videoWidth || 1280;
       var rawH = settings.height || videoEl.videoHeight || 720;
       var size = await ensureEncoder(rawW, rawH);
+      lockedEncodeSize = { w: size.w, h: size.h };
       canvas = document.createElement('canvas');
       canvas.width = size.w;
       canvas.height = size.h;
@@ -358,16 +367,41 @@
           var srcW = videoEl.videoWidth || rawW;
           var srcH = videoEl.videoHeight || rawH;
           var next = fitSize(srcW, srcH, 960, 540);
-          if (next.w !== canvas.width || next.h !== canvas.height) {
-            canvas.width = next.w;
-            canvas.height = next.h;
-            encodeSize = next;
-            if (!encoderBusy) {
-              encoderBusy = ensureEncoder(next.w, next.h).catch(function (e) {
-                emit('error', 'reconfigure: ' + e);
-              }).finally(function () { encoderBusy = null; });
+          // YouTube and similar sites nudge the captured <video> by a few pixels as chrome appears;
+          // recreating VideoEncoder each tick causes visible glitches. Only reconfigure after the
+          // fitted size is stable and meaningfully different for ~600 ms.
+          if (lockedEncodeSize && !encoderBusy) {
+            var dw = Math.abs(next.w - lockedEncodeSize.w);
+            var dh = Math.abs(next.h - lockedEncodeSize.h);
+            var bigJump = dw >= 48 || dh >= 48;
+            if (bigJump) {
+              var key = next.w + 'x' + next.h;
+              if (lastResizeCheckSize !== key) {
+                lastResizeCheckSize = key;
+                if (resizeDebounceTimer) clearTimeout(resizeDebounceTimer);
+                resizeDebounceTimer = setTimeout(function () {
+                  resizeDebounceTimer = null;
+                  if (!casting) return;
+                  var sw = videoEl.videoWidth || rawW;
+                  var sh = videoEl.videoHeight || rawH;
+                  var resolved = fitSize(sw, sh, 960, 540);
+                  if (!lockedEncodeSize) return;
+                  var stillBig = Math.abs(resolved.w - lockedEncodeSize.w) >= 48
+                      || Math.abs(resolved.h - lockedEncodeSize.h) >= 48;
+                  if (!stillBig) return;
+                  if (encoderBusy) return;
+                  encoderBusy = ensureEncoder(sw, sh).then(function (sz) {
+                    lockedEncodeSize = { w: sz.w, h: sz.h };
+                    canvas.width = sz.w;
+                    canvas.height = sz.h;
+                    frameIndex = 0;
+                    emit('log', 'encoder resized (debounced) ' + sz.w + 'x' + sz.h);
+                  }).catch(function (e) {
+                    emit('error', 'reconfigure: ' + e);
+                  }).finally(function () { encoderBusy = null; });
+                }, 600);
+              }
             }
-            return;
           }
           if (encoderBusy || !encoder) return;
           ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
