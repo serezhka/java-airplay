@@ -37,6 +37,22 @@ public class DumpingAirPlayConsumer implements Playback {
     }
 
     @Override
+    public void preparePresentation() {
+        player.preparePresentation();
+    }
+
+    @Override
+    public void awaitPresentationReady(long timeout, java.util.concurrent.TimeUnit unit)
+            throws InterruptedException {
+        player.awaitPresentationReady(timeout, unit);
+    }
+
+    @Override
+    public void onPresentationEnded() {
+        player.onPresentationEnded();
+    }
+
+    @Override
     public void onAudioFormat(AudioStreamInfo audioStreamInfo) {
         player.onAudioFormat(audioStreamInfo);
         dumpSafely(() -> dump.onAudioFormat(audioStreamInfo));

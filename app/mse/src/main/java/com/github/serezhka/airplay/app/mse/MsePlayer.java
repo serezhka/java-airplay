@@ -10,14 +10,22 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Browser MSE player: Chromium + hls.js (HTTP-Live) + jmuxer (mirror H.264).
  * Mirror AAC-ELD / AAC-LC: fdk-aac WASM → Web Audio. Music ALAC: vendored pure-JS
  * decoder ({@code alac.js}). Tray cast uses a separate navigable Chromium window.
  *
- * <p>Chromium starts lazily on the first mirror/HLS/audio session.
+ * <p>Chromium starts lazily on the first mirror/HLS/audio session (no boot window).
+ * VIDEO SETUP awaits {@link #awaitPresentationReady} so the video port is advertised
+ * only after {@code /control} (and preferably {@code /mirror}) is up; pairing stays
+ * non-blocking. The page shows a loading spinner until the first decoded frame.
+ * Chromium stays up across mirror↔HLS switches; it is closed only on
+ * {@link #onPresentationEnded()} (real client disconnect / stop mirroring).
  */
 @Slf4j
 public class MsePlayer implements Playback, AutoCloseable {
@@ -58,6 +66,8 @@ public class MsePlayer implements Playback, AutoCloseable {
     private final ChromiumHost chromium;
     private final int fps;
     private final boolean browserAvailable;
+    private final ExecutorService browserExecutor;
+    private final AtomicBoolean watchingPageReady = new AtomicBoolean();
     private volatile boolean browserFailed;
     private volatile Observer observer = Observer.NONE;
     private volatile AudioStreamInfo.CompressionType audioCompressionType;
@@ -69,6 +79,11 @@ public class MsePlayer implements Playback, AutoCloseable {
 
     public MsePlayer(int fps) {
         this.fps = Math.max(1, fps);
+        this.browserExecutor = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "mse-chromium");
+            t.setDaemon(true);
+            return t;
+        });
         try {
             Path assets = extractAssets();
             media = new MseMediaServer();
@@ -90,6 +105,29 @@ public class MsePlayer implements Playback, AutoCloseable {
         }
     }
 
+    /**
+     * Kick Chromium without waiting. RTSP SETUP must return the video port immediately;
+     * {@link MseMediaServer} buffers NALs and resyncs {@code startMirror} when /control connects.
+     *
+     * @param presentation if true, mark presentation desired before launch so the window is
+     *                     raised/fullscreen as soon as it appears.
+     */
+    private void ensureBrowserAsync(boolean presentation) {
+        if (browserFailed || !browserAvailable) {
+            return;
+        }
+        browserExecutor.execute(() -> {
+            if (presentation) {
+                // Sets the flag even when the process is not up yet.
+                chromium.setPresentationActive(true);
+            }
+            if (chromium.isAlive() && media.hasControlClient()) {
+                return;
+            }
+            ensureBrowser();
+        });
+    }
+
     private void ensureBrowser() {
         if (browserFailed || !browserAvailable) {
             return;
@@ -98,23 +136,71 @@ public class MsePlayer implements Playback, AutoCloseable {
             if (chromium.isAlive() && media.hasControlClient()) {
                 return;
             }
-            media.resetPageReady();
             if (!chromium.isAlive()) {
+                media.resetPageReady();
                 chromium.ensureAlive();
-            } else {
-                chromium.restart();
+                // Never awaitReady on browserExecutor — it queued behind setPresentationActive
+                // and left a 480x270 black window for the whole cold-start wait.
+                watchPageReadyAsync();
+                return;
             }
-            if (!media.awaitReady(15, TimeUnit.SECONDS)) {
-                if (media.hasControlClient()) {
-                    log.info("MSE Chromium control connected without ready latch; continuing");
-                } else {
-                    log.warn("MSE Chromium relaunched but page did not signal ready");
-                }
-            }
+            // Alive without /control: still booting. Watchdog restarts only if stuck.
+            watchPageReadyAsync();
         } catch (Exception e) {
             browserFailed = true;
             log.error("MSE failed to ensure Chromium: {}", e.toString());
         }
+    }
+
+    /**
+     * Off the presentation executor: wait for {@code ready}. Restart at most once, and only while
+     * a session is still active (avoid thrashing Chromium after the phone already stopped).
+     */
+    private void watchPageReadyAsync() {
+        if (!watchingPageReady.compareAndSet(false, true)) {
+            return;
+        }
+        Thread t = new Thread(() -> {
+            boolean handoffRestart = false;
+            try {
+                if (media.awaitReady(45, TimeUnit.SECONDS) || media.hasControlClient()) {
+                    return;
+                }
+                if (browserFailed || !chromium.isAlive()) {
+                    return;
+                }
+                if (!media.isMirrorActive() && !media.isHlsActive()) {
+                    log.info("MSE Chromium had no /control but session already ended — not restarting");
+                    return;
+                }
+                log.warn("MSE Chromium alive without /control — restarting once");
+                handoffRestart = true;
+                browserExecutor.execute(() -> {
+                    try {
+                        media.resetPageReady();
+                        chromium.restart();
+                    } catch (Exception e) {
+                        browserFailed = true;
+                        log.error("MSE Chromium restart failed: {}", e.toString());
+                    } finally {
+                        watchingPageReady.set(false);
+                        watchPageReadyAsync();
+                    }
+                });
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                if (!handoffRestart) {
+                    watchingPageReady.set(false);
+                }
+            }
+        }, "mse-chromium-ready");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private void setPresentationAsync(boolean active) {
+        browserExecutor.execute(() -> chromium.setPresentationActive(active));
     }
 
     private static Path extractAssets() throws Exception {
@@ -136,12 +222,52 @@ public class MsePlayer implements Playback, AutoCloseable {
     }
 
     @Override
+    public void preparePresentation() {
+        // Pair-verify path: start Chromium early without blocking the pair response.
+        ensureBrowserAsync(true);
+    }
+
+    @Override
     public void onVideoFormat(VideoStreamInfo videoStreamInfo) {
-        ensureBrowser();
+        // Kick Chromium off-thread; {@link #awaitPresentationReady} gates the video port.
+        ensureBrowserAsync(true);
         media.stopHls();
         media.startMirror(fps);
-        chromium.setPresentationActive(true);
-        log.info("MSE mirror started for {}", videoStreamInfo.getStreamConnectionId());
+        log.info("MSE mirror started for {} (browserReady={} controlClients={})",
+                videoStreamInfo.getStreamConnectionId(),
+                isBrowserReady(),
+                media.hasControlClient());
+    }
+
+    /**
+     * Block VIDEO SETUP (not pairing) until the page has /control and ideally /mirror,
+     * so the phone pushes into a live jmuxer instead of a black idle window.
+     */
+    @Override
+    public void awaitPresentationReady(long timeout, TimeUnit unit) throws InterruptedException {
+        if (browserFailed || !browserAvailable) {
+            return;
+        }
+        ensureBrowserAsync(true);
+        long startNanos = System.nanoTime();
+        boolean ready = media.awaitReady(timeout, unit);
+        long usedNanos = System.nanoTime() - startNanos;
+        long leftNanos = unit.toNanos(timeout) - usedNanos;
+        if (ready && leftNanos > 0 && !media.hasMirrorClient()) {
+            long mirrorWaitMs = Math.min(TimeUnit.NANOSECONDS.toMillis(leftNanos), 3_000L);
+            long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(mirrorWaitMs);
+            while (System.nanoTime() < deadline && !media.hasMirrorClient()) {
+                Thread.sleep(50);
+            }
+        }
+        if (!ready && !media.hasControlClient()) {
+            log.warn("MSE presentation not ready after {} {} — continuing VIDEO SETUP", timeout, unit);
+        } else {
+            log.info("MSE presentation ready control={} mirror={} ({} ms)",
+                    media.hasControlClient(),
+                    media.hasMirrorClient(),
+                    (System.nanoTime() - startNanos) / 1_000_000L);
+        }
     }
 
     @Override
@@ -151,10 +277,9 @@ public class MsePlayer implements Playback, AutoCloseable {
 
     @Override
     public void onVideoSrcDisconnect() {
+        // Stream end or mirror→HLS handoff — keep Chromium for the next mode.
         media.stopMirror();
-        if (!media.isHlsActive()) {
-            chromium.setPresentationActive(false);
-        }
+        setPresentationAsync(false);
         log.info("MSE mirror stopped");
     }
 
@@ -165,7 +290,7 @@ public class MsePlayer implements Playback, AutoCloseable {
         if (audioCompressionType == null) {
             return;
         }
-        ensureBrowser();
+        ensureBrowserAsync(true);
         int rate = sampleRate(audioStreamInfo);
         int ch = channels(audioStreamInfo);
         switch (audioCompressionType) {
@@ -215,19 +340,42 @@ public class MsePlayer implements Playback, AutoCloseable {
 
     @Override
     public void onPlaylist(String playlistUri) {
-        ensureBrowser();
+        ensureBrowserAsync(true);
         audioConfigured = false;
         audioCompressionType = null;
         media.stopMirror();
         media.startHls(playlistUri);
-        chromium.setPresentationActive(true);
         log.info("MSE HLS start {}", playlistUri);
     }
 
     @Override
     public void onPlaylistRemoved() {
+        // /stop / playlistRemove — remirror may follow on the same AirPlay session.
         media.stopHls();
         log.info("MSE HLS removed");
+    }
+
+    @Override
+    public void onPresentationEnded() {
+        // Real client disconnect. Stop current A/V first; abort the Chromium kill only if a
+        // concurrent onVideoFormat/onPlaylist already re-armed the page (mirror↔HLS race).
+        browserExecutor.execute(() -> {
+            try {
+                media.stopMirror();
+                media.stopHls();
+                if (media.isMirrorActive() || media.isHlsActive()) {
+                    log.info("MSE presentation end aborted — new session already active");
+                    return;
+                }
+                chromium.setPresentationActive(false);
+                chromium.stop();
+                media.resetPageReady();
+                watchingPageReady.set(false);
+                log.info("MSE Chromium closed (presentation ended)");
+            } catch (Exception e) {
+                log.debug("MSE Chromium stop: {}", e.toString());
+            }
+        });
     }
 
     @Override
@@ -326,6 +474,7 @@ public class MsePlayer implements Playback, AutoCloseable {
     @Override
     public void close() {
         audioConfigured = false;
+        browserExecutor.shutdownNow();
         try {
             chromium.close();
         } catch (Exception ignored) {

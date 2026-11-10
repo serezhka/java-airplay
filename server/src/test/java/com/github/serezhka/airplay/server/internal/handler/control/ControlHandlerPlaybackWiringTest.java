@@ -130,7 +130,29 @@ class ControlHandlerPlaybackWiringTest {
     }
 
     @Test
+    void youtubeOnlyStopEndsPresentation() {
+        // No prior VIDEO SETUP → screenMirrorSeen=false (YouTube cast from the app).
+        seedHlsStarted();
+
+        postHttp("/stop");
+        assertTrue(playback.eventsContainInOrder("playlistRemoved", "presentationEnded"));
+        assertNull(sessions.getSession(SESSION).getHlsPlaylistState());
+    }
+
+    @Test
+    void stopAfterMirrorSeenKeepsPresentationForRemirror() {
+        sessions.markScreenMirrorSeen();
+        seedHlsStarted();
+
+        postHttp("/stop");
+        assertTrue(playback.eventsContainInOrder("playlistRemoved"));
+        assertFalse(playback.events().contains("presentationEnded"),
+                "/stop after mirror must keep Chromium warm for remirror");
+    }
+
+    @Test
     void stopAndStop2RemovePlaylist() {
+        sessions.markScreenMirrorSeen();
         seedHlsStarted();
 
         postHttp("/stop");
@@ -145,6 +167,7 @@ class ControlHandlerPlaybackWiringTest {
 
     @Test
     void playlistRemoveActionStopsHls() throws Exception {
+        sessions.markScreenMirrorSeen();
         seedHlsStarted();
 
         NSDictionary action = new NSDictionary();
@@ -159,6 +182,42 @@ class ControlHandlerPlaybackWiringTest {
         writeInbound(req);
 
         assertTrue(playback.eventsContainInOrder("playlistRemoved"));
+        assertFalse(playback.events().contains("presentationEnded"));
+    }
+
+    @Test
+    void youtubeOnlyPlaylistRemoveEndsPresentation() throws Exception {
+        seedHlsStarted();
+
+        NSDictionary action = new NSDictionary();
+        action.put("type", "playlistRemove");
+        byte[] body = BinaryPropertyListWriter.writeToArray(action);
+
+        FullHttpRequest req = new DefaultFullHttpRequest(
+                HttpVersion.HTTP_1_1, HttpMethod.POST, "/action",
+                Unpooled.wrappedBuffer(body));
+        req.headers().set("X-Apple-Session-ID", SESSION);
+        req.headers().set(HttpHeaderNames.CONTENT_LENGTH, body.length);
+        writeInbound(req);
+
+        assertTrue(playback.eventsContainInOrder("playlistRemoved", "presentationEnded"));
+    }
+
+    @Test
+    void videoTeardownOnMirrorSessionKeepsPresentationWhenOtherSessionHasHls() throws Exception {
+        Session hlsSession = sessions.getSession("youtube-hls-session");
+        HlsPlaylistState hls = new HlsPlaylistState(
+                "mlhls://localhost/master.m3u8",
+                "http://127.0.0.1/playlist/master.m3u8?session=youtube-hls-session");
+        hls.markPlaybackStarted();
+        hlsSession.setHlsPlaylistState(hls);
+
+        // Mirror TEARDOWN uses Active-Remote (different session id than YouTube).
+        writeInbound(rtspTeardownWithStream(AirPlayStreamType.SCREEN));
+        assertTrue(playback.eventsContainInOrder("videoDisconnect"));
+        assertFalse(playback.events().contains("presentationEnded"),
+                "mirror TEARDOWN must not kill Chromium while YouTube HLS is live");
+        assertFalse(playback.events().contains("playlistRemoved"));
     }
 
     @Test
@@ -169,7 +228,16 @@ class ControlHandlerPlaybackWiringTest {
         assertFalse(playback.events().contains("audioDisconnect"));
         assertFalse(playback.events().contains("playlistRemoved"),
                 "stream TEARDOWN must not stop HLS");
+        assertFalse(playback.events().contains("presentationEnded"),
+                "VIDEO TEARDOWN during HLS must not end presentation");
         assertTrue(sessions.getSession(SESSION).getHlsPlaylistState() != null);
+    }
+
+    @Test
+    void rtspTeardownVideoWithoutHlsEndsPresentation() throws Exception {
+        writeInbound(rtspTeardownWithStream(AirPlayStreamType.SCREEN));
+        assertTrue(playback.eventsContainInOrder("videoDisconnect", "presentationEnded"));
+        assertFalse(playback.events().contains("playlistRemoved"));
     }
 
     @Test
@@ -177,6 +245,7 @@ class ControlHandlerPlaybackWiringTest {
         writeInbound(rtspTeardownWithStream(AirPlayStreamType.AUDIO_REALTIME));
         assertTrue(playback.eventsContainInOrder("audioDisconnect"));
         assertFalse(playback.events().contains("videoDisconnect"));
+        assertFalse(playback.events().contains("presentationEnded"));
     }
 
     @Test
@@ -195,6 +264,7 @@ class ControlHandlerPlaybackWiringTest {
         assertTrue(playback.eventsContainInOrder("audioDisconnect"));
         assertTrue(playback.eventsContainInOrder("videoDisconnect"));
         assertTrue(playback.eventsContainInOrder("playlistRemoved"));
+        assertTrue(playback.eventsContainInOrder("presentationEnded"));
         assertNull(sessions.getSession(SESSION).getHlsPlaylistState());
     }
 
