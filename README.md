@@ -35,8 +35,10 @@
   to another AirPlay receiver from the tray menu — useful for end-to-end send-path
   checks without a camera or screen capture. AAC audiotest is sent on the legacy
   FairPlay path; HAP/DataStream sessions are video-only today
-- **MSE jar only:** cast a navigable Chromium tab (`client.video.src=browser`) and
-  optional tab audio to HAP receivers (`client.audio.src=browser`)
+- **MSE jar:** tray cast is off by default (`client.video.src=none`,
+  `client.audio.src=none` — Cast stays grayed out). Opt in with
+  `client.video.src=browser` (navigable Chromium tab) and optionally
+  `client.audio.src=browser` for tab audio to HAP receivers
 
 ## Quick start
 
@@ -62,6 +64,10 @@ java -jar java-airplay-ffmpeg-{version}.jar
 java -jar java-airplay-mse-{version}.jar
 ```
 
+On Windows the fat jars also start with a double-click when a JRE/`java` is on `PATH`
+(the jar’s Main-Class manifest is enough). On Linux that usually works the same if the
+desktop associates `*.jar` with Java; otherwise use `java -jar` as above.
+
 On the phone, tablet, or Mac, open **Screen Mirroring** (or AirPlay from a video app)
 and pick the advertised name (default: `JavaAirPlay`).
 
@@ -80,7 +86,7 @@ airplay.hls-enabled=true
 airplay.mdns-loopback=false
 airplay.tray-enabled=true
 # Cast sender (gst/ffmpeg): videotest|screencapture|none  /  audiotest|none
-# MSE jar: browser|none for video and audio (see app/mse/application.properties)
+# MSE jar default is none/none (cast off); use browser|browser to enable (see app/mse)
 client.video.src=videotest
 client.audio.src=audiotest
 # Dump (optional receive-side sidecar)

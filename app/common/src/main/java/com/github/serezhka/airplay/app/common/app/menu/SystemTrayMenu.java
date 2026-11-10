@@ -1,5 +1,8 @@
 package com.github.serezhka.airplay.app.common.app.menu;
 
+import com.formdev.flatlaf.FlatDarkLaf;
+import com.formdev.flatlaf.FlatLightLaf;
+import com.formdev.flatlaf.util.SystemInfo;
 import com.github.serezhka.airplay.client.cast.MirrorCaster;
 import com.github.serezhka.airplay.client.discovery.ServiceDiscovery;
 import dorkbox.systemTray.MenuItem;
@@ -11,6 +14,10 @@ import org.springframework.context.ApplicationContext;
 
 import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
+import javax.swing.UIManager;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -32,6 +39,8 @@ public class SystemTrayMenu {
 
     private final ApplicationContext context;
     private final MirrorCaster mirrorCaster;
+    private final boolean castEnabled;
+    private final LocalReceiverFilter localFilter;
     private final ExecutorService castExecutor = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "airplay-cast");
         t.setDaemon(true);
@@ -53,8 +62,16 @@ public class SystemTrayMenu {
     private final AtomicBoolean rebuildScheduled = new AtomicBoolean();
 
     public SystemTrayMenu(ApplicationContext context, MirrorCaster mirrorCaster) {
+        this(context, mirrorCaster, null);
+    }
+
+    public SystemTrayMenu(ApplicationContext context, MirrorCaster mirrorCaster, String serverName) {
         this.context = context;
         this.mirrorCaster = mirrorCaster;
+        this.castEnabled = mirrorCaster.isCastMediaEnabled();
+        this.localFilter = new LocalReceiverFilter(serverName);
+        // Same FlatLaf skin on every OS (dialogs + Swing tray peers). Follows OS light/dark.
+        installModernSwingLook();
         systemTray = SystemTray.get();
         if (systemTray == null) {
             log.warn("Unable to load SystemTray!");
@@ -76,11 +93,22 @@ public class SystemTrayMenu {
 
         scheduleRebuild();
 
+        if (!castEnabled) {
+            log.info("Tray Cast grayed out (client.video.src/audio.src both none); "
+                    + "outbound AirPlay discovery skipped");
+            return;
+        }
+
         mirrorCaster.startDiscovery(list -> {
-            devices.set(List.copyOf(list));
-            log.info("Discovery update: {} device(s)", list.size());
-            if (log.isDebugEnabled()) {
-                log.debug("Discovery devices: {}", list);
+            List<ServiceDiscovery.Info> visible = list.stream()
+                    .filter(d -> !localFilter.isSelf(d))
+                    .toList();
+            devices.set(List.copyOf(visible));
+            log.info("Discovery update: {} device(s) {} (filtered self)",
+                    visible.size(), summarizeDevices(visible));
+            // HAP session can end (receiver disconnect, Chrome exit) without a tray click — keep UI in sync.
+            if (deviceState.get() == CastDeviceMenu.DeviceState.CONNECTED && !mirrorCaster.isConnected()) {
+                clearActive();
             }
             scheduleRebuild();
         });
@@ -159,6 +187,25 @@ public class SystemTrayMenu {
         }
     }
 
+    private static String summarizeDevices(List<ServiceDiscovery.Info> list) {
+        if (list == null || list.isEmpty()) {
+            return "[]";
+        }
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < list.size(); i++) {
+            ServiceDiscovery.Info d = list.get(i);
+            if (i > 0) {
+                sb.append(", ");
+            }
+            sb.append(CastDeviceMenu.sanitizeTrayLabel(d.name()))
+                    .append('@')
+                    .append(d.address())
+                    .append(':')
+                    .append(d.port());
+        }
+        return sb.append(']').toString();
+    }
+
     private void clearActive() {
         activeKey.set(null);
         deviceState.set(CastDeviceMenu.DeviceState.IDLE);
@@ -172,7 +219,8 @@ public class SystemTrayMenu {
         deviceMenu.install(
                 new ArrayList<>(devices.get()),
                 activeKey.get(),
-                deviceState.get());
+                deviceState.get(),
+                castEnabled);
     }
 
     private String promptPinOnEdt(ServiceDiscovery.Info device) throws Exception {
@@ -204,5 +252,66 @@ public class SystemTrayMenu {
         }
         SpringApplication.exit(context, () -> 0);
         System.exit(0);
+    }
+
+    private static void installModernSwingLook() {
+        try {
+            boolean dark = prefersOsDark();
+            if (dark) {
+                FlatDarkLaf.setup();
+            } else {
+                FlatLightLaf.setup();
+            }
+            UIManager.put("Component.arc", 8);
+            UIManager.put("Button.arc", 8);
+            UIManager.put("PopupMenu.borderInsets", new java.awt.Insets(4, 4, 4, 4));
+            log.info("Tray Swing LAF: Flat{}Laf (system dark={})", dark ? "Dark" : "Light", dark);
+        } catch (Exception e) {
+            log.debug("FlatLaf not applied: {}", e.toString());
+        }
+    }
+
+    /** Best-effort OS light/dark; default light if the probe fails. */
+    private static boolean prefersOsDark() {
+        try {
+            if (SystemInfo.isMacOS) {
+                return runCapture("defaults", "read", "-g", "AppleInterfaceStyle")
+                        .toLowerCase()
+                        .contains("dark");
+            }
+            if (SystemInfo.isWindows) {
+                // AppsUseLightTheme = 0x0 → dark apps.
+                String out = runCapture("reg", "query",
+                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                        "/v", "AppsUseLightTheme");
+                return out.contains("0x0");
+            }
+            // GNOME / many desktops; ignore failures on pure XFCE/KDE without gsettings.
+            String scheme = runCapture("gsettings", "get", "org.gnome.desktop.interface", "color-scheme");
+            if (scheme.contains("prefer-dark")) {
+                return true;
+            }
+            String theme = runCapture("gsettings", "get", "org.gnome.desktop.interface", "gtk-theme");
+            return theme.toLowerCase().contains("dark");
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static String runCapture(String... cmd) throws Exception {
+        Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
+        StringBuilder sb = new StringBuilder();
+        try (BufferedReader r = new BufferedReader(
+                new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = r.readLine()) != null) {
+                if (!sb.isEmpty()) {
+                    sb.append('\n');
+                }
+                sb.append(line);
+            }
+        }
+        p.waitFor(2, TimeUnit.SECONDS);
+        return sb.toString();
     }
 }

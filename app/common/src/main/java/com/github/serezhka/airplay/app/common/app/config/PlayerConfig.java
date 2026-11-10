@@ -46,7 +46,7 @@ public class PlayerConfig {
     public MirrorCaster mirrorCaster(AirPlayConfig airPlayConfig, ClientCastProperties cast) {
         if (!cast.videoEnabled() && !cast.audioEnabled()) {
             log.info("Cast media disabled (client.video.src=none and client.audio.src=none); "
-                    + "receiver/discovery still run");
+                    + "tray Cast stays grayed and outbound discovery is skipped");
         }
         return new MirrorCaster(
                 airPlayConfig.isMdnsLoopback(),
@@ -56,8 +56,11 @@ public class PlayerConfig {
 
     @Bean
     @ConditionalOnProperty(value = "airplay.tray-enabled", havingValue = "true", matchIfMissing = true)
-    public SystemTrayMenu systemTrayMenu(ApplicationContext context, MirrorCaster mirrorCaster) {
-        return new SystemTrayMenu(context, mirrorCaster);
+    public SystemTrayMenu systemTrayMenu(
+            ApplicationContext context,
+            MirrorCaster mirrorCaster,
+            AirPlayConfig airPlayConfig) {
+        return new SystemTrayMenu(context, mirrorCaster, airPlayConfig.getServerName());
     }
 
     @Bean

@@ -46,7 +46,19 @@ public final class CastDeviceMenu {
             List<ServiceDiscovery.Info> devices,
             String activeKey,
             DeviceState state) {
-        String fingerprint = fingerprint(devices, activeKey, state);
+        return install(devices, activeKey, state, true);
+    }
+
+    /**
+     * @param castEnabled {@code false} when both {@code client.*.src} are {@code none}
+     * @return {@code true} if the native menu was rebuilt
+     */
+    public synchronized boolean install(
+            List<ServiceDiscovery.Info> devices,
+            String activeKey,
+            DeviceState state,
+            boolean castEnabled) {
+        String fingerprint = fingerprint(devices, activeKey, state, castEnabled);
         if (fingerprint.equals(lastFingerprint) && castMenu != null) {
             return false;
         }
@@ -62,7 +74,12 @@ public final class CastDeviceMenu {
         }
 
         Menu menu = new Menu("Cast");
-        if (devices.isEmpty()) {
+        if (!castEnabled) {
+            MenuItem disabled = new MenuItem("(disabled)");
+            disabled.setEnabled(false);
+            menu.add(disabled);
+            menu.setEnabled(false);
+        } else if (devices.isEmpty()) {
             MenuItem empty = new MenuItem("(searching…)");
             empty.setEnabled(false);
             menu.add(empty);
@@ -85,8 +102,8 @@ public final class CastDeviceMenu {
         systemTray.getMenu().add(menu, 0);
         castMenu = menu;
         lastFingerprint = fingerprint;
-        log.info("Cast submenu installed: {} device(s), state={} active={}",
-                devices.size(), state, activeKey);
+        log.info("Cast submenu installed: {} device(s), state={} active={} enabled={}",
+                devices.size(), state, activeKey, castEnabled);
         return true;
     }
 
@@ -100,7 +117,8 @@ public final class CastDeviceMenu {
     }
 
     static String labelFor(ServiceDiscovery.Info device, String activeKey, DeviceState state) {
-        String name = device.name();
+        // Samsung names like 65" QLED break some GTK/AppIndicator menu peers (quote truncates/hides row).
+        String name = sanitizeTrayLabel(device.name());
         if (activeKey != null && activeKey.equals(device.key())) {
             return switch (state) {
                 case CONNECTING -> "⚙  " + name + "…";
@@ -111,11 +129,21 @@ public final class CastDeviceMenu {
         return name;
     }
 
+    static String sanitizeTrayLabel(String name) {
+        if (name == null || name.isEmpty()) {
+            return "(unknown)";
+        }
+        return name.replace('"', '\u2033').replace('\'', '\u2032');
+    }
+
     private static String fingerprint(
-            List<ServiceDiscovery.Info> devices, String activeKey, DeviceState state) {
+            List<ServiceDiscovery.Info> devices,
+            String activeKey,
+            DeviceState state,
+            boolean castEnabled) {
         String keys = devices.stream()
                 .map(d -> d.key() + "|" + d.name())
                 .collect(Collectors.joining(";"));
-        return keys + "#" + Objects.toString(activeKey, "") + "#" + state;
+        return keys + "#" + Objects.toString(activeKey, "") + "#" + state + "#" + castEnabled;
     }
 }

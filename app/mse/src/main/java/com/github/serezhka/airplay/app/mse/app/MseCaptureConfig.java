@@ -42,7 +42,7 @@ public class MseCaptureConfig {
     @Bean
     @ConditionalOnProperty(name = "client.video.src", havingValue = "none", matchIfMissing = true)
     public CaptureSourceFactory noCaptureSourceFactory() {
-        // Explicit none: MirrorCaster refuses connect for video; discovery/tray still work.
+        // Explicit none: MirrorCaster refuses connect; tray Cast stays grayed (no discovery).
         CaptureSourceFactory factory = onAnnexB -> {
             throw new IllegalStateException(
                     "client.video.src=none — set client.video.src=browser to cast a navigable Chromium window");

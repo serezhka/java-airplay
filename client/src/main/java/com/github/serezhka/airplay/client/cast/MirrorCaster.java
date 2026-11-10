@@ -94,6 +94,11 @@ public final class MirrorCaster implements AutoCloseable {
         return session.get() != null;
     }
 
+    /** {@code false} when both {@code client.video.src} and {@code client.audio.src} are {@code none}. */
+    public boolean isCastMediaEnabled() {
+        return castVideo || castAudio;
+    }
+
     /**
      * Explicit path: blank PIN → capability auto; non-blank → HKP persistent + DataStream.
      */
