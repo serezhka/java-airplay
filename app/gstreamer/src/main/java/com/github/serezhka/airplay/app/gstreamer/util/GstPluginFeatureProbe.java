@@ -35,13 +35,15 @@ public final class GstPluginFeatureProbe {
 
     /**
      * H.264 decode preference for HLS {@code playbin3} autoplug. First READY wins.
-     * d3d11 before NVIDIA so Windows keeps zero-copy into {@code d3d11videosink}.
+     * NVIDIA before d3d11: on some Windows hosts {@code d3d11h264dec} reports READY but
+     * HLS never presents (adaptivedemux then dies with "Couldn't download fragments"),
+     * while {@code nvh264dec} plays YouTube cleanly into {@code d3d11videosink}.
      */
     private static final String[] H264_HW_PREFERENCE = {
+            "nvh264dec",
+            "vah264dec",
             "d3d11h264dec",
             "d3d12h264dec",
-            "vah264dec",
-            "nvh264dec",
             "vtdec_h264"
     };
 
