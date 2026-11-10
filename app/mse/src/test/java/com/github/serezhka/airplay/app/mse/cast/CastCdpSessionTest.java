@@ -27,11 +27,36 @@ class CastCdpSessionTest {
     }
 
     @Test
+    void prefersNavigatedPageOverAboutBlankWhenBothPresent() {
+        String body = """
+                [ {
+                   "description": "",
+                   "type": "page",
+                   "url": "about:blank",
+                   "webSocketDebuggerUrl": "ws://127.0.0.1:9/devtools/page/BLANK"
+                }, {
+                   "description": "",
+                   "type": "page",
+                   "url": "https://example.com/",
+                   "webSocketDebuggerUrl": "ws://127.0.0.1:9/devtools/page/REAL"
+                } ]
+                """;
+        assertEquals("ws://127.0.0.1:9/devtools/page/REAL", CastCdpSession.extractPageWebSocketUrl(body));
+    }
+
+    @Test
     void matchesResponseIdDoesNotPrefixMatch() {
         assertTrue(CastCdpSession.matchesResponseId("{\"id\":1,\"result\":{}}", 1));
         assertTrue(CastCdpSession.matchesResponseId("{\"id\":10,\"result\":{}}", 10));
         assertFalse(CastCdpSession.matchesResponseId("{\"id\":10,\"result\":{}}", 1));
         assertFalse(CastCdpSession.matchesResponseId("{\"method\":\"Runtime.bindingCalled\"}", 1));
+    }
+
+    @Test
+    void extractResponseIdIgnoresEvents() {
+        assertEquals(7, CastCdpSession.extractResponseId("{\"id\":7,\"result\":{}}"));
+        assertNull(CastCdpSession.extractResponseId(
+                "{\"method\":\"Runtime.bindingCalled\",\"params\":{\"payload\":\"{\\\"id\\\":9}\"}}"));
     }
 
     @Test

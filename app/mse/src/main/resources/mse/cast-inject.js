@@ -22,7 +22,10 @@
   var spsPpsAnnexB = null;
   var casting = false;
   var frameIndex = 0;
-  var encodeSize = { w: 960, h: 540 };
+  /** Cap for CDP binding path (base64 over DevTools) — 960p floods the socket to ~1 fps on TV. */
+  var MAX_W = 854;
+  var MAX_H = 480;
+  var encodeSize = { w: 854, h: 480 };
   var audioConfigured = false;
   var audioReader = null;
   var encoderBusy = null;
@@ -32,6 +35,12 @@
   var lockedEncodeSize = null;
   var resizeDebounceTimer = null;
   var lastResizeCheckSize = null;
+  /** Bumps on each startCapture() so stale async continuations do not double-open the encoder. */
+  var captureGeneration = 0;
+  var framesEncoded = 0;
+  var framesDropped = 0;
+  var lastFpsLogMs = 0;
+  var captureStarting = false;
 
   function post(obj) {
     try {
@@ -132,7 +141,7 @@
       codec: codec,
       width: w,
       height: h,
-      bitrate: 2_500_000,
+      bitrate: 1_200_000,
       framerate: 30,
       avc: { format: 'avc' },
       latencyMode: 'realtime',
@@ -147,10 +156,10 @@
     }
     spsPpsAnnexB = null;
     if (typeof VideoEncoder === 'undefined') throw new Error('VideoEncoder unsupported');
-    encodeSize = fitSize(width, height, 960, 540);
+    encodeSize = fitSize(width, height, MAX_W, MAX_H);
     var codecs = ['avc1.42E01F', 'avc1.4D401F', 'avc1.64001F', 'avc1.640028', 'avc1.42E01E'];
-    // Lab / desktop: try hardware first (lower CPU, fewer dropouts); CI headless falls back to software.
-    var hwModes = ['no-preference', 'prefer-hardware', 'prefer-software'];
+    // Prefer hardware first — software AVC at 30fps + CDP base64 saturates and looks like 1 fps on TV.
+    var hwModes = ['prefer-hardware', 'no-preference', 'prefer-software'];
     var lastErr = null;
     for (var hi = 0; hi < hwModes.length; hi++) {
       for (var ci = 0; ci < codecs.length; ci++) {
@@ -271,11 +280,22 @@
   }
 
   function stopCapture() {
+    captureGeneration++;
     casting = false;
+    captureStarting = false;
     if (resizeDebounceTimer) { clearTimeout(resizeDebounceTimer); resizeDebounceTimer = null; }
     lastResizeCheckSize = null;
     lockedEncodeSize = null;
-    if (captureTimer) { clearInterval(captureTimer); captureTimer = null; }
+    if (captureTimer !== null && captureTimer !== undefined) {
+      try {
+        if (typeof captureTimer === 'number') {
+          cancelAnimationFrame(captureTimer);
+        } else {
+          clearTimeout(captureTimer);
+        }
+      } catch (e) {}
+      captureTimer = null;
+    }
     if (syntheticAudioTimer) { clearInterval(syntheticAudioTimer); syntheticAudioTimer = null; }
     if (audioReader) {
       try { audioReader.cancel(); } catch (e) {}
@@ -297,8 +317,11 @@
   }
 
   async function startCapture() {
-    if (casting) return;
+    if (casting || captureStarting) return;
+    captureStarting = true;
+    var gen = ++captureGeneration;
     if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+      captureStarting = false;
       emit('error', 'capture: mediaDevices.getDisplayMedia unavailable');
       return;
     }
@@ -316,6 +339,14 @@
         surfaceSwitching: 'exclude',
         systemAudio: 'exclude'
       });
+      if (gen !== captureGeneration) {
+        try {
+          captureStream.getTracks().forEach(function (t) { t.stop(); });
+        } catch (e) {}
+        captureStream = null;
+        captureStarting = false;
+        return;
+      }
       videoTrack = captureStream.getVideoTracks()[0];
       if (!videoTrack) throw new Error('no video track');
       if (ENABLE_AUDIO) {
@@ -324,6 +355,12 @@
       videoTrack.addEventListener('ended', function () {
         stopCapture();
         emit('captureEnded', '');
+      });
+      videoTrack.addEventListener('mute', function () {
+        emit('log', 'video track muted (tab backgrounded?)');
+      });
+      videoTrack.addEventListener('unmute', function () {
+        emit('log', 'video track unmuted');
       });
 
       videoEl = document.createElement('video');
@@ -340,10 +377,14 @@
       canvas = document.createElement('canvas');
       canvas.width = size.w;
       canvas.height = size.h;
-      ctx = canvas.getContext('2d', { alpha: false });
+      ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
 
       casting = true;
+      captureStarting = false;
       frameIndex = 0;
+      framesEncoded = 0;
+      framesDropped = 0;
+      lastFpsLogMs = performance.now();
       emit('captureStarted', size.w + 'x' + size.h);
 
       if (ENABLE_AUDIO) {
@@ -361,12 +402,22 @@
         }
       }
 
-      captureTimer = setInterval(function () {
-        if (!casting || !encoder || encoder.state !== 'configured') return;
+      // rAF + encode-queue backpressure. Flooding VideoEncoder/CDP looks like ~1 fps on the TV.
+      function captureLoop(rAfMs) {
+        if (!casting || gen !== captureGeneration) return;
+        if (!videoEl || !encoder || encoder.state !== 'configured') {
+          captureTimer = requestAnimationFrame(captureLoop);
+          return;
+        }
+        if (encoderBusy) {
+          framesDropped++;
+          captureTimer = requestAnimationFrame(captureLoop);
+          return;
+        }
         try {
           var srcW = videoEl.videoWidth || rawW;
           var srcH = videoEl.videoHeight || rawH;
-          var next = fitSize(srcW, srcH, 960, 540);
+          var next = fitSize(srcW, srcH, MAX_W, MAX_H);
           // YouTube and similar sites nudge the captured <video> by a few pixels as chrome appears;
           // recreating VideoEncoder each tick causes visible glitches. Only reconfigure after the
           // fitted size is stable and meaningfully different for ~600 ms.
@@ -381,10 +432,10 @@
                 if (resizeDebounceTimer) clearTimeout(resizeDebounceTimer);
                 resizeDebounceTimer = setTimeout(function () {
                   resizeDebounceTimer = null;
-                  if (!casting) return;
+                  if (!casting || gen !== captureGeneration) return;
                   var sw = videoEl.videoWidth || rawW;
                   var sh = videoEl.videoHeight || rawH;
-                  var resolved = fitSize(sw, sh, 960, 540);
+                  var resolved = fitSize(sw, sh, MAX_W, MAX_H);
                   if (!lockedEncodeSize) return;
                   var stillBig = Math.abs(resolved.w - lockedEncodeSize.w) >= 48
                       || Math.abs(resolved.h - lockedEncodeSize.h) >= 48;
@@ -403,16 +454,35 @@
               }
             }
           }
-          if (encoderBusy || !encoder) return;
+          if (typeof encoder.encodeQueueSize === 'number' && encoder.encodeQueueSize > 1) {
+            framesDropped++;
+            captureTimer = requestAnimationFrame(captureLoop);
+            return;
+          }
           ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
-          var frame = new VideoFrame(canvas, { timestamp: performance.now() * 1000 });
-          encoder.encode(frame, { keyFrame: (frameIndex++ % 30) === 0 });
+          var tsMicros = typeof rAfMs === 'number' ? rAfMs * 1000 : performance.now() * 1000;
+          var frame = new VideoFrame(canvas, { timestamp: tsMicros });
+          encoder.encode(frame, { keyFrame: (frameIndex++ % 60) === 0 });
           frame.close();
+          framesEncoded++;
+          var now = performance.now();
+          if (now - lastFpsLogMs >= 2000) {
+            var dt = (now - lastFpsLogMs) / 1000;
+            emit('log', 'fps~' + (framesEncoded / dt).toFixed(1)
+                + ' dropped=' + framesDropped
+                + ' queue=' + (encoder.encodeQueueSize || 0));
+            framesEncoded = 0;
+            framesDropped = 0;
+            lastFpsLogMs = now;
+          }
         } catch (e) {
           emit('error', 'frame: ' + e);
         }
-      }, 33);
+        captureTimer = requestAnimationFrame(captureLoop);
+      }
+      captureTimer = requestAnimationFrame(captureLoop);
     } catch (e) {
+      captureStarting = false;
       stopCapture();
       emit('error', 'capture: ' + e);
     }

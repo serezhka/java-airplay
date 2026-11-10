@@ -9,12 +9,14 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
  * Launches system Chromium/Chrome against the local MSE page (JavaFX WebView has no MSE on Linux).
- * Idle: no window until the first mirror/HLS session (lazy start). With an active stream: fullscreen.
+ * Idle: no window until the first mirror/HLS session (lazy start). With an active
+ * stream: fullscreen; the page shows a spinner until the first frame.
  */
 @Slf4j
 final class ChromiumHost implements AutoCloseable {
@@ -65,7 +67,9 @@ final class ChromiumHost implements AutoCloseable {
         log.info("MSE Chromium launching url={}", pageUrl);
         destroyQuietly();
         startProcess();
-        setPresentationActive(presentationActive);
+        if (presentationActive) {
+            setPresentationActive(true);
+        }
         return true;
     }
 
@@ -74,7 +78,9 @@ final class ChromiumHost implements AutoCloseable {
         log.warn("MSE Chromium restart url={}", pageUrl);
         destroyQuietly();
         startProcess();
-        setPresentationActive(presentationActive);
+        if (presentationActive) {
+            setPresentationActive(true);
+        }
     }
 
     /**
@@ -89,9 +95,11 @@ final class ChromiumHost implements AutoCloseable {
         try {
             String wid = findWindowId();
             if (wid == null || wid.isBlank()) {
-                // Window may not exist yet right after launch.
-                Thread.sleep(400);
-                wid = findWindowId();
+                // Window may not exist yet right after launch — retry a few times.
+                for (int i = 0; i < 5 && (wid == null || wid.isBlank()); i++) {
+                    Thread.sleep(400);
+                    wid = findWindowId();
+                }
             }
             if (wid == null || wid.isBlank()) {
                 log.debug("MSE Chromium window not found yet (pid={})", process.pid());
@@ -99,12 +107,16 @@ final class ChromiumHost implements AutoCloseable {
             }
             if (active) {
                 runXdotool("windowactivate", "--sync", wid);
-                runXdotool("windowstate", "--add", "FULLSCREEN", wid);
-                log.debug("MSE Chromium presentation on wid={}", wid);
+                // Older xdotool builds lack `windowstate`; fall back to an explicit size.
+                if (!runXdotoolOptional("windowstate", "--add", "FULLSCREEN", wid)) {
+                    runXdotool("windowmove", wid, "0", "0");
+                    runXdotool("windowsize", wid, "1280", "720");
+                }
+                log.info("MSE Chromium presentation on wid={}", wid);
             } else {
-                runXdotool("windowstate", "--remove", "FULLSCREEN", wid);
+                runXdotoolOptional("windowstate", "--remove", "FULLSCREEN", wid);
                 runXdotool("windowsize", wid, String.valueOf(IDLE_WIDTH), String.valueOf(IDLE_HEIGHT));
-                runXdotool("windowminimize", wid);
+                runXdotoolOptional("windowminimize", wid);
                 log.debug("MSE Chromium presentation off wid={}", wid);
             }
         } catch (Exception e) {
@@ -147,34 +159,83 @@ final class ChromiumHost implements AutoCloseable {
     }
 
     private String findWindowId() throws IOException, InterruptedException {
-        Process p = new ProcessBuilder("xdotool", "search", "--pid", String.valueOf(process.pid()))
-                .redirectErrorStream(true)
-                .start();
-        String out;
+        // Prefer the page title. xdotool --pid often returns Chrome's 10x10 stub first;
+        // fullscreening that leaves the real airplay-mse window at 480x270 forever.
+        String byName = firstXdotoolLine("search", "--name", "airplay-mse");
+        if (byName != null && !byName.isBlank()) {
+            return byName;
+        }
+        List<String> byPid = allXdotoolLines("search", "--pid", String.valueOf(process.pid()));
+        if (byPid.isEmpty()) {
+            return null;
+        }
+        // Last id is usually the real content window when name search is not ready yet.
+        return byPid.get(byPid.size() - 1);
+    }
+
+    private static String firstXdotoolLine(String... args) throws IOException, InterruptedException {
+        List<String> lines = allXdotoolLines(args);
+        return lines.isEmpty() ? null : lines.get(0);
+    }
+
+    private static List<String> allXdotoolLines(String... args) throws IOException, InterruptedException {
+        List<String> cmd = new ArrayList<>();
+        cmd.add("xdotool");
+        Collections.addAll(cmd, args);
+        Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
+        List<String> lines = new ArrayList<>();
         try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
-            out = r.readLine();
+            String line;
+            while ((line = r.readLine()) != null) {
+                if (!line.isBlank()) {
+                    lines.add(line.trim());
+                }
+            }
         }
         if (!p.waitFor(2, TimeUnit.SECONDS)) {
             p.destroyForcibly();
-            return null;
         }
-        return out;
+        return lines;
     }
 
     private static void runXdotool(String... args) throws IOException, InterruptedException {
+        if (!runXdotoolOptional(args)) {
+            throw new IOException("xdotool failed: " + String.join(" ", args));
+        }
+    }
+
+    /** @return false if the command is missing/fails (e.g. no {@code windowstate} on older xdotool) */
+    private static boolean runXdotoolOptional(String... args) throws IOException, InterruptedException {
         List<String> cmd = new ArrayList<>();
         cmd.add("xdotool");
-        for (String a : args) {
-            cmd.add(a);
-        }
+        Collections.addAll(cmd, args);
         Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
+        String err;
+        try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
+            err = r.readLine();
+        }
         if (!p.waitFor(2, TimeUnit.SECONDS)) {
             p.destroyForcibly();
+            return false;
         }
+        if (p.exitValue() != 0) {
+            return false;
+        }
+        // xdotool prints "Unknown command" on stdout with exit 1 on some builds; belt and braces:
+        return err == null || !err.toLowerCase().contains("unknown command");
     }
 
     private static String resolveBrowser() {
         return MseBrowsers.resolveForPlayback();
+    }
+
+    /**
+     * Tear down the browser process (e.g. AirPlay client disconnected). Next session
+     * starts a fresh window via {@link #ensureAlive()}.
+     */
+    synchronized void stop() {
+        presentationActive = false;
+        destroyQuietly();
     }
 
     private void destroyQuietly() {
@@ -183,11 +244,16 @@ final class ChromiumHost implements AutoCloseable {
         if (p == null) {
             return;
         }
-        p.destroyForcibly();
+        log.info("MSE Chromium stopping pid={}", p.pid());
+        p.destroy();
         try {
-            p.waitFor(5, TimeUnit.SECONDS);
+            if (!p.waitFor(2, TimeUnit.SECONDS)) {
+                p.destroyForcibly();
+                p.waitFor(3, TimeUnit.SECONDS);
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            p.destroyForcibly();
         }
     }
 

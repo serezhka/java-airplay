@@ -7,6 +7,7 @@
   <style>
     html, body { margin: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
     #stage {
+      position: relative;
       width: 100%; height: 100%;
       display: flex; align-items: center; justify-content: center;
       background: #000;
@@ -18,6 +19,31 @@
       background: #000;
     }
     video.idle { visibility: hidden; }
+    /* Shown from cast start until the first decoded frame — pairing/SETUP stays non-blocking. */
+    #loader {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 16px;
+      /* Semi-transparent so a decoding <video> underneath is still visible if play events lag. */
+      background: rgba(0, 0, 0, 0.55);
+      z-index: 2;
+      transition: opacity 0.2s ease;
+      pointer-events: none;
+    }
+    #loader.hidden { opacity: 0; visibility: hidden; }
+    .gear {
+      width: 44px; height: 44px;
+      border: 3px solid #2a2a2a;
+      border-top-color: #c8c8c8;
+      border-radius: 50%;
+      animation: mse-spin 0.75s linear infinite;
+    }
+    .loader-label {
+      font: 500 13px/1.2 system-ui, -apple-system, sans-serif;
+      color: #8a8a8a;
+      letter-spacing: 0.02em;
+    }
+    @keyframes mse-spin { to { transform: rotate(360deg); } }
   </style>
   <script src="jmuxer.min.js"></script>
   <script src="hls.min.js"></script>
@@ -25,10 +51,17 @@
   <script src="alac.js"></script>
 </head>
 <body>
-<div id="stage"><video id="player" autoplay playsinline></video></div>
+<div id="stage">
+  <video id="player" autoplay playsinline></video>
+  <div id="loader" class="hidden" aria-live="polite">
+    <div class="gear" aria-hidden="true"></div>
+    <div class="loader-label">Starting…</div>
+  </div>
+</div>
 <script>
 (function () {
   const video = document.getElementById('player');
+  const loader = document.getElementById('loader');
   let hls = null;
   let jmuxer = null;
   let mirrorWs = null;
@@ -37,9 +70,15 @@
   let mode = 'idle';
   let playbackTimer = null;
   let mirrorFps = 60;
+  let mirrorWsUrl = null;
+  let audioWsUrlActive = null;
+  let mirrorEpoch = -1;
   let lastSpsKey = null;
   let hlsEpoch = 0;
   let videoErrorHooked = false;
+  let awaitingFirstFrame = false;
+  let mirrorFrames = 0;
+  let loaderFallbackTimer = null;
 
   // AAC-ELD/LC → fdk-aac WASM; ALAC → alac.js; both → Web Audio.
   let audioCtx = null;
@@ -59,6 +98,42 @@
   let alacFramesDecoded = 0;
   let audioCodec = 'none'; // aac | alac | none
 
+  function showLoader() {
+    awaitingFirstFrame = true;
+    mirrorFrames = 0;
+    if (loaderFallbackTimer) {
+      clearTimeout(loaderFallbackTimer);
+      loaderFallbackTimer = null;
+    }
+    loader.classList.remove('hidden');
+  }
+
+  function hideLoader() {
+    awaitingFirstFrame = false;
+    if (loaderFallbackTimer) {
+      clearTimeout(loaderFallbackTimer);
+      loaderFallbackTimer = null;
+    }
+    loader.classList.add('hidden');
+  }
+
+  function noteFirstFrame() {
+    if (!awaitingFirstFrame) return;
+    if (mode !== 'mirror' && mode !== 'hls') return;
+    hideLoader();
+  }
+
+  function armLoaderFallback() {
+    if (loaderFallbackTimer || !awaitingFirstFrame) return;
+    // Opaque loader can hide an already-decoding <video> when play events are late.
+    loaderFallbackTimer = setTimeout(function () {
+      loaderFallbackTimer = null;
+      if (!awaitingFirstFrame || (mode !== 'mirror' && mode !== 'hls')) return;
+      log('loader fallback hide videoWidth=' + video.videoWidth + ' readyState=' + video.readyState);
+      hideLoader();
+    }, 1200);
+  }
+
   // Test hooks (Playwright).
   window.__mse = {
     mode: function () { return mode; },
@@ -69,7 +144,8 @@
     alacOpen: function () { return !!alacDecoder; },
     hasJmuxer: function () { return !!jmuxer; },
     hasHls: function () { return !!hls; },
-    videoReadyState: function () { return video.readyState; }
+    videoReadyState: function () { return video.readyState; },
+    loaderVisible: function () { return !loader.classList.contains('hidden'); }
   };
 
   function emit(obj) {
@@ -330,11 +406,23 @@
   }
 
   function connectAudio(wsUrl) {
+    if (!wsUrl) {
+      audioWsUrlActive = null;
+      if (audioWs) {
+        try { audioWs.close(); } catch (e) {}
+        audioWs = null;
+      }
+      return;
+    }
+    if (audioWs && audioWsUrlActive === wsUrl
+        && (audioWs.readyState === WebSocket.OPEN || audioWs.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
     if (audioWs) {
       try { audioWs.close(); } catch (e) {}
       audioWs = null;
     }
-    if (!wsUrl) return;
+    audioWsUrlActive = wsUrl;
     audioWs = new WebSocket(wsUrl);
     audioWs.binaryType = 'arraybuffer';
     audioWs.onopen = function () { log('audio ws open'); };
@@ -376,6 +464,7 @@
       try { mirrorWs.close(); } catch (e) {}
       mirrorWs = null;
     }
+    mirrorWsUrl = null;
     destroyJmuxer();
     stopAacAudio();
   }
@@ -385,11 +474,20 @@
     stopMirror();
     mode = 'idle';
     video.classList.add('idle');
+    hideLoader();
   }
 
   function markActive() {
     video.classList.remove('idle');
   }
+
+  video.addEventListener('playing', noteFirstFrame);
+  video.addEventListener('loadeddata', noteFirstFrame);
+  video.addEventListener('loadedmetadata', noteFirstFrame);
+  video.addEventListener('resize', noteFirstFrame);
+  video.addEventListener('timeupdate', function () {
+    if (video.readyState >= 2 || video.videoWidth > 0) noteFirstFrame();
+  });
 
   function reportPlayback() {
     // Duration/position hints only — Java owns rate for /playback-info.
@@ -475,9 +573,24 @@
     }
   }
 
-  function startMirror(wsUrl, audioWsUrl, fps) {
+  function startMirror(wsUrl, audioWsUrl, fps, epoch) {
+    var ep = epoch != null ? Number(epoch) : (mirrorEpoch + 1);
+    // Same epoch = late ready resync; do not tear down a live /mirror after NALs flushed.
+    var mirrorOpen = mirrorWs && (mirrorWs.readyState === WebSocket.OPEN
+        || mirrorWs.readyState === WebSocket.CONNECTING);
+    if (mode === 'mirror' && mirrorOpen && mirrorWsUrl === wsUrl && mirrorEpoch === ep) {
+      log('startMirror ignored (epoch=' + ep + ' already '
+          + (mirrorWs.readyState === WebSocket.OPEN ? 'open' : 'connecting') + ')');
+      if (audioWsUrl && audioWsUrl !== audioWsUrlActive) {
+        connectAudio(audioWsUrl);
+      }
+      return;
+    }
     stopAll();
     mode = 'mirror';
+    mirrorWsUrl = wsUrl;
+    mirrorEpoch = ep;
+    showLoader();
     markActive();
     video.muted = true; // mirror audio is Web Audio, not the <video> track
     mirrorFps = Math.max(1, Number(fps) || 60);
@@ -491,11 +604,15 @@
     connectAudio(audioWsUrl);
     mirrorWs = new WebSocket(wsUrl);
     mirrorWs.binaryType = 'arraybuffer';
-    mirrorWs.onopen = function () { log('mirror ws open'); };
+    mirrorWs.onopen = function () { log('mirror ws open'); playSafe(); };
     mirrorWs.onclose = function () { log('mirror ws closed'); };
     mirrorWs.onerror = function () { emit({ event: 'error', message: 'mirror websocket error' }); };
     mirrorWs.onmessage = function (ev) {
       feedMirror(new Uint8Array(ev.data));
+      mirrorFrames++;
+      if (mirrorFrames === 1) armLoaderFallback();
+      if (awaitingFirstFrame && video.videoWidth > 0) noteFirstFrame();
+      playSafe();
     };
   }
 
@@ -503,6 +620,8 @@
     stopAll();
     hlsEpoch = epoch != null ? Number(epoch) : (hlsEpoch + 1);
     mode = 'hls';
+    mirrorWsUrl = null;
+    showLoader();
     markActive();
     video.muted = false;
     if (!window.Hls || !Hls.isSupported()) {
@@ -544,8 +663,13 @@
 
   function onCommand(msg) {
     var cmd = msg.cmd;
-    if (cmd === 'startMirror') startMirror(msg.wsUrl, msg.audioWsUrl, msg.fps);
-    else if (cmd === 'stopMirror') { stopMirror(); mode = 'idle'; video.classList.add('idle'); }
+    if (cmd === 'startMirror') startMirror(msg.wsUrl, msg.audioWsUrl, msg.fps, msg.epoch);
+    else if (cmd === 'stopMirror') {
+      stopMirror();
+      mode = 'idle';
+      video.classList.add('idle');
+      hideLoader();
+    }
     else if (cmd === 'configureAac') configureAac(msg);
     else if (cmd === 'configureAlac') configureAlac(msg);
     else if (cmd === 'configureAudio') {
@@ -557,6 +681,7 @@
       if (msg.epoch == null || msg.epoch === hlsEpoch) {
         mode = 'idle';
         video.classList.add('idle');
+        hideLoader();
       }
     } else if (cmd === 'stopAll') stopAll();
     else if (cmd === 'pause') {

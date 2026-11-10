@@ -13,7 +13,9 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -30,13 +32,11 @@ final class CastCdpSession implements AutoCloseable {
 
     private final WebSocket ws;
     private final AtomicInteger nextId = new AtomicInteger(1);
-    private final AtomicReference<Pending> pending = new AtomicReference<>();
+    /** Multiplexed CDP command futures — a single slot drops replies under binding traffic. */
+    private final ConcurrentHashMap<Integer, CompletableFuture<String>> pending = new ConcurrentHashMap<>();
     private final AtomicReference<Consumer<String>> onBinding =
             new AtomicReference<>(payload -> {});
     private volatile boolean pipelineInstalled;
-
-    private record Pending(int id, CompletableFuture<String> future) {
-    }
 
     private CastCdpSession(WebSocket ws) {
         this.ws = ws;
@@ -126,9 +126,14 @@ final class CastCdpSession implements AutoCloseable {
         throw new IllegalStateException("No CDP page target on port " + port);
     }
 
-    /** Prefer a normal tab ({@code type=page}), not extension/background targets. */
+    /**
+     * Prefer a normal tab ({@code type=page}), not extension/background targets.
+     * When several {@code page} targets exist (e.g. starter {@code about:blank} plus the navigated tab),
+     * attach to the tab whose {@code url} is not {@code about:blank} so capture runs on the real document.
+     */
     static String extractPageWebSocketUrl(String jsonListBody) {
         int idx = 0;
+        String fallbackWs = null;
         while (true) {
             int typePage = indexOfExactTypePage(jsonListBody, idx);
             if (typePage < 0) {
@@ -138,14 +143,24 @@ final class CastCdpSession implements AutoCloseable {
             int objStart = jsonListBody.lastIndexOf('{', typePage);
             int objEnd = jsonListBody.indexOf('}', typePage);
             if (objStart >= 0 && objEnd > objStart) {
-                String ws = extractJsonString(jsonListBody.substring(objStart, objEnd + 1), "webSocketDebuggerUrl");
+                String chunk = jsonListBody.substring(objStart, objEnd + 1);
+                String ws = extractJsonString(chunk, "webSocketDebuggerUrl");
                 if (ws != null && ws.startsWith("ws://")) {
-                    return ws;
+                    String url = extractJsonString(chunk, "url");
+                    if (url != null
+                            && !url.isBlank()
+                            && !url.startsWith("about:blank")
+                            && !url.startsWith("chrome://")) {
+                        return ws;
+                    }
+                    if (fallbackWs == null) {
+                        fallbackWs = ws;
+                    }
                 }
             }
             idx = typePage + 1;
         }
-        return null;
+        return fallbackWs;
     }
 
     /** {@code "type":"page"} / {@code "type": "page"} — not {@code background_page}. */
@@ -202,33 +217,90 @@ final class CastCdpSession implements AutoCloseable {
         } catch (Exception e) {
             log.debug("Page.bringToFront: {}", e.toString());
         }
-        send("Page.navigate", "{\"url\":\"" + jsonEscape(homeUrl) + "\"}");
+        // YouTube can be slow; CDP may also delay the ack while the page paints. Do not abort
+        // the cast session — navigation often still proceeds and the inject script boots capture.
+        try {
+            send("Page.navigate", "{\"url\":\"" + jsonEscape(homeUrl) + "\"}", 45, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            log.warn("MSE cast CDP Page.navigate ack timed out → {} (continuing; inject may still run)",
+                    homeUrl);
+        }
         log.info("MSE cast CDP navigate → {}", homeUrl);
     }
 
     private String send(String method, String paramsJson) throws Exception {
+        return send(method, paramsJson, 20, TimeUnit.SECONDS);
+    }
+
+    private String send(String method, String paramsJson, long timeout, TimeUnit unit) throws Exception {
         int id = nextId.getAndIncrement();
         CompletableFuture<String> fut = new CompletableFuture<>();
-        pending.set(new Pending(id, fut));
+        pending.put(id, fut);
         StringBuilder sb = new StringBuilder(128 + paramsJson.length());
         sb.append("{\"id\":").append(id).append(",\"method\":\"").append(method).append("\"");
         sb.append(",\"params\":").append(paramsJson).append('}');
-        ws.sendText(sb.toString(), true);
-        String resp = fut.get(20, TimeUnit.SECONDS);
-        if (resp.contains("\"error\"")) {
-            log.warn("CDP {} error: {}", method, resp.length() > 300 ? resp.substring(0, 300) : resp);
+        try {
+            ws.sendText(sb.toString(), true);
+            String resp = fut.get(timeout, unit);
+            if (resp.contains("\"error\"")) {
+                log.warn("CDP {} error: {}", method, resp.length() > 300 ? resp.substring(0, 300) : resp);
+            }
+            return resp;
+        } finally {
+            pending.remove(id);
         }
-        return resp;
     }
 
     private void onMessage(String msg) {
-        Pending p = pending.get();
-        if (p != null && !p.future().isDone() && matchesResponseId(msg, p.id())) {
-            p.future().complete(msg);
-            return;
+        Integer responseId = extractResponseId(msg);
+        if (responseId != null) {
+            CompletableFuture<String> fut = pending.get(responseId);
+            if (fut != null) {
+                fut.complete(msg);
+                return;
+            }
         }
         if (msg.contains("Runtime.bindingCalled")) {
             handleBindingCalled(msg);
+        }
+    }
+
+    /**
+     * CDP command replies look like {@code {"id":N,"result":...}}; events look like
+     * {@code {"method":"...","params":...}}. Prefer the first top-level numeric id when
+     * {@code method} is absent or appears after {@code id}.
+     */
+    static Integer extractResponseId(String msg) {
+        if (msg == null || msg.isEmpty()) {
+            return null;
+        }
+        int methodAt = msg.indexOf("\"method\"");
+        int idKeyAt = msg.indexOf("\"id\"");
+        if (idKeyAt < 0) {
+            return null;
+        }
+        if (methodAt >= 0 && methodAt < idKeyAt) {
+            return null;
+        }
+        int colon = msg.indexOf(':', idKeyAt);
+        if (colon < 0) {
+            return null;
+        }
+        int start = colon + 1;
+        while (start < msg.length() && msg.charAt(start) == ' ') {
+            start++;
+        }
+        int end = start;
+        while (end < msg.length() && Character.isDigit(msg.charAt(end))) {
+            end++;
+        }
+        if (end == start) {
+            return null;
+        }
+        try {
+            return Integer.parseInt(msg.substring(start, end));
+        } catch (NumberFormatException e) {
+            return null;
         }
     }
 

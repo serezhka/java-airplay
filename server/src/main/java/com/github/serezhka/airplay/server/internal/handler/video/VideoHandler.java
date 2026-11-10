@@ -36,7 +36,9 @@ public class VideoHandler extends ChannelInboundHandlerAdapter {
                 dataConsumer.onVideo(packet.getPayload());
             } else if (packet.getPayloadType() == MirrorPacketLayout.PAYLOAD_CODEC) {
                 byte[] spsPps = prepareSpsPpsNALUnits(packet.getPayload());
-                dataConsumer.onVideo(spsPps);
+                if (spsPps != null) {
+                    dataConsumer.onVideo(spsPps);
+                }
             }
         } catch (Exception e) {
             // Mirror NALs still arrive for a moment after HLS tears the video process down.
@@ -71,18 +73,36 @@ public class VideoHandler extends ChannelInboundHandlerAdapter {
         return true;
     }
 
-    private byte[] prepareSpsPpsNALUnits(byte[] payload) {
+    /**
+     * Parse type-1 codec config into Annex-B SPS+PPS.
+     * @return null if the payload is empty/truncated (phone may probe with a zero-length type-1)
+     */
+    static byte[] prepareSpsPpsNALUnits(byte[] payload) {
+        if (payload == null || payload.length < 11) {
+            // Minimum: 6-byte prefix + 2 spsLen + ≥1 sps + 1 ppsCount + 2 ppsLen
+            log.debug("Skipping type-1 codec packet: too short ({})",
+                    payload == null ? -1 : payload.length);
+            return null;
+        }
         ByteBuf payloadBuf = Unpooled.wrappedBuffer(payload);
         try {
             payloadBuf.readerIndex(6);
 
-            short spsLen = (short) payloadBuf.readUnsignedShort();
+            int spsLen = payloadBuf.readUnsignedShort();
+            if (spsLen <= 0 || payloadBuf.readableBytes() < spsLen + 1 + 2) {
+                log.debug("Skipping type-1 codec packet: bad spsLen={}", spsLen);
+                return null;
+            }
             byte[] sequenceParameterSet = new byte[spsLen];
             payloadBuf.readBytes(sequenceParameterSet);
 
             payloadBuf.skipBytes(1); // pps count
 
-            short ppsLen = (short) payloadBuf.readUnsignedShort();
+            int ppsLen = payloadBuf.readUnsignedShort();
+            if (ppsLen <= 0 || payloadBuf.readableBytes() < ppsLen) {
+                log.debug("Skipping type-1 codec packet: bad ppsLen={}", ppsLen);
+                return null;
+            }
             byte[] pictureParameterSet = new byte[ppsLen];
             payloadBuf.readBytes(pictureParameterSet);
 

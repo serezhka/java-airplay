@@ -183,7 +183,9 @@ final class BrowserCastSession implements AutoCloseable {
                 case CastBindingCodec.Event e -> {
                     if ("error".equals(e.kind())) {
                         log.warn("MSE cast page: {}", e.detail());
-                    } else if ("log".equals(e.kind()) || "captureStarted".equals(e.kind())) {
+                    } else if ("log".equals(e.kind())
+                            || "captureStarted".equals(e.kind())
+                            || "captureEnded".equals(e.kind())) {
                         log.info("MSE cast page [{}]: {}", e.kind(), e.detail());
                     } else {
                         log.debug("MSE cast page event {}: {}", e.kind(), e.detail());
@@ -256,7 +258,8 @@ final class BrowserCastSession implements AutoCloseable {
             cmd.add("--no-sandbox");
             cmd.add("--disable-dev-shm-usage");
         }
-        cmd.add("about:blank");
+        // App window: no tab strip — opening another tab freezes/blacks preferCurrentTab capture.
+        cmd.add("--app=about:blank");
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.redirectErrorStream(true);
         pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);

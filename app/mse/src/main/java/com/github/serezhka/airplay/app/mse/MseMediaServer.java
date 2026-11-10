@@ -72,7 +72,12 @@ final class MseMediaServer implements AutoCloseable {
     private static final AttributeKey<String> WS_PATH = AttributeKey.valueOf("mse.wsPath");
     private static final int HLS_PROXY_MAX_BYTES = 32 * 1024 * 1024;
     /** Pre-WS mirror NALs (SPS often arrives ~300ms before Chromium connects after HLS→mirror). */
-    private static final int MAX_PENDING_NAL_BYTES = 2 * 1024 * 1024;
+    private static final int MAX_PENDING_NAL_BYTES = 512 * 1024;
+    /**
+     * Hard cap so a cold Chromium does not dump a huge AU burst into jmuxer (that left a
+     * permanent black/Starting window in testing). Keep about half a second at 30fps.
+     */
+    private static final int MAX_PENDING_NAL_FRAMES = 16;
 
     private final EventLoopGroup boss = NettyEventLoops.create();
     private final EventLoopGroup worker = NettyEventLoops.create();
@@ -95,6 +100,14 @@ final class MseMediaServer implements AutoCloseable {
     private volatile int port = -1;
     private volatile boolean hlsActive;
     private volatile boolean mirrorActive;
+    /** Last mirror fps / HLS URI so a late Chromium control socket can catch up. */
+    private volatile int lastMirrorFps = 30;
+    private volatile String lastHlsPlaylistUri;
+    /** Bumped on every {@link #startMirror}; resync reuses the same epoch so the page does not tear down. */
+    private final AtomicInteger mirrorEpoch = new AtomicInteger();
+    private volatile int lastMirrorEpoch;
+    /** Last Annex-B that contained SPS — re-sent when /mirror reconnects after a dead flush. */
+    private volatile byte[] lastCodecAnnexB;
     private volatile double mediaDurationHint;
     private volatile double volumeLinear = 1.0;
 
@@ -161,6 +174,10 @@ final class MseMediaServer implements AutoCloseable {
         return !controlClients.isEmpty();
     }
 
+    boolean hasMirrorClient() {
+        return !mirrorClients.isEmpty();
+    }
+
     /** After Chromium relaunch, wait again for the page {@code ready} event. */
     void resetPageReady() {
         pageReady = new CountDownLatch(1);
@@ -168,22 +185,56 @@ final class MseMediaServer implements AutoCloseable {
 
     void startMirror(int fps) {
         mirrorActive = true;
+        lastMirrorFps = fps > 0 ? fps : 30;
+        lastMirrorEpoch = mirrorEpoch.incrementAndGet();
+        lastHlsPlaylistUri = null;
+        lastCodecAnnexB = null;
         clearHlsClock(false);
         clearPendingNals();
         if (!hasControlClient()) {
             log.warn("MSE startMirror with no control client — Chromium page not connected");
         }
-        sendControl("{\"cmd\":\"startMirror\",\"wsUrl\":\"" + mirrorWsUrl()
-                + "\",\"audioWsUrl\":\"" + audioWsUrl() + "\",\"fps\":" + fps + "}");
+        sendStartMirrorControl(lastMirrorFps, lastMirrorEpoch);
         applyVolume();
     }
 
     void stopMirror() {
         mirrorActive = false;
+        lastCodecAnnexB = null;
         clearPendingNals();
         closeMirrorClients();
         closeAudioClients();
         sendControl("{\"cmd\":\"stopMirror\"}");
+    }
+
+    /**
+     * Chromium often connects /control after SETUP already called {@link #startMirror}/{@link #startHls}.
+     * Re-push the active presentation so the page opens /mirror or loads HLS (avoids a black idle window).
+     */
+    void resyncPresentationToControlClients() {
+        if (!hasControlClient()) {
+            return;
+        }
+        if (mirrorActive) {
+            log.info("MSE resync startMirror → late control client (fps={} epoch={})",
+                    lastMirrorFps, lastMirrorEpoch);
+            sendStartMirrorControl(lastMirrorFps, lastMirrorEpoch);
+            applyVolume();
+            return;
+        }
+        if (hlsActive && lastHlsPlaylistUri != null && !lastHlsPlaylistUri.isBlank()) {
+            String proxied = hlsProxyUrl(lastHlsPlaylistUri);
+            log.info("MSE resync startHls → late control client epoch={}", activeHlsEpoch);
+            sendControl("{\"cmd\":\"startHls\",\"url\":" + jsonString(proxied)
+                    + ",\"epoch\":" + activeHlsEpoch + "}");
+            applyVolume();
+        }
+    }
+
+    private void sendStartMirrorControl(int fps, int epoch) {
+        sendControl("{\"cmd\":\"startMirror\",\"wsUrl\":\"" + mirrorWsUrl()
+                + "\",\"audioWsUrl\":\"" + audioWsUrl() + "\",\"fps\":" + fps
+                + ",\"epoch\":" + epoch + "}");
     }
 
     /**
@@ -236,6 +287,7 @@ final class MseMediaServer implements AutoCloseable {
         activeHlsEpoch = epoch;
         hlsActive = true;
         mirrorActive = false;
+        lastHlsPlaylistUri = playlistUri;
         hlsPaused = false;
         hlsEnded = false;
         mediaDurationHint = 0;
@@ -358,6 +410,7 @@ final class MseMediaServer implements AutoCloseable {
         positionAnchorNanos = 0;
         scrubHoldSeconds = -1;
         if (resetSnapshot) {
+            lastHlsPlaylistUri = null;
             lastPlayback.set(new PlaybackSnapshot(0, 0, 0, "idle"));
         }
     }
@@ -388,6 +441,9 @@ final class MseMediaServer implements AutoCloseable {
         if (nal == null || nal.length == 0) {
             return;
         }
+        if (annexBContainsNalType(nal, 7)) {
+            lastCodecAnnexB = nal.clone();
+        }
         if (mirrorClients.isEmpty()) {
             if (mirrorActive) {
                 bufferPendingNal(nal);
@@ -406,7 +462,8 @@ final class MseMediaServer implements AutoCloseable {
                 pendingNals.clear();
                 pendingNalBytes = 0;
             }
-            while (pendingNalBytes + copy.length > MAX_PENDING_NAL_BYTES && !pendingNals.isEmpty()) {
+            while ((pendingNalBytes + copy.length > MAX_PENDING_NAL_BYTES
+                    || pendingNals.size() >= MAX_PENDING_NAL_FRAMES) && !pendingNals.isEmpty()) {
                 byte[] dropped = pendingNals.removeFirst();
                 pendingNalBytes -= dropped.length;
             }
@@ -671,7 +728,11 @@ final class MseMediaServer implements AutoCloseable {
                     }
                     if ("/mirror".equals(path)) {
                         mirrorClients.add(ctx.channel());
-                        log.debug("MSE mirror client {}", ctx.channel().remoteAddress());
+                        log.info("MSE mirror WS connected — flushing buffered NALs");
+                        byte[] codec = lastCodecAnnexB;
+                        if (codec != null) {
+                            mirrorClients.writeAndFlush(new BinaryWebSocketFrame(Unpooled.copiedBuffer(codec)));
+                        }
                         flushPendingNals();
                     } else if ("/audio".equals(path)) {
                         audioClients.add(ctx.channel());
@@ -680,6 +741,8 @@ final class MseMediaServer implements AutoCloseable {
                         controlClients.add(ctx.channel());
                         log.info("MSE control client connected");
                         applyVolume();
+                        // Do not resync here — page emits ready next; a second startMirror would
+                        // tear down the first /mirror WS after NALs were already flushed into it.
                     }
                 });
                 return;
@@ -865,6 +928,7 @@ final class MseMediaServer implements AutoCloseable {
         if (payload.contains("\"event\":\"ready\"")) {
             pageReady.countDown();
             log.info("MSE page ready");
+            resyncPresentationToControlClients();
             return;
         }
         if (payload.contains("\"event\":\"ended\"")) {
@@ -913,7 +977,12 @@ final class MseMediaServer implements AutoCloseable {
             return;
         }
         if (payload.contains("\"event\":\"log\"")) {
-            log.debug("MSE page: {}", payload);
+            if (payload.contains("loader fallback") || payload.contains("jmuxer")
+                    || payload.contains("mirror ws") || payload.contains("SPS")) {
+                log.info("MSE page: {}", payload);
+            } else {
+                log.debug("MSE page: {}", payload);
+            }
         }
     }
 
