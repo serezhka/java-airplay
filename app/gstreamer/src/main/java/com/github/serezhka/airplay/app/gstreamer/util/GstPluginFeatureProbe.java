@@ -33,19 +33,33 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @Slf4j
 public final class GstPluginFeatureProbe {
 
-    private static final String[] NV_DECODERS = {
-            "nvh264dec", "nvh265dec", "nvvp8dec", "nvvp9dec", "nvav1dec"
+    /**
+     * H.264 decode preference for HLS {@code playbin3} autoplug. First READY wins.
+     * d3d11 before NVIDIA so Windows keeps zero-copy into {@code d3d11videosink}.
+     */
+    private static final String[] H264_HW_PREFERENCE = {
+            "d3d11h264dec",
+            "d3d12h264dec",
+            "vah264dec",
+            "nvh264dec",
+            "vtdec_h264"
     };
 
-    /** Above {@link PluginFeature.Rank#PRIMARY} so a healthy curl wins over soup. */
-    private static final int CURL_PREFERRED_RANK = 300;
+    /** Non-H.264 NVIDIA factories: demote only when READY fails. */
+    private static final String[] NV_EXTRA_DECODERS = {
+            "nvh265dec", "nvvp8dec", "nvvp9dec", "nvav1dec"
+    };
+
+    /** Above {@link PluginFeature.Rank#PRIMARY} so a healthy curl / HW decoder wins autoplug. */
+    private static final int PREFERRED_RANK = 300;
+    private static final int CURL_PREFERRED_RANK = PREFERRED_RANK;
     private static final int CURL_PROBE_TIMEOUT_MS = 2500;
 
     private GstPluginFeatureProbe() {
     }
 
     /**
-     * Probe HTTP sources and NVIDIA decoders; adjust registry ranks for subsequent autoplug
+     * Probe HTTP sources and video decoders; adjust registry ranks for subsequent autoplug
      * (HLS {@code playbin3}). Safe to call once after {@code Gst.init}.
      */
     public static void tuneAfterInit() {
@@ -55,7 +69,8 @@ public final class GstPluginFeatureProbe {
             return;
         }
         probeHttpSources();
-        probeNvDecoders();
+        probeH264Decoders();
+        probeNvExtraDecoders();
     }
 
     private static void probeHttpSources() {
@@ -65,12 +80,12 @@ public final class GstPluginFeatureProbe {
         }
         boolean curlOk = probeCurlHttpsrc();
         if (curlOk) {
-            setRank("curlhttpsrc", CURL_PREFERRED_RANK);
+            setRank("curlhttpsrc", PREFERRED_RANK);
             // Soft-stop still orphans playbins; prefer curl when it works so libsoup is not
             // the in-flight HTTP stack under HLS teardown.
             setRank("souphttpsrc", PluginFeature.Rank.SECONDARY.intValue());
             log.info("HTTP src probe: curlhttpsrc OK -> rank {}; souphttpsrc -> SECONDARY",
-                    CURL_PREFERRED_RANK);
+                    PREFERRED_RANK);
         } else {
             setRank("curlhttpsrc", PluginFeature.Rank.NONE.intValue());
             log.info("HTTP src probe: curlhttpsrc unhealthy -> NONE; souphttpsrc keeps default rank");
@@ -217,43 +232,76 @@ public final class GstPluginFeatureProbe {
         }
     }
 
-    private static void probeNvDecoders() {
-        for (String name : NV_DECODERS) {
+    /**
+     * Pick the best installed H.264 HW decoder for HLS autoplug. Prefer d3d11 on Windows
+     * (matches {@code d3d11videosink}); demote READY failures so playbin does not stutter
+     * on a half-broken NVIDIA factory.
+     */
+    private static void probeH264Decoders() {
+        String winner = null;
+        for (String name : H264_HW_PREFERENCE) {
             PluginFeature feature = lookup(name);
             if (feature == null) {
                 continue;
             }
-            Element element = null;
-            try {
-                element = ElementFactory.make(name, "probe-" + name);
-                if (element == null) {
-                    feature.setRank(PluginFeature.Rank.NONE);
-                    log.info("Demoted {}: ElementFactory.make returned null", name);
-                    continue;
-                }
-                StateChangeReturn ret = element.setState(State.READY);
-                if (ret == StateChangeReturn.FAILURE) {
-                    feature.setRank(PluginFeature.Rank.NONE);
-                    log.info("Demoted {}: setState(READY) failed", name);
+            if (probeElementReady(name)) {
+                if (winner == null) {
+                    winner = name;
+                    feature.setRank(PREFERRED_RANK);
+                    log.info("HLS H.264 decoder preferred: {} (rank {})", name, PREFERRED_RANK);
                 } else {
-                    // Leave registry rank — playbin can pick HW when CUDA/context is usable.
-                    log.info("Keeping {} (READY ok, rank {})", name, feature.getRank());
+                    // Keep as fallback below the winner, above software when possible.
+                    feature.setRank(PluginFeature.Rank.SECONDARY);
+                    log.info("HLS H.264 decoder fallback: {} -> SECONDARY", name);
                 }
-            } catch (Throwable t) {
+            } else {
                 feature.setRank(PluginFeature.Rank.NONE);
-                log.info("Demoted {}: {}", name, t.toString());
-            } finally {
-                if (element != null) {
-                    try {
-                        element.setState(State.NULL);
-                    } catch (Throwable ignored) {
-                        // ignore
-                    }
-                    try {
-                        element.dispose();
-                    } catch (Throwable ignored) {
-                        // ignore
-                    }
+                log.info("Demoted {}: READY probe failed", name);
+            }
+        }
+        if (winner == null) {
+            log.info("HLS H.264: no HW decoder READY; playbin keeps default (usually avdec_h264)");
+        }
+    }
+
+    private static void probeNvExtraDecoders() {
+        for (String name : NV_EXTRA_DECODERS) {
+            PluginFeature feature = lookup(name);
+            if (feature == null) {
+                continue;
+            }
+            if (probeElementReady(name)) {
+                log.info("Keeping {} (READY ok, rank {})", name, feature.getRank());
+            } else {
+                feature.setRank(PluginFeature.Rank.NONE);
+                log.info("Demoted {}: READY probe failed", name);
+            }
+        }
+    }
+
+    private static boolean probeElementReady(String factoryName) {
+        Element element = null;
+        try {
+            element = ElementFactory.make(factoryName, "probe-" + factoryName);
+            if (element == null) {
+                return false;
+            }
+            StateChangeReturn ret = element.setState(State.READY);
+            return ret != StateChangeReturn.FAILURE;
+        } catch (Throwable t) {
+            log.debug("READY probe {}: {}", factoryName, t.toString());
+            return false;
+        } finally {
+            if (element != null) {
+                try {
+                    element.setState(State.NULL);
+                } catch (Throwable ignored) {
+                    // ignore
+                }
+                try {
+                    element.dispose();
+                } catch (Throwable ignored) {
+                    // ignore
                 }
             }
         }
