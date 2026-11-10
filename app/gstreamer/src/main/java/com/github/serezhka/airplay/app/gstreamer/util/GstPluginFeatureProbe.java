@@ -1,5 +1,6 @@
 package com.github.serezhka.airplay.app.gstreamer.util;
 
+import com.sun.jna.Platform;
 import lombok.extern.slf4j.Slf4j;
 import org.freedesktop.gstreamer.Bus;
 import org.freedesktop.gstreamer.Element;
@@ -22,24 +23,24 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Post-{@code Gst.init} feature ranking: keep hardware and HTTP sources that actually work
- * on this host, demote only what fails a short probe.
+ * Post-{@code Gst.init} feature ranking: demote only what fails a short probe.
  * <p>
- * Do not set {@code GST_PLUGIN_FEATURE_RANK} before init for soup/curl/nv — that forced
- * curl on Windows (multi hang) and permanently dropped NVIDIA decoders that can be fine
- * when CUDA is usable. Honors a user-supplied {@code GST_PLUGIN_FEATURE_RANK} and skips
- * auto-tuning.
+ * Do not blind-set {@code GST_PLUGIN_FEATURE_RANK} before init. Honors a user-supplied
+ * {@code GST_PLUGIN_FEATURE_RANK} and skips auto-tuning.
+ * <p>
+ * HTTP: Windows {@code curlhttpsrc} hangs in multi — demote it without running a live
+ * probe pipeline (a hung probe left running can poison later HLS downloads). Elsewhere,
+ * probe curl and prefer it when healthy (soft-stop + soup still risks JVM abort).
+ * <p>
+ * H.264 HW: only demote READY failures. Do <b>not</b> boost ranks — forcing
+ * {@code d3d11h264dec}/{@code nvh264dec} to 300 correlated with YouTube
+ * "Couldn't download fragments" / no first picture on the Windows lab box; default
+ * registry ranks already pick usable HW when present.
  */
 @Slf4j
 public final class GstPluginFeatureProbe {
 
-    /**
-     * H.264 decode preference for HLS {@code playbin3} autoplug. First READY wins.
-     * NVIDIA before d3d11: on some Windows hosts {@code d3d11h264dec} reports READY but
-     * HLS never presents (adaptivedemux then dies with "Couldn't download fragments"),
-     * while {@code nvh264dec} plays YouTube cleanly into {@code d3d11videosink}.
-     */
-    private static final String[] H264_HW_PREFERENCE = {
+    private static final String[] H264_HW_DECODERS = {
             "nvh264dec",
             "vah264dec",
             "d3d11h264dec",
@@ -52,9 +53,8 @@ public final class GstPluginFeatureProbe {
             "nvh265dec", "nvvp8dec", "nvvp9dec", "nvav1dec"
     };
 
-    /** Above {@link PluginFeature.Rank#PRIMARY} so a healthy curl / HW decoder wins autoplug. */
-    private static final int PREFERRED_RANK = 300;
-    private static final int CURL_PREFERRED_RANK = PREFERRED_RANK;
+    /** Above {@link PluginFeature.Rank#PRIMARY} so a healthy curl wins over soup. */
+    private static final int CURL_PREFERRED_RANK = 300;
     private static final int CURL_PROBE_TIMEOUT_MS = 2500;
 
     private GstPluginFeatureProbe() {
@@ -71,8 +71,27 @@ public final class GstPluginFeatureProbe {
             return;
         }
         probeHttpSources();
-        probeH264Decoders();
-        probeNvExtraDecoders();
+        demoteBrokenHwDecoders();
+        preferNonD3dH264OnWindows();
+    }
+
+    /**
+     * On the Windows lab box {@code d3d12h264dec} defaults above {@code nvh264dec} (258 vs
+     * 257) and {@code d3d11h264dec} can READY while YouTube HLS never presents. Demote both
+     * so NVIDIA (or software) wins autoplug into {@code d3d11videosink}.
+     */
+    private static void preferNonD3dH264OnWindows() {
+        if (!Platform.isWindows()) {
+            return;
+        }
+        for (String name : new String[]{"d3d11h264dec", "d3d12h264dec"}) {
+            PluginFeature feature = lookup(name);
+            if (feature == null) {
+                continue;
+            }
+            feature.setRank(PluginFeature.Rank.SECONDARY);
+            log.info("Windows HLS: {} -> SECONDARY (prefer nv/software over d3d H.264)", name);
+        }
     }
 
     private static void probeHttpSources() {
@@ -80,14 +99,18 @@ public final class GstPluginFeatureProbe {
             log.info("curlhttpsrc not installed; leaving souphttpsrc at default rank");
             return;
         }
+        // Windows MSVC curlhttpsrc multi-hangs; never start a probe pipeline here.
+        if (Platform.isWindows()) {
+            setRank("curlhttpsrc", PluginFeature.Rank.NONE.intValue());
+            log.info("HTTP src: Windows -> curlhttpsrc NONE (no live probe); souphttpsrc default");
+            return;
+        }
         boolean curlOk = probeCurlHttpsrc();
         if (curlOk) {
-            setRank("curlhttpsrc", PREFERRED_RANK);
-            // Soft-stop still orphans playbins; prefer curl when it works so libsoup is not
-            // the in-flight HTTP stack under HLS teardown.
+            setRank("curlhttpsrc", CURL_PREFERRED_RANK);
             setRank("souphttpsrc", PluginFeature.Rank.SECONDARY.intValue());
             log.info("HTTP src probe: curlhttpsrc OK -> rank {}; souphttpsrc -> SECONDARY",
-                    PREFERRED_RANK);
+                    CURL_PREFERRED_RANK);
         } else {
             setRank("curlhttpsrc", PluginFeature.Rank.NONE.intValue());
             log.info("HTTP src probe: curlhttpsrc unhealthy -> NONE; souphttpsrc keeps default rank");
@@ -234,50 +257,26 @@ public final class GstPluginFeatureProbe {
         }
     }
 
-    /**
-     * Pick the best installed H.264 HW decoder for HLS autoplug. Prefer d3d11 on Windows
-     * (matches {@code d3d11videosink}); demote READY failures so playbin does not stutter
-     * on a half-broken NVIDIA factory.
-     */
-    private static void probeH264Decoders() {
-        String winner = null;
-        for (String name : H264_HW_PREFERENCE) {
-            PluginFeature feature = lookup(name);
-            if (feature == null) {
-                continue;
-            }
-            if (probeElementReady(name)) {
-                if (winner == null) {
-                    winner = name;
-                    feature.setRank(PREFERRED_RANK);
-                    log.info("HLS H.264 decoder preferred: {} (rank {})", name, PREFERRED_RANK);
-                } else {
-                    // Keep as fallback below the winner, above software when possible.
-                    feature.setRank(PluginFeature.Rank.SECONDARY);
-                    log.info("HLS H.264 decoder fallback: {} -> SECONDARY", name);
-                }
-            } else {
-                feature.setRank(PluginFeature.Rank.NONE);
-                log.info("Demoted {}: READY probe failed", name);
-            }
+    /** Demote HW decoders that cannot reach READY; leave working ones at registry defaults. */
+    private static void demoteBrokenHwDecoders() {
+        for (String name : H264_HW_DECODERS) {
+            demoteIfNotReady(name);
         }
-        if (winner == null) {
-            log.info("HLS H.264: no HW decoder READY; playbin keeps default (usually avdec_h264)");
+        for (String name : NV_EXTRA_DECODERS) {
+            demoteIfNotReady(name);
         }
     }
 
-    private static void probeNvExtraDecoders() {
-        for (String name : NV_EXTRA_DECODERS) {
-            PluginFeature feature = lookup(name);
-            if (feature == null) {
-                continue;
-            }
-            if (probeElementReady(name)) {
-                log.info("Keeping {} (READY ok, rank {})", name, feature.getRank());
-            } else {
-                feature.setRank(PluginFeature.Rank.NONE);
-                log.info("Demoted {}: READY probe failed", name);
-            }
+    private static void demoteIfNotReady(String name) {
+        PluginFeature feature = lookup(name);
+        if (feature == null) {
+            return;
+        }
+        if (probeElementReady(name)) {
+            log.info("Keeping {} (READY ok, rank {})", name, feature.getRank());
+        } else {
+            feature.setRank(PluginFeature.Rank.NONE);
+            log.info("Demoted {}: READY probe failed", name);
         }
     }
 
