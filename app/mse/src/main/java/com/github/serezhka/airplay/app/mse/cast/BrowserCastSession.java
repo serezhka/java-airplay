@@ -258,8 +258,9 @@ final class BrowserCastSession implements AutoCloseable {
             cmd.add("--no-sandbox");
             cmd.add("--disable-dev-shm-usage");
         }
-        // App window: no tab strip — opening another tab freezes/blacks preferCurrentTab capture.
-        cmd.add("--app=about:blank");
+        // Plain tab (not --app=): --app=about:blank skips DevToolsActivePort on some CI
+        // Chromium builds (headless + autoCapture), so cast smokes never attach CDP.
+        cmd.add("about:blank");
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.redirectErrorStream(true);
         pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
