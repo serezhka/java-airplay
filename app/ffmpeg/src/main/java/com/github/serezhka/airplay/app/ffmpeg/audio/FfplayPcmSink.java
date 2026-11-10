@@ -125,7 +125,7 @@ public final class FfplayPcmSink implements AutoCloseable {
                     continue;
                 }
                 out.write(chunk);
-                // Avoid flush-per-chunk (adds tens of ms of syscall latency on Pulse/xrdp).
+                // Avoid flush-per-chunk (adds tens of ms of syscall latency on Pulse).
                 if (queue.isEmpty()) {
                     out.flush();
                 }

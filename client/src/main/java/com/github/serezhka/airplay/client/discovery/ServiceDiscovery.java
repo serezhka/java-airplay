@@ -86,6 +86,7 @@ public class ServiceDiscovery implements AutoCloseable {
             } catch (Exception e) {
                 log.warn("Browse on {} failed: {}", bind.getHostAddress(), e.toString());
             }
+            mergeProbeInto(byKey, AirplayMdnsProbe.browse(bind, (int) Math.min(waitMs, 2500)));
         }
         return sorted(byKey);
     }
@@ -159,6 +160,8 @@ public class ServiceDiscovery implements AutoCloseable {
                 log.debug("Periodic browse: {}", e.toString());
             }
         }
+        // Lenient UDP probe recovers TVs JmDNS/avahi drop (e.g. instance names with ").
+        seenKeys.addAll(probeBrowse());
         boolean needHeal;
         synchronized (devices) {
             needHeal = !seenKeys.containsAll(devices.keySet());
@@ -166,6 +169,7 @@ public class ServiceDiscovery implements AutoCloseable {
         if (needHeal) {
             // Long-lived JmDNS cache can drop a still-live TV; a fresh browser recovers it.
             seenKeys.addAll(ephemeralBrowse());
+            seenKeys.addAll(probeBrowse());
         }
         boolean changed = false;
         synchronized (devices) {
@@ -236,6 +240,70 @@ public class ServiceDiscovery implements AutoCloseable {
             log.info("Discovery healed {} device(s) via ephemeral browse", keys.size());
         }
         return keys;
+    }
+
+    private Set<String> probeBrowse() {
+        Set<String> keys = new HashSet<>();
+        for (InetAddress bind : ipv4Binds(includeLoopback)) {
+            for (AirplayMdnsProbe.Found found : AirplayMdnsProbe.browse(bind, 2_000)) {
+                keys.addAll(upsertFound(found));
+            }
+        }
+        if (!keys.isEmpty()) {
+            log.debug("Discovery probe matched {} device key(s)", keys.size());
+        }
+        return keys;
+    }
+
+    private Set<String> upsertFound(AirplayMdnsProbe.Found found) {
+        if (found == null || found.address() == null || found.port() <= 0) {
+            return Set.of();
+        }
+        if (!includeLoopback && isLoopbackAddress(found.address())) {
+            return Set.of();
+        }
+        Info info = new Info(
+                found.name(),
+                found.address(),
+                found.port(),
+                found.passwordRequired(),
+                found.deviceId() == null ? "" : found.deviceId(),
+                found.features(),
+                found.flags());
+        String key = info.address() + ":" + info.port();
+        synchronized (devices) {
+            missCounts.remove(key);
+            Info prev = devices.put(key, info);
+            if (prev == null || !prev.equals(info)) {
+                publish();
+            }
+        }
+        return Set.of(key);
+    }
+
+    private static void mergeProbeInto(Map<String, Info> byKey, List<AirplayMdnsProbe.Found> found) {
+        for (AirplayMdnsProbe.Found f : found) {
+            if (f.port() <= 0 || f.address() == null) {
+                continue;
+            }
+            Info info = new Info(
+                    f.name(),
+                    f.address(),
+                    f.port(),
+                    f.passwordRequired(),
+                    f.deviceId() == null ? "" : f.deviceId(),
+                    f.features(),
+                    f.flags());
+            byKey.putIfAbsent(info.address() + ":" + info.port(), info);
+        }
+    }
+
+    private static boolean isLoopbackAddress(String address) {
+        try {
+            return InetAddress.getByName(address).isLoopbackAddress();
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private void publish() {

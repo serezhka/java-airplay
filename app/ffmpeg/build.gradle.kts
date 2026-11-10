@@ -28,3 +28,10 @@ extra["integrationTestTags"] = mapOf(
     "ffmpeg" to "Runs the FFmpeg playback smoke test.",
     "bench" to "Runs the FFmpeg playback benchmark."
 )
+
+tasks.register<JavaExec>("ffmpegCastToHost") {
+    group = "verification"
+    description = "LAN cast lavfi testsrc via FFmpeg CaptureSource → receiver (manual)"
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("com.github.serezhka.airplay.app.ffmpeg.FfmpegCastToHostSmokeMain")
+}

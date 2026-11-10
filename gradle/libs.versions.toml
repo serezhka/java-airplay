@@ -20,6 +20,7 @@ gstreamerCore = "1.4.0"
 gstreamerSwing = "0.9.0"
 m3u8 = "0.30"
 systemTray = "4.4"
+flatlaf = "3.6.1"
 javacv = "1.5.14"
 ffmpegPlatform = "8.1.2-1.5.14"
 jakartaAnnotation = "3.0.0"
@@ -41,6 +42,7 @@ gst1-java-core = { module = "org.freedesktop.gstreamer:gst1-java-core", version.
 gst1-java-swing = { module = "org.freedesktop.gstreamer:gst1-java-swing", version.ref = "gstreamerSwing" }
 m3u8-parser = { module = "io.lindstrom:m3u8-parser", version.ref = "m3u8" }
 system-tray = { module = "com.dorkbox:SystemTray", version.ref = "systemTray" }
+flatlaf = { module = "com.formdev:flatlaf", version.ref = "flatlaf" }
 javacv = { module = "org.bytedeco:javacv", version.ref = "javacv" }
 ffmpeg-platform = { module = "org.bytedeco:ffmpeg-platform", version.ref = "ffmpegPlatform" }
 jakarta-annotation-api = { module = "jakarta.annotation:jakarta.annotation-api", version.ref = "jakartaAnnotation" }
