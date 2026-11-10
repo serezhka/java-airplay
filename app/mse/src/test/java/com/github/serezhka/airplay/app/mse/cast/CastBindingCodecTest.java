@@ -63,6 +63,9 @@ class CastBindingCodecTest {
             org.junit.jupiter.api.Assertions.assertTrue(js.contains("var ENABLE_AUDIO = true"));
             org.junit.jupiter.api.Assertions.assertTrue(js.contains("var ALLOW_FAKE_AUDIO = true"));
             org.junit.jupiter.api.Assertions.assertTrue(js.contains("pumpSyntheticAudio"));
+            // Headless CI: software WebCodecs first — hardware can configure then emit nothing.
+            org.junit.jupiter.api.Assertions.assertTrue(
+                    js.contains("['prefer-software', 'no-preference', 'prefer-hardware']"));
         } finally {
             System.clearProperty("airplay.mse.cast.autoCapture");
         }

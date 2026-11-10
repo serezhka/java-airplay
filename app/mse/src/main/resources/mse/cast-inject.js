@@ -158,8 +158,11 @@
     if (typeof VideoEncoder === 'undefined') throw new Error('VideoEncoder unsupported');
     encodeSize = fitSize(width, height, MAX_W, MAX_H);
     var codecs = ['avc1.42E01F', 'avc1.4D401F', 'avc1.64001F', 'avc1.640028', 'avc1.42E01E'];
-    // Prefer hardware first — software AVC at 30fps + CDP base64 saturates and looks like 1 fps on TV.
-    var hwModes = ['prefer-hardware', 'no-preference', 'prefer-software'];
+    // Product / headed: hardware first (software AVC + CDP base64 saturates ~1 fps on TV).
+    // CI autoCapture (often headless): hardware configure can "succeed" then emit zero chunks.
+    var hwModes = ALLOW_FAKE_AUDIO
+        ? ['prefer-software', 'no-preference', 'prefer-hardware']
+        : ['prefer-hardware', 'no-preference', 'prefer-software'];
     var lastErr = null;
     for (var hi = 0; hi < hwModes.length; hi++) {
       for (var ci = 0; ci < codecs.length; ci++) {
