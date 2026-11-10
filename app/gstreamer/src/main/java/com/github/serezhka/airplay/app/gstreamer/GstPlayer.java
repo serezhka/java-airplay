@@ -4,6 +4,7 @@ import com.github.serezhka.airplay.app.common.support.NativeProcessLog;
 import com.github.serezhka.airplay.app.gstreamer.display.GstFullscreenWindow;
 import com.github.serezhka.airplay.app.gstreamer.display.GstVideoSinkFactory;
 import com.github.serezhka.airplay.app.gstreamer.hls.GstHlsPipeline;
+import com.github.serezhka.airplay.app.gstreamer.util.GstPluginFeatureProbe;
 import com.github.serezhka.airplay.app.gstreamer.util.GstPlayerUtils;
 import com.github.serezhka.airplay.protocol.media.AudioStreamInfo;
 import com.github.serezhka.airplay.protocol.media.EndListDuration;
@@ -37,48 +38,10 @@ public class GstPlayer implements Playback {
         GLib.setEnv("GST_DEBUG_NO_COLOR", "1", true);
         GLib.setEnv("GST_DEBUG_FILE", NativeProcessLog.playerLogFile("gstreamer").toString(), true);
         GLib.setEnv("GST_DEBUG", System.getProperty("airplay.gst.debug", "3"), true);
-        preferSoftwareVideoDecode();
         Gst.init(Version.of(1, 10), "java-airplay");
-    }
-
-    /**
-     * Tune plugin ranks before {@link Gst#init}.
-     * <p>
-     * Device H.264 decoders drop frames when they have no usable context — demote them.
-     * Prefer {@code curlhttpsrc} over {@code souphttpsrc}: even after soft-stop (no
-     * {@code setState(NULL)}), in-flight libsoup completions can still abort the JVM
-     * seconds later. Soft-stop alone is not enough while soup is the HTTP src.
-     * <p>
-     * Do <b>not</b> demote {@code hlsdemux2}: {@code playbin3}/{@code decodebin3} need a
-     * streams-aware adaptive demuxer. Ranking it {@code NONE} forces legacy {@code hlsdemux},
-     * and playbin3 then fails with a misleading "missing a plug-in" (code=12).
-     */
-    private static void preferSoftwareVideoDecode() {
-        String[] demote = {
-                "nvh264dec", "nvh265dec", "nvvp8dec", "nvvp9dec", "nvav1dec",
-                "souphttpsrc"
-        };
-        String rank = System.getenv("GST_PLUGIN_FEATURE_RANK");
-        if (rank == null) {
-            rank = "";
-        }
-        if (!rank.contains("curlhttpsrc:")) {
-            if (!rank.isBlank()) {
-                rank = rank + ",";
-            }
-            rank = rank + "curlhttpsrc:300";
-        }
-        for (String feature : demote) {
-            if (rank.contains(feature + ":")) {
-                continue;
-            }
-            if (!rank.isBlank()) {
-                rank = rank + ",";
-            }
-            rank = rank + feature + ":NONE";
-        }
-        GLib.setEnv("GST_PLUGIN_FEATURE_RANK", rank, true);
-        log.info("GStreamer feature rank: {}", rank);
+        // Ranks after init: probe curl/NV instead of blind demote (Windows curl hang, CUDA).
+        // Do not demote hlsdemux2 — playbin3 needs the streams-aware demuxer.
+        GstPluginFeatureProbe.tuneAfterInit();
     }
 
     private final Pipeline h264Pipeline;
