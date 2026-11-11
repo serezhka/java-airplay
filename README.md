@@ -11,6 +11,7 @@
   [![GitHub release][badge-release]][releases]&nbsp;
   [![License: MIT][badge-license]][license]&nbsp;
   [![Java][badge-java]][openjdk]&nbsp;
+  [![Donate][badge-donate]][donate]&nbsp;
   ![ViewCount][badge-views]
 
 </div>
@@ -126,7 +127,8 @@ Install: [FFmpeg download](https://ffmpeg.org/download.html)
 
 Uses a bundled localhost page (hls.js, jmuxer, WebCodecs) inside a system Chromium
 class browser — no GStreamer or FFmpeg install required for **receive** playback.
-Mirror AAC-ELD/LC and ALAC are decoded in the page (WASM helpers ship in the jar).
+Mirror AAC-ELD/LC and ALAC are decoded in the page (WASM helpers ship in the jar;
+license notices are under `mse/` inside the fat jar).
 
 Install a recent **Google Chrome**, **Chromium**, or **Microsoft Edge**, or set
 `-Dairplay.mse.browser=` to the binary path.
@@ -139,6 +141,14 @@ Set `dump.enabled=true` to record beside the live player under
 - `protocol/` — RTSP/HTTP captures
 - `media/` — decrypted `.h264` / remuxed `.mp4`, audio `.caf` / `.aac`
 - `extras/` — HLS playlists, artwork, DMAP metadata when present
+
+## Support
+
+If this project helps you, consider a one-time donation (suggested €10, any amount welcome):
+
+[![Donate with Stripe][badge-donate]][donate]
+
+The tray **Donate** item opens the same Stripe Payment Link.
 
 ## Related projects
 
@@ -156,8 +166,10 @@ This monorepo unites the former:
 [badge-release]: https://img.shields.io/github/v/release/serezhka/java-airplay
 [badge-license]: https://img.shields.io/badge/license-MIT-blue.svg
 [badge-java]: https://img.shields.io/badge/Java-21-orange?logo=openjdk&logoColor=white
+[badge-donate]: https://img.shields.io/badge/Donate-Stripe-635bff?logo=stripe&logoColor=white
 [badge-views]: https://views.whatilearened.today/views/github/serezhka/java-airplay.svg
 [ci]: https://github.com/serezhka/java-airplay/actions/workflows/ci.yaml
 [releases]: https://github.com/serezhka/java-airplay/releases
+[donate]: https://donate.stripe.com/dRm5kDf2u8L75Se37I7EQ04
 [license]: https://opensource.org/licenses/MIT
 [openjdk]: https://openjdk.org/

@@ -53,7 +53,8 @@ jobs:
           distribution: temurin
       - uses: gradle/actions/setup-gradle@v6
       - uses: ./.github/actions/setup-native-player
-        timeout-minutes: 8
+        # apt DNS/mirror blips on ubuntu-latest; setup retries inside the action.
+        timeout-minutes: 12
         with:
           player: ${{ matrix.player }}
       - name: Integration test
