@@ -29,13 +29,21 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Tray: Cast submenu + Exit.
+ * Tray: Cast submenu + Donate / Github / Exit.
  * Click a device to connect; click again to disconnect. Stopping cast must not
- * tear down the receiver — Exit stays fixed on the root menu, and Cast-submenu
- * rebuilds are deferred off the GTK click path.
+ * tear down the receiver — Donate, Github, and Exit stay fixed on the root menu,
+ * and Cast-submenu rebuilds are deferred off the GTK click path.
  */
 @Slf4j
 public class SystemTrayMenu {
+
+    /** Public repo — tray "Github" opens this in the default browser. */
+    static final String GITHUB_URL = "https://github.com/serezhka/java-airplay";
+    /**
+     * Donate landing (stub until the live page is set). Prefer a Stripe Payment Link
+     * or Buy Me a Coffee URL; override with {@code -Dairplay.donate-url=…}.
+     */
+    static final String DONATE_URL_DEFAULT = "https://www.buymeacoffee.com/serezhka";
 
     private final ApplicationContext context;
     private final MirrorCaster mirrorCaster;
@@ -87,8 +95,10 @@ public class SystemTrayMenu {
                 systemTray,
                 device -> castExecutor.execute(() -> onDeviceClick(device)));
 
-        // Exit is fixed on the root menu — never rebuilt (GTK peer safety).
+        // Donate / Github / Exit are fixed on the root menu — never rebuilt (GTK peer safety).
         systemTray.getMenu().add(new Separator());
+        systemTray.getMenu().add(new MenuItem("Donate", e -> openUrl(donateUrl())));
+        systemTray.getMenu().add(new MenuItem("Github", e -> openUrl(GITHUB_URL)));
         systemTray.getMenu().add(new MenuItem("Exit", e -> exitApp()));
 
         scheduleRebuild();
@@ -252,6 +262,49 @@ public class SystemTrayMenu {
         }
         SpringApplication.exit(context, () -> 0);
         System.exit(0);
+    }
+
+    static String donateUrl() {
+        String override = System.getProperty("airplay.donate-url");
+        if (override != null && !override.isBlank()) {
+            return override.trim();
+        }
+        return DONATE_URL_DEFAULT;
+    }
+
+    /** Open an https URL in the OS default browser (tray Donate / Github). */
+    static void openUrl(String url) {
+        if (url == null || url.isBlank()) {
+            return;
+        }
+        try {
+            java.net.URI uri = java.net.URI.create(url);
+            if (java.awt.Desktop.isDesktopSupported()) {
+                java.awt.Desktop desktop = java.awt.Desktop.getDesktop();
+                if (desktop.isSupported(java.awt.Desktop.Action.BROWSE)) {
+                    desktop.browse(uri);
+                    return;
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Desktop.browse failed for {}: {}", url, e.toString());
+        }
+        String os = System.getProperty("os.name", "").toLowerCase();
+        try {
+            ProcessBuilder pb;
+            if (os.contains("mac")) {
+                pb = new ProcessBuilder("open", url);
+            } else if (os.contains("win")) {
+                pb = new ProcessBuilder("rundll32", "url.dll,FileProtocolHandler", url);
+            } else {
+                pb = new ProcessBuilder("xdg-open", url);
+            }
+            pb.redirectError(ProcessBuilder.Redirect.DISCARD)
+                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                    .start();
+        } catch (Exception e) {
+            log.warn("Could not open {}: {}", url, e.toString());
+        }
     }
 
     private static void installModernSwingLook() {
