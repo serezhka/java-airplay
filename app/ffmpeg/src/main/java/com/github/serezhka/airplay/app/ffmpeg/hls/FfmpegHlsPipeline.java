@@ -64,6 +64,15 @@ public final class FfmpegHlsPipeline {
      * @param initialSeekSeconds position to open at (avoids start-then-seek race that kills the first ffplay)
      */
     public void start(String playlistUri, double volume, double initialSeekSeconds) {
+        double seek = initialSeekSeconds > 0.05 && initialSeekSeconds < ABSURD_SEEK_SECONDS
+                ? initialSeekSeconds : 0;
+        // Soft playlist replace (ad→ad / ad→content): keep the held frame / same thread so the
+        // SDL window does not flash closed between items.
+        Thread existing = playbackThread;
+        if (existing != null && existing.isAlive() && !userStopped.get()) {
+            softReplace(playlistUri, volume, seek);
+            return;
+        }
         stop();
         volumeLinear = HlsPlaybackMath.clampVolume(volume);
         paused.set(false);
@@ -71,8 +80,6 @@ public final class FfmpegHlsPipeline {
         userStopped.set(false);
         stopRequested.set(false);
         playlistDurationSeconds = 0;
-        double seek = initialSeekSeconds > 0.05 && initialSeekSeconds < ABSURD_SEEK_SECONDS
-                ? initialSeekSeconds : 0;
         positionBaseSeconds = seek;
         // Do not run the sender clock until ffplay prints a real timestamp.
         // Starting it here put the sender timeline several seconds ahead of the first frame.
@@ -92,6 +99,30 @@ public final class FfmpegHlsPipeline {
         thread.start();
         log.info("HLS pipeline started (ffplay) uri={} ss={}", uri,
                 seek > 0.05 ? String.format(Locale.US, "%.3f", seek) : "0");
+    }
+
+    /**
+     * Swap the playlist without tearing down the playback thread / SDL window.
+     * Freezes the current picture, then the loop opens the new URI as a held-frame replace.
+     */
+    private void softReplace(String playlistUri, double volume, double seekSeconds) {
+        volumeLinear = HlsPlaybackMath.clampVolume(volume);
+        paused.set(false);
+        ended.set(false);
+        userStopped.set(false);
+        stopRequested.set(false);
+        playlistDurationSeconds = 0;
+        positionBaseSeconds = seekSeconds;
+        positionAnchorNanos = 0;
+        lastEndedNotifyNanos = 0;
+        pictureAnnounced = false;
+        replacementClockPending = true;
+        // Non-null forces a new ffplay even when opening at 0 (URI change).
+        pendingSeekSeconds.set(seekSeconds);
+        uri = withCacheBuster(playlistUri, epoch.get());
+        signalFfplay("STOP");
+        log.info("HLS soft-replace uri={} ss={}", uri,
+                seekSeconds > 0.05 ? String.format(Locale.US, "%.3f", seekSeconds) : "0");
     }
 
     public void stop() {
@@ -129,8 +160,8 @@ public final class FfmpegHlsPipeline {
         positionBaseSeconds = currentPositionSeconds();
         paused.set(true);
         // Freeze ffplay in place. Destroying it closes the SDL window (desktop shows through)
-        // and a following /scrub has to reopen from scratch. SIGSTOP keeps the last frame and
-        // stops Pulse. Windows has no SIGSTOP, so fall back to closing the process there.
+        // and a following /scrub has to reopen from scratch. Unix SIGSTOP / Windows NtSuspend
+        // keep the last frame; only fall back to destroy when freeze is unavailable.
         if (!signalFfplay("STOP")) {
             destroyFfplay();
         }
@@ -194,18 +225,13 @@ public final class FfmpegHlsPipeline {
             return;
         }
         volumeLinear = next;
-        // Prefer live Pulse/PipeWire sink-input gain so we do not reopen ffplay (black flash).
-        // Fall back to seek-reopen only when pactl cannot touch this pid.
+        // Live sink / session gain only — never reopen ffplay for volume (window flash).
         Process running = ffplayProcess;
-        if (running != null && running.isAlive()
-                && FfplayProcess.setPulseVolume(running.pid(), next)) {
-            return;
-        }
-        if (isActive() && !paused.get() && !ended.get()) {
-            log.debug("Pulse volume unavailable; reopening ffplay at {}s volume={}",
-                    String.format(Locale.US, "%.3f", currentPositionSeconds()), next);
-            pendingSeekSeconds.set(currentPositionSeconds());
-            destroyFfplay();
+        if (running != null && running.isAlive()) {
+            if (!FfplayProcess.setLiveVolume(running.pid(), next)) {
+                log.debug("Live volume unavailable for pid={}; keeping window, next spawn uses -volume={}",
+                        running.pid(), Math.round(next * 100));
+            }
         }
     }
 

@@ -7,6 +7,8 @@ dependencies {
     implementation(projects.app.common)
     implementation(libs.javacv)
     implementation(libs.ffmpeg.platform)
+    // Windows: NtSuspendProcess (pause/seek hold) + optional session-volume helper.
+    implementation(libs.bundles.jna.full)
 
     testImplementation(libs.archunit.junit6)
     "integrationTestImplementation"(testFixtures(projects.app.common))
