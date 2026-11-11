@@ -34,45 +34,83 @@ runs:
             -e 's|https\?://azure\.archive\.ubuntu\.com/ubuntu|http://archive.ubuntu.com/ubuntu|g' \
             "$src" || true
         done
+        # Prefer IPv4 — GHA intermittent AAAA / dual-stack stalls look like apt timeouts.
         APT_OPTS=(
-          -o Acquire::Retries=5
-          -o Acquire::http::Timeout=30
-          -o Acquire::https::Timeout=30
+          -o Acquire::Retries=2
+          -o Acquire::http::Timeout=15
+          -o Acquire::https::Timeout=15
+          -o Acquire::ForceIPv4=true
           -o Acquire::Languages=none
         )
-        # archive.ubuntu.com occasionally fails DNS on GHA; fall back to Cloudflare CDN.
-        if ! getent hosts archive.ubuntu.com >/dev/null 2>&1; then
-          echo "WARN: archive.ubuntu.com not resolving; switching mirrors to cloudflare CDN" >&2
+        # System resolver sometimes cannot resolve *.ubuntu.com; pin via DoH (no dig pkg).
+        pin_host() {
+          local host="$1" ip
+          if getent hosts "$host" >/dev/null 2>&1; then
+            return 0
+          fi
+          ip="$(curl -fsS --max-time 10 \
+            -H 'accept: application/dns-json' \
+            "https://cloudflare-dns.com/dns-query?name=${host}&type=A" \
+            | python3 -c 'import sys,json; a=json.load(sys.stdin).get("Answer") or [];
+print(next((x["data"] for x in a if x.get("type")==1), ""), end=""))' 2>/dev/null || true)"
+          if [ -z "$ip" ]; then
+            ip="$(curl -fsS --max-time 10 \
+              -H 'accept: application/dns-json' \
+              "https://dns.google/resolve?name=${host}&type=A" \
+              | python3 -c 'import sys,json; a=json.load(sys.stdin).get("Answer") or [];
+print(next((x["data"] for x in a if x.get("type")==1), ""), end=""))' 2>/dev/null || true)"
+          fi
+          if [ -n "$ip" ]; then
+            echo "Pinning $host -> $ip in /etc/hosts (system DNS failed)" >&2
+            echo "$ip $host" | sudo tee -a /etc/hosts >/dev/null
+          fi
+        }
+        set_ubuntu_mirror() {
+          local mirror="$1"
           for src in /etc/apt/apt-mirrors.txt \
                      /etc/apt/sources.list \
                      /etc/apt/sources.list.d/*.list \
                      /etc/apt/sources.list.d/*.sources; do
             [ -f "$src" ] || continue
-            sudo sed -i \
-              -e 's|https\?://archive\.ubuntu\.com/ubuntu|http://cloudflare.cdn.ubuntu.com/ubuntu|g' \
+            sudo sed -i -E \
+              -e "s|https?://[A-Za-z0-9._-]+/ubuntu|${mirror}|g" \
               "$src" || true
           done
-        fi
+        }
+        pin_host archive.ubuntu.com
+        pin_host security.ubuntu.com
+        pin_host cloudflare.cdn.ubuntu.com
+        MIRRORS=(
+          "http://archive.ubuntu.com/ubuntu"
+          "http://cloudflare.cdn.ubuntu.com/ubuntu"
+          "http://mirrors.edge.kernel.org/ubuntu"
+        )
         apt_update() {
-          local i
-          for i in 1 2 3 4 5; do
-            if sudo apt-get update "${APT_OPTS[@]}"; then
-              return 0
-            fi
-            echo "WARN: apt-get update failed (attempt $i); sleeping..." >&2
-            sleep $((5 * i))
+          local mirror i
+          for mirror in "${MIRRORS[@]}"; do
+            set_ubuntu_mirror "$mirror"
+            host="$(echo "$mirror" | sed -E 's|https?://([^/]+)/.*|\1|')"
+            pin_host "$host" || true
+            for i in 1 2; do
+              if sudo apt-get update "${APT_OPTS[@]}"; then
+                echo "apt update ok via $mirror" >&2
+                return 0
+              fi
+              echo "WARN: apt-get update failed via $mirror (attempt $i)" >&2
+              sleep 3
+            done
           done
           return 1
         }
         apt_install() {
           local i
-          for i in 1 2 3 4 5; do
+          for i in 1 2 3; do
             if sudo apt-get install -y --no-install-recommends "${APT_OPTS[@]}" "$@"; then
               return 0
             fi
-            echo "WARN: apt-get install failed (attempt $i); sleeping..." >&2
-            sleep $((5 * i))
+            echo "WARN: apt-get install failed (attempt $i); rotating mirror..." >&2
             apt_update || true
+            sleep 3
           done
           return 1
         }
