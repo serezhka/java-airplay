@@ -108,24 +108,12 @@ public class MsePlayer implements Playback, AutoCloseable {
     /**
      * Kick Chromium without waiting. RTSP SETUP must return the video port immediately;
      * {@link MseMediaServer} buffers NALs and resyncs {@code startMirror} when /control connects.
-     *
-     * @param presentation if true, mark presentation desired before launch so the window is
-     *                     raised/fullscreen as soon as it appears.
      */
-    private void ensureBrowserAsync(boolean presentation) {
+    private void ensureBrowserAsync() {
         if (browserFailed || !browserAvailable) {
             return;
         }
-        browserExecutor.execute(() -> {
-            if (presentation) {
-                // Sets the flag even when the process is not up yet.
-                chromium.setPresentationActive(true);
-            }
-            if (chromium.isAlive() && media.hasControlClient()) {
-                return;
-            }
-            ensureBrowser();
-        });
+        browserExecutor.execute(this::ensureBrowser);
     }
 
     private void ensureBrowser() {
@@ -139,8 +127,6 @@ public class MsePlayer implements Playback, AutoCloseable {
             if (!chromium.isAlive()) {
                 media.resetPageReady();
                 chromium.ensureAlive();
-                // Never awaitReady on browserExecutor — it queued behind setPresentationActive
-                // and left a 480x270 black window for the whole cold-start wait.
                 watchPageReadyAsync();
                 return;
             }
@@ -199,10 +185,6 @@ public class MsePlayer implements Playback, AutoCloseable {
         t.start();
     }
 
-    private void setPresentationAsync(boolean active) {
-        browserExecutor.execute(() -> chromium.setPresentationActive(active));
-    }
-
     private static Path extractAssets() throws Exception {
         Path dir = Files.createTempDirectory("airplay-mse-");
         dir.toFile().deleteOnExit();
@@ -224,13 +206,13 @@ public class MsePlayer implements Playback, AutoCloseable {
     @Override
     public void preparePresentation() {
         // Pair-verify path: start Chromium early without blocking the pair response.
-        ensureBrowserAsync(true);
+        ensureBrowserAsync();
     }
 
     @Override
     public void onVideoFormat(VideoStreamInfo videoStreamInfo) {
         // Kick Chromium off-thread; {@link #awaitPresentationReady} gates the video port.
-        ensureBrowserAsync(true);
+        ensureBrowserAsync();
         media.stopHls();
         media.startMirror(fps);
         log.info("MSE mirror started for {} (browserReady={} controlClients={})",
@@ -248,7 +230,7 @@ public class MsePlayer implements Playback, AutoCloseable {
         if (browserFailed || !browserAvailable) {
             return;
         }
-        ensureBrowserAsync(true);
+        ensureBrowserAsync();
         long startNanos = System.nanoTime();
         boolean ready = media.awaitReady(timeout, unit);
         long usedNanos = System.nanoTime() - startNanos;
@@ -279,7 +261,6 @@ public class MsePlayer implements Playback, AutoCloseable {
     public void onVideoSrcDisconnect() {
         // Stream end or mirror→HLS handoff — keep Chromium for the next mode.
         media.stopMirror();
-        setPresentationAsync(false);
         log.info("MSE mirror stopped");
     }
 
@@ -290,7 +271,7 @@ public class MsePlayer implements Playback, AutoCloseable {
         if (audioCompressionType == null) {
             return;
         }
-        ensureBrowserAsync(true);
+        ensureBrowserAsync();
         int rate = sampleRate(audioStreamInfo);
         int ch = channels(audioStreamInfo);
         switch (audioCompressionType) {
@@ -340,7 +321,7 @@ public class MsePlayer implements Playback, AutoCloseable {
 
     @Override
     public void onPlaylist(String playlistUri) {
-        ensureBrowserAsync(true);
+        ensureBrowserAsync();
         audioConfigured = false;
         audioCompressionType = null;
         media.stopMirror();
@@ -367,7 +348,6 @@ public class MsePlayer implements Playback, AutoCloseable {
                     log.info("MSE presentation end aborted — new session already active");
                     return;
                 }
-                chromium.setPresentationActive(false);
                 chromium.stop();
                 media.resetPageReady();
                 watchingPageReady.set(false);

@@ -57,6 +57,16 @@ app/mse        one fat jar: Playback + browser cast (Chromium / WebCodecs)
 Comments and errors describe the **local** invariant, not a downstream native
 crash (“drop invalid AUs before `onVideo`”, not “or GStreamer will SIGSEGV”).
 
+## Code comments / portability
+
+- Do **not** put lab hostnames, SSH, seat/display wiring, or one-machine
+  workarounds in committed source, comments, tests, or PR text.
+- Platform branching is fine when it is a real OS-family fact
+  (`Windows` / `Linux` / `macOS`) that applies generally — not a tweak for a
+  single desktop session, keyring layout, or developer box.
+- Prefer portable defaults over scrubbing environment variables or special-casing
+  one browser package / desktop session.
+
 ## Client work must not break the server
 
 When changing the sender / cast / tray client, do **not** modify the server
