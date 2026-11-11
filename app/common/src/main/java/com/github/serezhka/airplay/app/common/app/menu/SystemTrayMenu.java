@@ -40,10 +40,10 @@ public class SystemTrayMenu {
     /** Public repo — tray "Github" opens this in the default browser. */
     static final String GITHUB_URL = "https://github.com/serezhka/java-airplay";
     /**
-     * Donate landing (stub until the live page is set). Prefer a Stripe Payment Link
-     * or Buy Me a Coffee URL; override with {@code -Dairplay.donate-url=…}.
+     * Donate landing (presets €5/€10/€25/€50 + custom via Stripe Payment Links).
+     * Override with {@code -Dairplay.donate-url=…}.
      */
-    static final String DONATE_URL_DEFAULT = "https://www.buymeacoffee.com/serezhka";
+    static final String DONATE_URL_DEFAULT = "https://serezhka.github.io/java-airplay/donate.html";
 
     private final ApplicationContext context;
     private final MirrorCaster mirrorCaster;
