@@ -11,30 +11,22 @@
   [![GitHub release][badge-release]][releases]&nbsp;
   [![License: MIT][badge-license]][license]&nbsp;
   [![Java][badge-java]][openjdk]&nbsp;
+  [![Donate][badge-donate]][donate]&nbsp;
   ![ViewCount][badge-views]
 
 </div>
-
-## Demo
-
-- [Raspberry Pi 4 Model B (1280×720 @ 24 fps)](https://youtu.be/uRvgVkLWfSI)
-- [Windows laptop (1920×1080 @ 30 fps)](https://youtu.be/RT1hVWGJzos)
 
 ## Features
 
 - AirPlay audio and screen mirroring (FairPlay decrypt)
 - HLS video playback
-- Volume control
-- Two native playback backends: GStreamer and FFmpeg (`ffplay`)
-- Optional session dump (protocol + decrypted media) for debugging
+- Three playback backends: GStreamer, FFmpeg (`ffplay`), and browser MSE (Chromium)
 - System tray with cast picker (discover LAN receivers and send a stream)
 
 ## Experimental features
 
 - Cast synthetic test A/V (`client.video.src=videotest`, `client.audio.src=audiotest`)
-  to another AirPlay receiver from the tray menu — useful for end-to-end send-path
-  checks without a camera or screen capture. AAC audiotest is sent on the legacy
-  FairPlay path; HAP/DataStream sessions are video-only today
+  to another AirPlay receiver from the tray menu — useful for end-to-end send-path checks
 
 ## Quick start
 
@@ -43,11 +35,19 @@
 ```shell
 git clone https://github.com/serezhka/java-airplay.git
 cd java-airplay
-./gradlew :app:gstreamer:bootRun
-```
 
-FFmpeg backend: `./gradlew :app:ffmpeg:bootRun`.  
-`./gradlew bootJar` builds both fat jars.
+# gstreamer
+./gradlew :app:gstreamer:bootRun
+
+# ffmpeg
+./gradlew :app:ffmpeg:bootRun
+
+# mse
+./gradlew :app:mse:bootRun
+
+# builds all fat jars
+./gradlew :app:gstreamer:bootJar :app:ffmpeg:bootJar :app:mse:bootJar
+```
 
 ### Pre-built jar
 
@@ -56,14 +56,16 @@ Download the [latest release](https://github.com/serezhka/java-airplay/releases/
 ```shell
 java -jar java-airplay-gstreamer-{version}.jar
 java -jar java-airplay-ffmpeg-{version}.jar
+java -jar java-airplay-mse-{version}.jar
 ```
+Or double-click.
 
-On the phone, tablet, or Mac, open **Screen Mirroring** (or AirPlay from a video app)
-and pick the advertised name (default: `JavaAirPlay`).
+On the phone, tablet, or Mac in the same network open **Screen Mirroring** (or AirPlay from a video app)
+and pick the advertised name (default: `JavaAirPlay`)
 
 ## Configuration
 
-Each fat jar ships its own `application.properties` (`app/gstreamer`, `app/ffmpeg`).
+Each fat jar ships its own `application.properties` (`app/gstreamer`, `app/ffmpeg`, `app/mse`).
 Override by placing `application.properties` in the working directory:
 
 ```properties
@@ -75,7 +77,8 @@ airplay.fps=60
 airplay.hls-enabled=true
 airplay.mdns-loopback=false
 airplay.tray-enabled=true
-# Cast sender: videotest|screencapture|none  /  audiotest|none
+# Cast sender (gst/ffmpeg): videotest|screencapture|none  /  audiotest|none
+# MSE jar default is none/none (cast off)
 client.video.src=videotest
 client.audio.src=audiotest
 # Dump (optional receive-side sidecar)
@@ -91,8 +94,8 @@ dump.videoFps=60
 
 ## Playback backends
 
-GStreamer and FFmpeg are separate apps. Install the native stack that matches the jar
-or `bootRun` task you start.
+GStreamer, FFmpeg, and MSE are separate apps. Install the runtime that matches the jar
+or `bootRun` task you start
 
 ### GStreamer
 
@@ -111,6 +114,14 @@ Uses `ffplay` on `PATH`.
 
 Install: [FFmpeg download](https://ffmpeg.org/download.html)
 
+### MSE (Chromium)
+
+Uses a bundled localhost page (hls.js, jmuxer, WebCodecs) inside a system Chromium
+class browser — no GStreamer or FFmpeg install required for **receive** playback.
+
+Install a recent **Google Chrome**, **Chromium**, or **Microsoft Edge**, or set
+`-Dairplay.mse.browser=` to the binary path.
+
 ## Session dump
 
 Set `dump.enabled=true` to record beside the live player under
@@ -120,6 +131,12 @@ Set `dump.enabled=true` to record beside the live player under
 - `media/` — decrypted `.h264` / remuxed `.mp4`, audio `.caf` / `.aac`
 - `extras/` — HLS playlists, artwork, DMAP metadata when present
 
+## Support
+
+If this project helps you, consider a one-time donation 🍷
+
+[![Donate with Stripe][badge-donate]][donate]
+
 ## Related projects
 
 This monorepo unites the former:
@@ -127,6 +144,11 @@ This monorepo unites the former:
 - [java-airplay-lib](https://github.com/serezhka/java-airplay-lib)
 - [java-airplay-server](https://github.com/serezhka/java-airplay-server)
 - [java-airplay-server-examples](https://github.com/serezhka/java-airplay-server-examples)
+
+## Old demo
+
+- [Raspberry Pi 4 Model B (1280×720 @ 24 fps)](https://youtu.be/uRvgVkLWfSI)
+- [Windows laptop (1920×1080 @ 30 fps)](https://youtu.be/RT1hVWGJzos)
 
 ## License
 
@@ -136,8 +158,10 @@ This monorepo unites the former:
 [badge-release]: https://img.shields.io/github/v/release/serezhka/java-airplay
 [badge-license]: https://img.shields.io/badge/license-MIT-blue.svg
 [badge-java]: https://img.shields.io/badge/Java-21-orange?logo=openjdk&logoColor=white
+[badge-donate]: https://img.shields.io/badge/Donate-Stripe-635bff?logo=stripe&logoColor=white
 [badge-views]: https://views.whatilearened.today/views/github/serezhka/java-airplay.svg
 [ci]: https://github.com/serezhka/java-airplay/actions/workflows/ci.yaml
 [releases]: https://github.com/serezhka/java-airplay/releases
+[donate]: https://donate.stripe.com/dRm5kDf2u8L75Se37I7EQ04
 [license]: https://opensource.org/licenses/MIT
 [openjdk]: https://openjdk.org/

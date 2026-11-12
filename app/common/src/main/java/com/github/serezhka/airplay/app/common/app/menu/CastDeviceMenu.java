@@ -17,8 +17,8 @@ import java.util.stream.Collectors;
  * GTK AppIndicator peers throw {@code IndexOutOfBoundsException} if children are
  * removed/added on an already-attached menu. Populate an unbound {@link Menu}, then
  * {@code parent.add(menu, index)} once so {@code bind()} attaches children cleanly.
- * Root {@code Exit} stays outside this submenu and is never rebuilt here —
- * stopping cast must not reshuffle Exit mid-click.
+ * Root Donate / Github / Exit stay outside this submenu and are never rebuilt here —
+ * stopping cast must not reshuffle those fixed rows mid-click.
  */
 @Slf4j
 public final class CastDeviceMenu {
@@ -46,7 +46,19 @@ public final class CastDeviceMenu {
             List<ServiceDiscovery.Info> devices,
             String activeKey,
             DeviceState state) {
-        String fingerprint = fingerprint(devices, activeKey, state);
+        return install(devices, activeKey, state, true);
+    }
+
+    /**
+     * @param castEnabled {@code false} when both {@code client.*.src} are {@code none}
+     * @return {@code true} if the native menu was rebuilt
+     */
+    public synchronized boolean install(
+            List<ServiceDiscovery.Info> devices,
+            String activeKey,
+            DeviceState state,
+            boolean castEnabled) {
+        String fingerprint = fingerprint(devices, activeKey, state, castEnabled);
         if (fingerprint.equals(lastFingerprint) && castMenu != null) {
             return false;
         }
@@ -62,7 +74,12 @@ public final class CastDeviceMenu {
         }
 
         Menu menu = new Menu("Cast");
-        if (devices.isEmpty()) {
+        if (!castEnabled) {
+            MenuItem disabled = new MenuItem("(disabled)");
+            disabled.setEnabled(false);
+            menu.add(disabled);
+            menu.setEnabled(false);
+        } else if (devices.isEmpty()) {
             MenuItem empty = new MenuItem("(searching…)");
             empty.setEnabled(false);
             menu.add(empty);
@@ -81,12 +98,12 @@ public final class CastDeviceMenu {
             }
         }
 
-        // Index 0: above the fixed Separator + Exit on the root menu.
+        // Index 0: above the fixed Separator + Donate / Github / Exit on the root menu.
         systemTray.getMenu().add(menu, 0);
         castMenu = menu;
         lastFingerprint = fingerprint;
-        log.info("Cast submenu installed: {} device(s), state={} active={}",
-                devices.size(), state, activeKey);
+        log.info("Cast submenu installed: {} device(s), state={} active={} enabled={}",
+                devices.size(), state, activeKey, castEnabled);
         return true;
     }
 
@@ -100,7 +117,8 @@ public final class CastDeviceMenu {
     }
 
     static String labelFor(ServiceDiscovery.Info device, String activeKey, DeviceState state) {
-        String name = device.name();
+        // Samsung names like 65" QLED break some GTK/AppIndicator menu peers (quote truncates/hides row).
+        String name = sanitizeTrayLabel(device.name());
         if (activeKey != null && activeKey.equals(device.key())) {
             return switch (state) {
                 case CONNECTING -> "⚙  " + name + "…";
@@ -111,11 +129,21 @@ public final class CastDeviceMenu {
         return name;
     }
 
+    static String sanitizeTrayLabel(String name) {
+        if (name == null || name.isEmpty()) {
+            return "(unknown)";
+        }
+        return name.replace('"', '\u2033').replace('\'', '\u2032');
+    }
+
     private static String fingerprint(
-            List<ServiceDiscovery.Info> devices, String activeKey, DeviceState state) {
+            List<ServiceDiscovery.Info> devices,
+            String activeKey,
+            DeviceState state,
+            boolean castEnabled) {
         String keys = devices.stream()
                 .map(d -> d.key() + "|" + d.name())
                 .collect(Collectors.joining(";"));
-        return keys + "#" + Objects.toString(activeKey, "") + "#" + state;
+        return keys + "#" + Objects.toString(activeKey, "") + "#" + state + "#" + castEnabled;
     }
 }

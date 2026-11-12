@@ -5,6 +5,7 @@ import com.github.serezhka.airplay.client.netty.NettyEventLoops;
 import com.github.serezhka.airplay.client.capture.CaptureSource;
 import com.github.serezhka.airplay.client.capture.CaptureSources;
 import com.github.serezhka.airplay.protocol.crypto.DataStreamCipher;
+import com.github.serezhka.airplay.protocol.mirror.H264SpsDimensions;
 import com.github.serezhka.airplay.protocol.mirror.MirrorPacketHeaders;
 import com.github.serezhka.airplay.protocol.mirror.MirrorVideoFraming;
 import io.netty.bootstrap.Bootstrap;
@@ -36,8 +37,9 @@ import java.util.concurrent.atomic.AtomicLong;
 @Slf4j
 public final class DataStreamVideoClient extends ChannelInboundHandlerAdapter implements AutoCloseable {
 
-    private static final int FRAME_WIDTH = 1280;
-    private static final int FRAME_HEIGHT = 720;
+    /** Fallback mirror dimensions when SPS cannot be parsed (should match real stream after first keyframe). */
+    private static final int DEFAULT_CODEC_WIDTH = 1280;
+    private static final int DEFAULT_CODEC_HEIGHT = 720;
     /** Keep picture slightly ahead of the timing clock so frames are not dropped as late. */
     private static final double VIDEO_BIAS_SECONDS = 0.4;
 
@@ -150,7 +152,9 @@ public final class DataStreamVideoClient extends ChannelInboundHandlerAdapter im
         long ts = videoStamp();
         if (!sentCodecConfig && sps != null && pps != null) {
             byte[] codec = MirrorVideoFraming.buildType1CodecData(sps, pps);
-            byte[] header = MirrorPacketHeaders.codec(codec.length, ts, FRAME_WIDTH, FRAME_HEIGHT);
+            H264SpsDimensions.Dimensions dim = H264SpsDimensions.parse(sps)
+                    .orElse(new H264SpsDimensions.Dimensions(DEFAULT_CODEC_WIDTH, DEFAULT_CODEC_HEIGHT));
+            byte[] header = MirrorPacketHeaders.codec(codec.length, ts, dim.width(), dim.height());
             writeRaw(header, codec);
             sentCodecConfig = true;
         }

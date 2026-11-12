@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.github.serezhka"
-version = "1.1.0"
+version = "1.1.1"
 
 java {
     toolchain {
@@ -16,6 +16,7 @@ java {
 tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
     options.compilerArgs.add("-Xlint:deprecation")
+    options.compilerArgs.add("-parameters")
 }
 
 tasks.withType<Test>().configureEach {

@@ -34,6 +34,11 @@ final class RecordingPlayback implements Playback {
     }
 
     @Override
+    public void onPresentationEnded() {
+        events.add("presentationEnded");
+    }
+
+    @Override
     public void onAudioFormat(AudioStreamInfo audioStreamInfo) {
         events.add("audioFormat");
     }

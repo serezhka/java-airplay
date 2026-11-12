@@ -32,3 +32,10 @@ extra["integrationTestTags"] = mapOf(
     "gstreamer" to "Runs the GStreamer playback smoke test.",
     "bench" to "Runs the GStreamer playback benchmark."
 )
+
+tasks.register<JavaExec>("gstCastToHost") {
+    group = "verification"
+    description = "LAN cast videotestsrc via GStreamer CaptureSource → receiver (manual)"
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("com.github.serezhka.airplay.app.gstreamer.GstCastToHostSmokeMain")
+}

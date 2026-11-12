@@ -14,6 +14,7 @@ dependencies {
 
     implementation(libs.jakarta.annotation.api)
     implementation(libs.system.tray)
+    implementation(libs.flatlaf)
 
     annotationProcessor("org.springframework.boot:spring-boot-configuration-processor")
 

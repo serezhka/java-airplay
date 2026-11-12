@@ -44,9 +44,7 @@ class FfmpegHlsPipelineSmokeTest {
             long pid = hls.playerPid();
             hls.pause();
             Thread.sleep(800);
-            if (!System.getProperty("os.name", "").toLowerCase().contains("win")) {
-                assertEquals(pid, hls.playerPid(), "pause must freeze ffplay, not close the window");
-            }
+            assertEquals(pid, hls.playerPid(), "pause must freeze ffplay, not close the window");
             double duringPause = hls.currentPositionSeconds();
             assertTrue(Math.abs(duringPause - beforePause) < 0.5,
                     "position should stay put while paused: " + beforePause + " -> " + duringPause);
@@ -54,6 +52,11 @@ class FfmpegHlsPipelineSmokeTest {
             hls.resume();
             awaitAdvance(hls, duringPause + 0.3, 12_000);
             assertTrue(hls.audioSinkAlive(), "ffplay PCM sink died after resume");
+
+            long pidBeforeVolume = hls.playerPid();
+            hls.setVolume(0.35);
+            Thread.sleep(400);
+            assertEquals(pidBeforeVolume, hls.playerPid(), "volume must not relaunch ffplay");
 
             double beforeSeek = hls.currentPositionSeconds();
             double target = Math.max(0.5, beforeSeek + 1.0);
@@ -71,14 +74,13 @@ class FfmpegHlsPipelineSmokeTest {
     /**
      * Observed scrub (session 20260926-144311): {@code rate=0} then {@code /scrub} 1.84s later.
      * The hold must keep the same ffplay pid; the seek then reopens at the new position.
+     * Unix: SIGSTOP. Windows: NtSuspendProcess.
      */
     @Test
     @Timeout(90)
     void scrubAfterLongHoldKeepsPictureThenSeeks() throws Exception {
         Assumptions.assumeTrue(ffmpegAvailable(), "ffmpeg not available");
         Assumptions.assumeTrue(ffplayAvailable(), "ffplay not available");
-        Assumptions.assumeFalse(System.getProperty("os.name", "").toLowerCase().contains("win"),
-                "SIGSTOP hold is Unix-only");
 
         Path media = temp.resolve("scrub.ts");
         generateSmokeTs(media, 12);
@@ -122,6 +124,58 @@ class FfmpegHlsPipelineSmokeTest {
             awaitAudioAlive(hls, 8_000);
             assertTrue(hls.audioSinkAlive(), "ffplay died after seek");
             awaitAdvance(hls, 8.2, 8_000);
+        } finally {
+            hls.stop();
+            System.clearProperty("airplay.ffmpeg.hls.headless");
+        }
+    }
+
+    /** Ad→content style playlist swap must keep a held frame instead of hard-stopping. */
+    @Test
+    @Timeout(90)
+    void softPlaylistReplaceKeepsHeldFrame() throws Exception {
+        Assumptions.assumeTrue(ffmpegAvailable(), "ffmpeg not available");
+        Assumptions.assumeTrue(ffplayAvailable(), "ffplay not available");
+
+        Path first = temp.resolve("first.ts");
+        Path second = temp.resolve("second.ts");
+        generateSmokeTs(first, 8);
+        generateSmokeTs(second, 8);
+        Assumptions.assumeTrue(Files.size(first) > 1000 && Files.size(second) > 1000);
+
+        System.setProperty("airplay.ffmpeg.hls.headless", "true");
+        FfmpegHlsPipeline hls = new FfmpegHlsPipeline();
+        try {
+            hls.start(first.toUri().toString(), 1.0);
+            awaitPosition(hls, 0.4, 12_000);
+            long firstPid = hls.playerPid();
+            assertTrue(firstPid > 0);
+
+            java.util.concurrent.atomic.AtomicBoolean sawHeld = new java.util.concurrent.atomic.AtomicBoolean();
+            Thread watch = new Thread(() -> {
+                long end = System.currentTimeMillis() + 5_000;
+                while (System.currentTimeMillis() < end) {
+                    if (hls.heldFramePid() > 0) {
+                        sawHeld.set(true);
+                        return;
+                    }
+                    try {
+                        Thread.sleep(5);
+                    } catch (InterruptedException e) {
+                        return;
+                    }
+                }
+            });
+            watch.start();
+            hls.start(second.toUri().toString(), 0.8);
+            watch.join(5_000);
+            assertTrue(sawHeld.get(), "playlist replace must hold the previous ffplay frame");
+            awaitPosition(hls, 0.3, 15_000);
+            awaitAudioAlive(hls, 8_000);
+            long secondPid = hls.playerPid();
+            assertTrue(secondPid > 0, "replacement ffplay should be alive");
+            assertTrue(secondPid != firstPid || hls.heldFramePid() < 0,
+                    "soft-replace should eventually run a new ffplay for the new URI");
         } finally {
             hls.stop();
             System.clearProperty("airplay.ffmpeg.hls.headless");

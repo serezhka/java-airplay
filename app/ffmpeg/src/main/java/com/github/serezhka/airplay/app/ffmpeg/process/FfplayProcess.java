@@ -120,47 +120,52 @@ public final class FfplayProcess {
     }
 
     /**
-     * Deliver a Unix signal to a live process ({@code STOP}/{@code CONT}).
+     * Freeze / unfreeze a live ffplay without destroying its window.
+     * Unix: {@code SIGSTOP}/{@code SIGCONT}. Windows: {@code NtSuspendProcess}/{@code NtResumeProcess}.
      *
-     * @return true when the signal was delivered; false on Windows or when the process is gone
+     * @param signal {@code STOP} or {@code CONT}
+     * @return true when the process was frozen/resumed; false when unavailable or gone
      */
     public static boolean signal(Process process, String signal) {
-        if (isWindows() || process == null || !process.isAlive()) {
+        if (process == null || !process.isAlive()) {
+            return false;
+        }
+        String kind = signal == null ? "" : signal.trim().toUpperCase(Locale.ROOT);
+        if (isWindows()) {
+            if ("STOP".equals(kind)) {
+                return WindowsProcessControl.suspend(process.pid());
+            }
+            if ("CONT".equals(kind)) {
+                return WindowsProcessControl.resume(process.pid());
+            }
             return false;
         }
         try {
-            Process kill = new ProcessBuilder("kill", "-" + signal, Long.toString(process.pid()))
+            Process kill = new ProcessBuilder("kill", "-" + kind, Long.toString(process.pid()))
                     .redirectError(ProcessBuilder.Redirect.DISCARD)
                     .redirectOutput(ProcessBuilder.Redirect.DISCARD)
                     .start();
             if (!kill.waitFor(2, TimeUnit.SECONDS) || kill.exitValue() != 0) {
-                log.warn("kill -{} pid={} failed", signal, process.pid());
+                log.warn("kill -{} pid={} failed", kind, process.pid());
                 return false;
             }
             return true;
         } catch (Exception e) {
-            log.warn("kill -{} failed: {}", signal, e.toString());
+            log.warn("kill -{} failed: {}", kind, e.toString());
             return false;
         }
     }
 
     /**
-     * Tear down a (possibly SIGSTOP’d) ffplay: CONT so destroy can reap, then destroy/forcibly.
+     * Tear down a (possibly frozen) ffplay: unfreeze so destroy can reap, then destroy/forcibly.
      */
     public static void destroy(Process process) {
         if (process == null) {
             return;
         }
-        if (process.isAlive() && !isWindows()) {
-            try {
-                new ProcessBuilder("kill", "-CONT", Long.toString(process.pid()))
-                        .redirectError(ProcessBuilder.Redirect.DISCARD)
-                        .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-                        .start()
-                        .waitFor(1, TimeUnit.SECONDS);
-            } catch (Exception ignored) {
-                // SIGKILL below still reaps a stopped process.
-            }
+        if (process.isAlive()) {
+            // Suspended processes often ignore SIGTERM until CONT / NtResume.
+            signal(process, "CONT");
         }
         process.destroy();
         try {
@@ -174,11 +179,22 @@ public final class FfplayProcess {
     }
 
     /**
-     * Live Pulse/PipeWire sink-input gain for {@code pid}. Falls back to false when pactl cannot
-     * touch the process so callers can reopen ffplay.
+     * Live per-process gain without relaunching ffplay.
+     * Linux: Pulse/PipeWire via {@code pactl}. Windows: Core Audio session volume.
+     *
+     * @return true when applied or soft-deferred (no session yet); false on hard failure
      */
-    public static boolean setPulseVolume(long pid, double volumeLinear) {
+    public static boolean setLiveVolume(long pid, double volumeLinear) {
+        if (isWindows()) {
+            return WindowsAudioSessionVolume.setByPid(pid, volumeLinear);
+        }
         return PulseSinkInputVolume.setByPid(pid, volumeLinear);
+    }
+
+    /** @deprecated use {@link #setLiveVolume(long, double)} */
+    @Deprecated
+    public static boolean setPulseVolume(long pid, double volumeLinear) {
+        return setLiveVolume(pid, volumeLinear);
     }
 
     /**

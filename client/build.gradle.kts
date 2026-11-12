@@ -39,6 +39,11 @@ tasks.register<JavaExec>("castConnectSmoke") {
     description = "LAN cast connect smoke (manual)"
 }
 
+tasks.register<JavaExec>("ffmpegVideotestCastSmoke") {
+    configureCastSmoke("com.github.serezhka.airplay.client.cast.FfmpegVideotestCastSmokeMain")
+    description = "LAN cast lavfi testsrc → receiver (manual)"
+}
+
 tasks.register<JavaExec>("castAutoConnectSmoke") {
     configureCastSmoke("com.github.serezhka.airplay.client.cast.CastAutoConnectSmokeMain")
     description = "LAN cast auto-connect / PIN path smoke (manual)"

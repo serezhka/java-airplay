@@ -7,17 +7,28 @@ import com.github.serezhka.airplay.server.AirPlayConfig;
 import com.github.serezhka.airplay.server.AirPlayServer;
 import com.github.serezhka.airplay.server.Playback;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 @Slf4j
 @Configuration
-@EnableConfigurationProperties(ClientCastProperties.class)
 public class PlayerConfig {
+
+    @Bean
+    @ConditionalOnMissingBean(CastSourcePolicy.class)
+    CastSourcePolicy castSourcePolicy() {
+        return CastSourcePolicy.NATIVE_PLAYER;
+    }
+
+    @Bean
+    @ConfigurationProperties(prefix = "client")
+    ClientCastProperties clientCastProperties(CastSourcePolicy castSourcePolicy) {
+        return new ClientCastProperties(castSourcePolicy);
+    }
 
     @Bean
     @ConfigurationProperties(prefix = "airplay")
@@ -35,7 +46,7 @@ public class PlayerConfig {
     public MirrorCaster mirrorCaster(AirPlayConfig airPlayConfig, ClientCastProperties cast) {
         if (!cast.videoEnabled() && !cast.audioEnabled()) {
             log.info("Cast media disabled (client.video.src=none and client.audio.src=none); "
-                    + "receiver/discovery still run");
+                    + "tray Cast stays grayed and outbound discovery is skipped");
         }
         return new MirrorCaster(
                 airPlayConfig.isMdnsLoopback(),
@@ -45,8 +56,11 @@ public class PlayerConfig {
 
     @Bean
     @ConditionalOnProperty(value = "airplay.tray-enabled", havingValue = "true", matchIfMissing = true)
-    public SystemTrayMenu systemTrayMenu(ApplicationContext context, MirrorCaster mirrorCaster) {
-        return new SystemTrayMenu(context, mirrorCaster);
+    public SystemTrayMenu systemTrayMenu(
+            ApplicationContext context,
+            MirrorCaster mirrorCaster,
+            AirPlayConfig airPlayConfig) {
+        return new SystemTrayMenu(context, mirrorCaster, airPlayConfig.getServerName());
     }
 
     @Bean

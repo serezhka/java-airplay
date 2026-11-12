@@ -7,6 +7,8 @@ dependencies {
     implementation(projects.app.common)
     implementation(libs.javacv)
     implementation(libs.ffmpeg.platform)
+    // Windows: NtSuspendProcess (pause/seek hold) + optional session-volume helper.
+    implementation(libs.bundles.jna.full)
 
     testImplementation(libs.archunit.junit6)
     "integrationTestImplementation"(testFixtures(projects.app.common))
@@ -28,3 +30,10 @@ extra["integrationTestTags"] = mapOf(
     "ffmpeg" to "Runs the FFmpeg playback smoke test.",
     "bench" to "Runs the FFmpeg playback benchmark."
 )
+
+tasks.register<JavaExec>("ffmpegCastToHost") {
+    group = "verification"
+    description = "LAN cast lavfi testsrc via FFmpeg CaptureSource → receiver (manual)"
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("com.github.serezhka.airplay.app.ffmpeg.FfmpegCastToHostSmokeMain")
+}

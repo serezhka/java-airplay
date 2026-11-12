@@ -23,6 +23,8 @@ import org.freedesktop.gstreamer.interfaces.VideoOverlay;
 
 import javax.swing.JFrame;
 import java.util.EnumSet;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -42,9 +44,18 @@ import java.util.concurrent.atomic.AtomicInteger;
  * stack underneath can abort the JVM on teardown ({@code playlistRemove}). {@link #stop()}
  * only pauses and orphans the native pipeline; {@link #start} builds a new one on
  * {@link Gst#getExecutor()}.
+ * <p>
+ * Orphans must stay strongly referenced: if the Java {@link Pipeline} is GC'd while still
+ * PAUSED, the NativeObject reaper calls {@code dispose} and can hard-fault
+ * ({@code Invalid memory access}) and stall the GStreamer service thread.
  */
 @Slf4j
 public final class GstHlsPipeline {
+
+    /**
+     * Soft-stopped playbins kept alive for the process lifetime. Do not clear or dispose.
+     */
+    private static final List<Pipeline> ORPHANED_PIPELINES = new CopyOnWriteArrayList<>();
 
     private final ScheduledExecutorService seekScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "hls-seek-retry");
@@ -126,7 +137,7 @@ public final class GstHlsPipeline {
         }
 
         final int generation = ++pipelineGeneration;
-        if (ElementFactory.find("playbin3") == null) {
+        if (org.freedesktop.gstreamer.Registry.get().lookupFeature("playbin3") == null) {
             throw new IllegalStateException("playbin3 is required for HLS (install gstreamer1.0-plugins-base)");
         }
         pipeline = (Pipeline) Gst.parseLaunch("playbin3 name=hls");
@@ -241,7 +252,11 @@ public final class GstHlsPipeline {
         } catch (Throwable t) {
             log.debug("HLS pause-on-orphan failed: {}", t.toString());
         }
-        // Native Pipeline intentionally leaked: dispose()/NULL can abort this JVM.
+        // Pin the Java wrapper: otherwise GC → NativeObject reaper dispose on PAUSED → crash.
+        ORPHANED_PIPELINES.add(orphan);
+        if (ORPHANED_PIPELINES.size() == 8 || ORPHANED_PIPELINES.size() % 32 == 0) {
+            log.warn("HLS soft-stop orphan count={}", ORPHANED_PIPELINES.size());
+        }
     }
 
     public void stop() {

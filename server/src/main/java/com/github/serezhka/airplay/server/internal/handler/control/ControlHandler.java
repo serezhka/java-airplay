@@ -24,6 +24,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 public class ControlHandler extends ChannelInboundHandlerAdapter {
@@ -58,6 +59,10 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             if (eventCtx == ctx) {
                 log.info("Reverse event channel closed, stopping HLS session {}", session.getId());
                 hlsSession.stopHlsPlayback(session);
+                if (!anySessionHasHls()) {
+                    stopLeftoverMirrorVideo("reverse event closed");
+                    maybeEndPresentationAfterHlsIdle("reverse event closed");
+                }
             }
             reverse.entrySet().removeIf(entry -> entry.getValue() == ctx);
         }
@@ -194,6 +199,9 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         var response = responses.createRtspResponse(request);
         session.getAirPlay().pairVerify(new ByteBufInputStream(request.content()),
                 new ByteBufOutputStream(response.content()));
+        // Kick MSE Chromium off-thread during pairing (non-blocking) so VIDEO SETUP
+        // does not wait the full cold-browser budget before advertising the video port.
+        airPlayConsumer.preparePresentation();
         responses.sendResponse(ctx, request, response);
     }
 
@@ -224,7 +232,15 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                     response.content().writeBytes(setup);
                 }
                 case VIDEO -> {
+                    sessionManager.markScreenMirrorSeen();
                     airPlayConsumer.onVideoFormat((VideoStreamInfo) mediaStreamInfo.get());
+                    // MSE: wait for Chromium /control before advertising the video port so the
+                    // phone does not push into a black window. Pairing is already done.
+                    try {
+                        airPlayConsumer.awaitPresentationReady(45, TimeUnit.SECONDS);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                    }
                     session.getVideoServer().start(airPlayConsumer);
                     log.info("SESSION mode=MIRROR session={} videoPort={}",
                             session.getId(), session.getVideoServer().getPort());
@@ -317,6 +333,10 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 case VIDEO -> {
                     airPlayConsumer.onVideoSrcDisconnect();
                     session.getVideoServer().stop();
+                    applyPresentationEnd(
+                            PresentationEndPolicy.afterVideoTeardown(anySessionHasHls()),
+                            "RTSP TEARDOWN (video)",
+                            session.getId());
                 }
             }
         } else {
@@ -330,6 +350,10 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 log.info("RTSP TEARDOWN (full): stopping HLS session {}", session.getId());
                 hlsSession.stopHlsPlayback(session);
             }
+            applyPresentationEnd(
+                    PresentationEndPolicy.afterFullTeardown(anySessionHasHls()),
+                    "RTSP TEARDOWN (full)",
+                    session.getId());
         }
         var response = responses.createRtspResponse(request);
         responses.sendResponse(ctx, request, response);
@@ -542,6 +566,11 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         var session = resolveSession(request);
         log.info("SESSION mode=STOP path={} session={}", path, session.getId());
         hlsSession.stopHlsPlayback(session);
+        // Failed / aborted HLS often never called stopMirrorVideoIfRunning (no mediadata).
+        if (!anySessionHasHls()) {
+            stopLeftoverMirrorVideo("http " + path);
+            maybeEndPresentationAfterHlsIdle("http " + path);
+        }
         var response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
         responses.sendResponse(ctx, request, response);
     }
@@ -568,6 +597,10 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             hlsPlaylistHttp.handleUnhandledUrlResponse(ctx, request, action);
         } else if ("playlistRemove".equals(type)) {
             hlsSession.stopHlsPlayback(resolveSession(request));
+            if (!anySessionHasHls()) {
+                stopLeftoverMirrorVideo("playlistRemove");
+                maybeEndPresentationAfterHlsIdle("playlistRemove");
+            }
         } else if ("playlistInsert".equals(type)) {
             handlePlaylistInsert(ctx, request, action);
         }
@@ -617,5 +650,77 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         }
     }
 
+    /**
+     * YouTube HLS uses {@code X-Apple-Session-ID}; screen mirror uses RTSP
+     * {@code Active-Remote}. They are separate {@link Session} entries — a VIDEO
+     * TEARDOWN on the mirror session must not end presentation while HLS is live
+     * on the other.
+     */
+    private boolean anySessionHasHls() {
+        for (Session s : sessionManager.allSessions()) {
+            if (s.getHlsPlaylistState() != null) {
+                return true;
+            }
+        }
+        return false;
+    }
 
+    private boolean anyVideoServerRunning() {
+        for (Session s : sessionManager.allSessions()) {
+            try {
+                if (s.getVideoServer() != null && s.getVideoServer().isRunning()) {
+                    return true;
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return false;
+    }
+
+    private void maybeEndPresentationAfterHlsIdle(String reason) {
+        applyPresentationEnd(
+                PresentationEndPolicy.afterHlsIdle(
+                        anySessionHasHls(),
+                        anyVideoServerRunning(),
+                        sessionManager.screenMirrorSeen()),
+                reason,
+                null);
+    }
+
+    private void applyPresentationEnd(
+            PresentationEndPolicy.Decision decision, String reason, String sessionId) {
+        if (decision == PresentationEndPolicy.Decision.KEEP) {
+            log.info("{}: keeping presentation{}",
+                    reason,
+                    sessionId == null ? "" : " session=" + sessionId);
+            return;
+        }
+        log.info("{}: ending presentation{}",
+                reason,
+                sessionId == null ? "" : " session=" + sessionId);
+        sessionManager.clearScreenMirrorSeen();
+        airPlayConsumer.onPresentationEnded();
+    }
+
+    private void stopLeftoverMirrorVideo(String reason) {
+        boolean any = false;
+        for (Session s : sessionManager.allSessions()) {
+            try {
+                if (s.getVideoServer() != null && s.getVideoServer().isRunning()) {
+                    s.getVideoServer().stop();
+                    any = true;
+                }
+            } catch (Exception e) {
+                log.debug("Mirror video stop ({}) ignored: {}", reason, e.toString());
+            }
+        }
+        if (any) {
+            log.info("Stopping leftover mirror video after {}", reason);
+            try {
+                airPlayConsumer.onVideoSrcDisconnect();
+            } catch (Exception e) {
+                log.debug("Mirror disconnect after {} ignored: {}", reason, e.toString());
+            }
+        }
+    }
 }

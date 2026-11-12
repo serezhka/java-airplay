@@ -21,10 +21,9 @@ import java.util.UUID;
  * HKP mirror session: pair-verify → audio companion SETUP → video SETUP → RECORD →
  * DataStream video.
  *
- * <p>AAC {@code client.audio.src=audiotest} is sent on the <em>legacy FairPlay</em> cast path
- * only. HAP audio SETUP here is session plumbing (timing / eventPort); we do not encrypt
- * UDP AAC with FairPlay ekey/eiv on this path, and our receiver ignores HAP {@code shk}
- * for audio decrypt.
+ * <p>When {@code castAudio} is true, AAC-LC is sent on the HAP audio {@code dataPort}
+ * using SETUP {@code shk} (AES-CBC, same RTP envelope as legacy audio). Companion-only
+ * audio SETUP (timing/event) still runs when audio cast is off.
  */
 @Slf4j
 public final class HapMirrorSession implements AutoCloseable {
@@ -36,6 +35,7 @@ public final class HapMirrorSession implements AutoCloseable {
     private final AirPlayTimingResponder timing;
     private final Socket eventSocket;
     private final DataStreamVideoClient video;
+    private final HapAudioClient audio;
     private final long streamConnectionId;
 
     private HapMirrorSession(
@@ -43,11 +43,13 @@ public final class HapMirrorSession implements AutoCloseable {
             AirPlayTimingResponder timing,
             Socket eventSocket,
             DataStreamVideoClient video,
+            HapAudioClient audio,
             long streamConnectionId) {
         this.control = control;
         this.timing = timing;
         this.eventSocket = eventSocket;
         this.video = video;
+        this.audio = audio;
         this.streamConnectionId = streamConnectionId;
     }
 
@@ -56,7 +58,7 @@ public final class HapMirrorSession implements AutoCloseable {
      *
      * @param sharedSecret pair-verify X25519 shared secret
      * @param castVideo    must be true (DataStream video)
-     * @param castAudio    if true, logged only — AAC is not sent on HAP (see class javadoc)
+     * @param castAudio    if true, AAC-LC on HAP audio {@code dataPort} using SETUP {@code shk}
      */
     public static HapMirrorSession startDataStream(
             HapSocketControl control,
@@ -70,15 +72,11 @@ public final class HapMirrorSession implements AutoCloseable {
                     "HAP cast requires client.video.src (DataStream); "
                             + "audio-only cast uses the legacy FairPlay path");
         }
-        if (castAudio) {
-            log.info(
-                    "HAP session: client.audio.src is set but AAC is not sent on this path "
-                            + "(FairPlay ekey/eiv audio is legacy-only)");
-        }
         long bootNanos = System.nanoTime();
         AirPlayTimingResponder timing = new AirPlayTimingResponder(bootNanos);
         Socket eventSocket = null;
         DataStreamVideoClient video = null;
+        HapAudioClient audio = null;
         try {
             long audioId = RANDOM.nextLong() & Long.MAX_VALUE;
             long videoId = RANDOM.nextLong() & Long.MAX_VALUE;
@@ -93,11 +91,17 @@ public final class HapMirrorSession implements AutoCloseable {
             NSDictionary audioStream = new NSDictionary();
             audioStream.put("type", AirPlayStreamType.AUDIO_REALTIME);
             audioStream.put("streamConnectionID", audioId);
-            audioStream.put("ct", 2);
-            audioStream.put("spf", 352);
-            audioStream.put("sr", 44100);
-            audioStream.put("audioFormat", 0x40000);
-            audioStream.put("audioFormatIndex", 0x12);
+            if (castAudio) {
+                audioStream.put("ct", 4);
+                audioStream.put("spf", 1024);
+                audioStream.put("audioFormat", 0x400000);
+            } else {
+                audioStream.put("ct", 2);
+                audioStream.put("spf", 352);
+                audioStream.put("sr", 44100);
+                audioStream.put("audioFormat", 0x40000);
+                audioStream.put("audioFormatIndex", 0x12);
+            }
             audioStream.put("controlPort", timing.localPort() + 1);
             audioStream.put("audioMode", "default");
             audioStream.put("usingScreen", true);
@@ -135,6 +139,12 @@ public final class HapMirrorSession implements AutoCloseable {
                 eventSocket = new Socket();
                 eventSocket.connect(new InetSocketAddress(host, eventPort), 5000);
                 eventSocket.setTcpNoDelay(true);
+            }
+            if (castAudio && audioReply.containsKey("streams")) {
+                int audioPort = ((NSDictionary) ((NSArray) audioReply.get("streams")).getArray()[0])
+                        .get("dataPort").toJavaObject(Integer.class);
+                log.info("HAP AAC audio dataPort={}", audioPort);
+                audio = new HapAudioClient(host, audioPort, audioShk);
             }
 
             byte[] shk = Arrays.copyOf(
@@ -188,8 +198,14 @@ public final class HapMirrorSession implements AutoCloseable {
 
             DataStreamCipher cipher = new DataStreamCipher(sharedSecret, videoId);
             video = new DataStreamVideoClient(host, dataPort, cipher, bootNanos);
-            return new HapMirrorSession(control, timing, eventSocket, video, videoId);
+            return new HapMirrorSession(control, timing, eventSocket, video, audio, videoId);
         } catch (Exception e) {
+            if (audio != null) {
+                try {
+                    audio.close();
+                } catch (Exception ignored) {
+                }
+            }
             if (video != null) {
                 try {
                     video.close();
@@ -224,6 +240,9 @@ public final class HapMirrorSession implements AutoCloseable {
 
     @Override
     public void close() {
+        if (audio != null) {
+            audio.close();
+        }
         if (video != null) {
             video.close();
         }
