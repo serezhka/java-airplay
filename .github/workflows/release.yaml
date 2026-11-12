@@ -23,7 +23,7 @@ jobs:
 
       - run: ./gradlew bootJar
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: |
             app/gstreamer/build/libs/java-airplay-gstreamer-*.jar
