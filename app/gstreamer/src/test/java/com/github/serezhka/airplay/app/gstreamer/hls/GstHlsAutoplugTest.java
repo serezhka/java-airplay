@@ -31,7 +31,7 @@ class GstHlsAutoplugTest {
     @Test
     void configureTsDemuxInstallsCcFixOrIgnoreFlag() {
         Assumptions.assumeTrue(gstReady, "GStreamer native libs not available");
-        Element ts = ElementFactory.make("tsdemux", "test-tsdemux");
+        Element ts = tryMake("tsdemux", "test-tsdemux");
         Assumptions.assumeTrue(ts != null, "tsdemux not installed");
         // Do not dispose: CC-fix pad probe keeps native refs for the process lifetime
         // (same as a live playbin). Disposing here aborts later GST tests in this JVM.
@@ -41,7 +41,7 @@ class GstHlsAutoplugTest {
     @Test
     void configureTsDemuxIsIdempotent() {
         Assumptions.assumeTrue(gstReady, "GStreamer native libs not available");
-        Element ts = ElementFactory.make("tsdemux", "test-tsdemux-2");
+        Element ts = tryMake("tsdemux", "test-tsdemux-2");
         Assumptions.assumeTrue(ts != null, "tsdemux not installed");
         assertDoesNotThrow(() -> {
             GstHlsAutoplug.configure(ts);
@@ -52,7 +52,16 @@ class GstHlsAutoplugTest {
     @Test
     void supportsIgnoreContinuityCounterDoesNotThrow() {
         Assumptions.assumeTrue(gstReady, "GStreamer native libs not available");
-        Assumptions.assumeTrue(ElementFactory.make("tsdemux", "probe") != null, "tsdemux missing");
+        Assumptions.assumeTrue(tryMake("tsdemux", "probe") != null, "tsdemux missing");
         assertDoesNotThrow(GstHlsAutoplug::supportsIgnoreContinuityCounter);
+    }
+
+    /** Unit CI may have base GST without mpegtsdemux; make() throws instead of null. */
+    private static Element tryMake(String factory, String name) {
+        try {
+            return ElementFactory.make(factory, name);
+        } catch (Throwable t) {
+            return null;
+        }
     }
 }
