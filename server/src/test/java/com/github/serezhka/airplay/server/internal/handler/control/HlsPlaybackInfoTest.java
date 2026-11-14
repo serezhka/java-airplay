@@ -59,4 +59,41 @@ class HlsPlaybackInfoTest {
         assertEquals(4.0, info.position(), 0.001);
         assertEquals(0.0, info.rate(), 0.001);
     }
+
+    @Test
+    void livePostEosGapReportsNotReady() {
+        var hls = new HlsPlaylistState(
+                "mlhls://localhost/master.m3u8",
+                "http://127.0.0.1/playlist/master.m3u8?session=x");
+        hls.putPlaylist("mlhls://localhost/itag/136/mediadata.m3u8", """
+                #EXTM3U
+                #EXTINF:6.0,
+                a.ts
+                """);
+        hls.setWaitingForMasterChange(true);
+
+        var info = HlsPlaybackInfo.resolve(hls, new Playback.Info(6.0, 5.5, 1));
+        assertEquals(0, info.duration(), 0.001);
+        assertEquals(0, info.position(), 0.001);
+        assertEquals(0, info.rate(), 0.001);
+    }
+
+    @Test
+    void vodEndPinPrefersShorterPlayerDuration() {
+        var hls = new HlsPlaylistState(
+                "mlhls://localhost/master.m3u8",
+                "http://127.0.0.1/playlist/master.m3u8?session=x");
+        hls.putPlaylist("mlhls://localhost/itag/136/mediadata.m3u8", """
+                #EXTM3U
+                #EXTINF:30.0,
+                a.ts
+                #EXT-X-ENDLIST
+                """);
+        hls.setWaitingForMasterChange(true);
+
+        var info = HlsPlaybackInfo.resolve(hls, new Playback.Info(6.0, 5.9, 1));
+        assertEquals(6.0, info.duration(), 0.001);
+        assertEquals(6.0, info.position(), 0.001);
+        assertEquals(1.0, info.rate(), 0.001);
+    }
 }

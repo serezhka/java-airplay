@@ -1,5 +1,6 @@
 package com.github.serezhka.airplay.server.internal.handler.session;
 
+import com.github.serezhka.airplay.protocol.media.EndListDuration;
 import io.lindstrom.m3u8.model.MediaPlaylist;
 import io.lindstrom.m3u8.model.MediaSegment;
 import io.lindstrom.m3u8.parser.MediaPlaylistParser;
@@ -239,21 +240,10 @@ public class HlsPlaylistState {
                 return sum;
             }
         } catch (Exception ignored) {
-            // use #EXTINF line scan below
+            // fall through to line scan
         }
-        double sum = 0;
-        for (String line : mediaPlaylistBody.split("\n")) {
-            String trimmed = line.trim();
-            if (trimmed.startsWith("#EXTINF:")) {
-                String value = trimmed.substring("#EXTINF:".length()).split(",", 2)[0].trim();
-                try {
-                    sum += Double.parseDouble(value);
-                } catch (NumberFormatException ignored) {
-                    // skip
-                }
-            }
-        }
-        return sum;
+        // Same EXTINF scan as protocol (caller paths are ENDLIST VOD bodies).
+        return EndListDuration.sumSeconds(mediaPlaylistBody);
     }
 
     public void updateMasterPlaylist(String rewrittenMaster) {

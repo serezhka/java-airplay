@@ -10,10 +10,15 @@ class HlsMediaUriClassifierTest {
     @Test
     void classifiesVideoVersusAudioAlternatives() {
         assertTrue(HlsMediaUriClassifier.isLikelyVideo("mlhls://localhost/itag/229/mediadata.m3u8"));
+        assertTrue(HlsMediaUriClassifier.isLikelyVideo("mlhls://localhost/itag/136/mediadata.m3u8"));
         assertFalse(HlsMediaUriClassifier.isLikelyVideo("mlhls://localhost/itag/233/mediadata.m3u8"));
         assertFalse(HlsMediaUriClassifier.isLikelyVideo("mlhls://localhost/itag/234/mediadata.m3u8"));
         assertFalse(HlsMediaUriClassifier.isLikelyVideo(
                 "mlhls://localhost/itag/233/xtags/abc/mediadata.m3u8"));
+        assertFalse(HlsMediaUriClassifier.isLikelyVideo(
+                "mlhls://localhost/itag/229/xtags/lang=en/mediadata.m3u8"));
         assertFalse(HlsMediaUriClassifier.isLikelyVideo("http://example/plain.m3u8"));
+        assertFalse(HlsMediaUriClassifier.isLikelyVideo(null));
+        assertFalse(HlsMediaUriClassifier.isLikelyVideo(""));
     }
 }

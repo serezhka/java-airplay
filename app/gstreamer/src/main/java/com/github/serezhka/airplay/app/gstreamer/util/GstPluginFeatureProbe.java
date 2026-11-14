@@ -34,8 +34,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <p>
  * H.264 HW: only demote READY failures. Do <b>not</b> boost ranks — forcing
  * {@code d3d11h264dec}/{@code nvh264dec} to 300 correlated with YouTube
- * "Couldn't download fragments" / no first picture on the Windows lab box; default
- * registry ranks already pick usable HW when present.
+ * "Couldn't download fragments" / no first picture on Windows; default registry
+ * ranks already pick usable HW when present.
  */
 @Slf4j
 public final class GstPluginFeatureProbe {
@@ -76,8 +76,8 @@ public final class GstPluginFeatureProbe {
     }
 
     /**
-     * On the Windows lab box {@code d3d12h264dec} defaults above {@code nvh264dec} (258 vs
-     * 257) and {@code d3d11h264dec} can READY while YouTube HLS never presents. Demote both
+     * On Windows {@code d3d12h264dec} defaults above {@code nvh264dec} (258 vs 257) and
+     * {@code d3d11h264dec} can READY while YouTube HLS never presents. Demote both
      * so NVIDIA (or software) wins autoplug into {@code d3d11videosink}.
      */
     private static void preferNonD3dH264OnWindows() {
