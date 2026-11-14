@@ -42,7 +42,13 @@ class MpegTsContinuityFixLiveSegTest {
         } catch (Throwable t) {
             Assumptions.assumeTrue(false, "GStreamer native libs not available: " + t);
         }
-        Assumptions.assumeTrue(ElementFactory.make("tsdemux", "probe") != null, "tsdemux missing");
+        Element probe;
+        try {
+            probe = ElementFactory.make("tsdemux", "probe");
+        } catch (Throwable t) {
+            probe = null;
+        }
+        Assumptions.assumeTrue(probe != null, "tsdemux missing");
     }
 
     @Test
