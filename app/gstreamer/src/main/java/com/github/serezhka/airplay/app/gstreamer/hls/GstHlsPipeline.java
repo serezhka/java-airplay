@@ -35,10 +35,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * HLS URI playback via GStreamer {@code playbin3}.
+ * HLS URI playback via GStreamer {@code playbin3} + {@code hlsdemux2}.
  * <p>
  * Requires streams-aware {@code hlsdemux2} (do not demote it). Short VOD ENDLIST ads often
  * never post bus EOS — {@link #checkPositionAtEnd()} covers that.
+ * <p>
+ * Autoplug ({@link GstHlsAutoplug}): payload-aware {@link MpegTsContinuityFix} on
+ * {@code tsdemux}, or {@code ignore-continuity-counter} when the element supports it.
  * <p>
  * Never {@code setState(NULL)} / {@code dispose()} a live adaptive playbin: the HTTP
  * stack underneath can abort the JVM on teardown ({@code playlistRemove}). {@link #stop()}
@@ -90,6 +93,9 @@ public final class GstHlsPipeline {
     private volatile double volumeLinear = 1.0;
     private volatile int pipelineGeneration;
     private final Object pipelineLock = new Object();
+    /** CONTINUITY bus spam can stall the JVM logger; coalesce. */
+    private long lastContinuityLogNanos;
+    private int continuitySuppressed;
 
     public void start(String playlistUri, double volumeLinear) {
         // Build on the GStreamer service thread — never on Netty (same rule as teardown).
@@ -104,6 +110,8 @@ public final class GstHlsPipeline {
                 startedAtNanos = System.nanoTime();
                 lastEndedNotifyNanos = 0;
                 mediaClockTrusted = false;
+                continuitySuppressed = 0;
+                lastContinuityLogNanos = 0;
                 this.volumeLinear = HlsPlaybackMath.clampVolume(volumeLinear);
                 buildPipeline();
             }
@@ -144,6 +152,7 @@ public final class GstHlsPipeline {
         pipeline.set("uri", uri);
         pipeline.set("volume", volumeLinear);
         pipeline.set("video-sink", videoSink);
+        GstHlsAutoplug.install(pipeline);
         watchFirstPicture(videoSink);
         log.info("HLS pipeline using playbin3 headless={}", headless);
 
@@ -181,6 +190,17 @@ public final class GstHlsPipeline {
         });
         pipeline.getBus().connect((Bus.WARNING) (source, code, message) -> {
             if (generation != pipelineGeneration) {
+                return;
+            }
+            if (message != null && message.contains("CONTINUITY")) {
+                continuitySuppressed++;
+                long now = System.nanoTime();
+                if (now - lastContinuityLogNanos < 2_000_000_000L) {
+                    return;
+                }
+                log.warn("HLS CONTINUITY x{} (latest: {})", continuitySuppressed, message);
+                continuitySuppressed = 0;
+                lastContinuityLogNanos = now;
                 return;
             }
             log.warn("HLS pipeline warning: code={} message={}", code, message);

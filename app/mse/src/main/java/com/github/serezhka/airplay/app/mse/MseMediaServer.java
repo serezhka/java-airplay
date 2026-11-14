@@ -375,7 +375,7 @@ final class MseMediaServer implements AutoCloseable {
     }
 
     void setVolume(double linear) {
-        volumeLinear = Math.max(0.0, Math.min(1.0, linear));
+        volumeLinear = HlsPlaybackMath.clampVolume(linear);
         applyVolume();
     }
 
