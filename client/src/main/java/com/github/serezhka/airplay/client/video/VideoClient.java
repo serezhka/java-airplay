@@ -174,11 +174,8 @@ public class VideoClient extends ChannelInboundHandlerAdapter implements AutoClo
         byte[] header = payloadType == MirrorPacketLayout.PAYLOAD_CODEC
                 ? MirrorPacketHeaders.legacy(payload.length, payloadType, timestamp, FRAME_WIDTH, FRAME_HEIGHT)
                 : MirrorPacketHeaders.legacy(payload.length, payloadType, timestamp);
-        // One TCP write: some receivers mis-frame when the 128B header and payload are split.
-        byte[] packet = new byte[header.length + payload.length];
-        System.arraycopy(header, 0, packet, 0, header.length);
-        System.arraycopy(payload, 0, packet, header.length, payload.length);
-        local.writeAndFlush(Unpooled.wrappedBuffer(packet));
+        // One TCP write without copying into a combined array (CompositeByteBuf).
+        local.writeAndFlush(Unpooled.wrappedBuffer(header, payload));
         long n = packetsSent.incrementAndGet();
         if (n == 1 || n == 30 || n % 300 == 0) {
             log.info("Video packets sent={} lastType={} lastLen={}", n, payloadType, payload.length);
@@ -193,10 +190,7 @@ public class VideoClient extends ChannelInboundHandlerAdapter implements AutoClo
         if (ch != null) {
             ch.close();
         }
-        EventLoopGroup group = workerGroup;
-        if (group != null) {
-            group.shutdownGracefully(0, 2, TimeUnit.SECONDS);
-        }
+        // Shared event loop lives for the process; only the channel is closed.
     }
 
     private void closeQuietly() {
@@ -220,7 +214,7 @@ public class VideoClient extends ChannelInboundHandlerAdapter implements AutoClo
     }
 
     private EventLoopGroup eventLoopGroup() {
-        return NettyEventLoops.create();
+        return NettyEventLoops.shared();
     }
 
     private Class<? extends SocketChannel> socketChannelClass() {
