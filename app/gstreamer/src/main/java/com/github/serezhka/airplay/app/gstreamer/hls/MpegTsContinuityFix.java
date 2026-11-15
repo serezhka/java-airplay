@@ -26,8 +26,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * real-payload packets advance; stuffing mirrors the last payload CC. Discontinuity
  * indicators re-learn without forcing. Null packets are skipped.
  * <p>
- * Changed buffers are swapped in with {@code gst_pad_probe_info_set_buffer}. Unchanged
- * buffers pass through untouched (replacing every reframed buffer stalls playbin3).
+ * Live path carries incomplete 188-byte tails across buffers (same as the test helper):
+ * HLS HTTP often splits mid-packet; dropping the tail desyncs PES and yields periodic
+ * {@code error while decoding MB} / smear even with software decode. Changed or
+ * reframed buffers are swapped in with {@code gst_pad_probe_info_set_buffer}.
  */
 @Slf4j
 final class MpegTsContinuityFix {
@@ -44,10 +46,10 @@ final class MpegTsContinuityFix {
     private static final boolean CAN_REPLACE = PROBE_API != null && PROBE_INFO_FIELD != null;
 
     private final int[] lastCc = new int[PID_COUNT];
-    /** Snapshot when scanning from a resync offset we may abandon. */
+    /** Snapshot when a live replace may fail and state must roll back. */
     private final int[] lastCcSnapshot = new int[PID_COUNT];
-    /** Test-only pending for {@link #processForTest(byte[])}. */
     private final byte[] pending = new byte[TS_PACKET - 1];
+    private final byte[] pendingSnapshot = new byte[TS_PACKET - 1];
     private int pendingLen;
     private final AtomicInteger rewrittenPackets = new AtomicInteger();
     private final AtomicInteger rewrittenBuffers = new AtomicInteger();
@@ -55,6 +57,11 @@ final class MpegTsContinuityFix {
 
     private interface ProbeApi extends com.sun.jna.Library {
         void gst_pad_probe_info_set_buffer(GstPadProbeInfo info, Pointer buffer);
+    }
+
+    /** Result of framing + CC rewrite for one input slice. */
+    record ProcessResult(byte[] data, int fixed, boolean usedPending) {
+        static final ProcessResult EMPTY = new ProcessResult(new byte[0], 0, false);
     }
 
     MpegTsContinuityFix() {
@@ -71,13 +78,18 @@ final class MpegTsContinuityFix {
     }
 
     /**
-     * Test helper with pending carry (stricter framing than the live probe).
-     * Live probe passes unchanged buffers through to avoid stalling playbin3.
+     * Frame incomplete tails across calls, then rewrite CC on full packets.
+     * Used by unit tests and the live pad probe.
      */
     byte[] processForTest(byte[] input) {
+        return processWithPending(input == null ? new byte[0] : input).data;
+    }
+
+    ProcessResult processWithPending(byte[] input) {
         if (input == null) {
             input = new byte[0];
         }
+        boolean usedPending = pendingLen > 0;
         int total = pendingLen + input.length;
         byte[] chunk = scratch(Math.max(total, 1));
         if (pendingLen > 0) {
@@ -93,18 +105,23 @@ final class MpegTsContinuityFix {
             syncAt = findSync(chunk, 0, total);
             if (syncAt < 0) {
                 stashPending(chunk, Math.max(0, total - (TS_PACKET - 1)), total);
-                return new byte[0];
+                return ProcessResult.EMPTY;
             }
+            usedPending = true;
         }
         int full = ((total - syncAt) / TS_PACKET) * TS_PACKET;
-        stashPending(chunk, syncAt + full, total);
-        if (full == 0) {
-            return new byte[0];
+        int remFrom = syncAt + full;
+        if (remFrom < total) {
+            usedPending = true;
         }
-        rewriteAligned(chunk, syncAt, full);
+        stashPending(chunk, remFrom, total);
+        if (full == 0) {
+            return ProcessResult.EMPTY;
+        }
+        int fixed = rewriteAligned(chunk, syncAt, full);
         byte[] out = new byte[full];
         System.arraycopy(chunk, syncAt, out, 0, full);
-        return out;
+        return new ProcessResult(out, fixed, usedPending);
     }
 
     void install(Element tsdemux) {
@@ -131,47 +148,46 @@ final class MpegTsContinuityFix {
             return PadProbeReturn.OK;
         }
         int inLen = mapped.remaining();
-        byte[] chunk = scratch(Math.max(inLen, 1));
+        byte[] input = new byte[inLen];
         try {
-            mapped.get(chunk, 0, inLen);
+            mapped.get(input);
         } finally {
             buffer.unmap();
         }
 
-        if (inLen == 0) {
-            return PadProbeReturn.OK;
-        }
-        int syncAt = 0;
-        if ((chunk[0] & 0xFF) != 0x47) {
-            syncAt = findSync(chunk, 0, inLen);
-            if (syncAt < 0) {
-                return PadProbeReturn.OK;
-            }
-        }
-        int full = ((inLen - syncAt) / TS_PACKET) * TS_PACKET;
-        if (full == 0) {
+        if (inLen == 0 && pendingLen == 0) {
             return PadProbeReturn.OK;
         }
 
-        boolean resynced = syncAt > 0;
-        if (resynced) {
-            System.arraycopy(lastCc, 0, lastCcSnapshot, 0, PID_COUNT);
+        int pendingBefore = pendingLen;
+        if (pendingBefore > 0) {
+            System.arraycopy(pending, 0, pendingSnapshot, 0, pendingBefore);
         }
-        int fixed = rewriteAligned(chunk, syncAt, full);
-        if (fixed == 0) {
-            if (resynced) {
-                // Pass original through — restore CC state (resync view was not emitted).
-                System.arraycopy(lastCcSnapshot, 0, lastCc, 0, PID_COUNT);
+        System.arraycopy(lastCc, 0, lastCcSnapshot, 0, PID_COUNT);
+
+        ProcessResult result = processWithPending(input);
+        if (result.data.length == 0) {
+            // Held incomplete tail in pending — do not forward a partial packet.
+            return PadProbeReturn.DROP;
+        }
+
+        boolean mustReplace = result.fixed > 0
+                || result.usedPending
+                || result.data.length != inLen;
+        if (!mustReplace) {
+            return PadProbeReturn.OK;
+        }
+        if (!CAN_REPLACE || !replaceBuffer(info, buffer, result.data, 0, result.data.length)) {
+            System.arraycopy(lastCcSnapshot, 0, lastCc, 0, PID_COUNT);
+            pendingLen = pendingBefore;
+            if (pendingBefore > 0) {
+                System.arraycopy(pendingSnapshot, 0, pending, 0, pendingBefore);
             }
             return PadProbeReturn.OK;
         }
-        if (!CAN_REPLACE || !replaceBuffer(info, buffer, chunk, syncAt, full)) {
-            if (resynced) {
-                System.arraycopy(lastCcSnapshot, 0, lastCc, 0, PID_COUNT);
-            }
-            return PadProbeReturn.OK;
+        if (result.fixed > 0) {
+            noteRewrite(result.fixed);
         }
-        noteRewrite(fixed);
         return PadProbeReturn.OK;
     }
 

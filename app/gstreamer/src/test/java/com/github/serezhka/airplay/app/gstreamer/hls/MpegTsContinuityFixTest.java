@@ -119,6 +119,42 @@ class MpegTsContinuityFixTest {
     }
 
     @Test
+    void misalignedBufferCutsStayContinuousWithPending() {
+        // Live HLS HTTP often splits mid-188-byte packet. Without pending carry the next
+        // buffer starts mid-packet, PES desyncs, and libav reports "error while decoding MB".
+        ByteBuffer stream = ByteBuffer.allocate(188 * 10);
+        for (int cc = 0; cc <= 3; cc++) {
+            stream.put(payload(0x100, cc));
+        }
+        for (int cc = 4; cc <= 7; cc++) {
+            stream.put(emptyAdaptStuffing(0x100, cc));
+        }
+        stream.put(payload(0x100, 0)); // next-fragment reset
+        stream.put(payload(0x100, 1));
+        stream.flip();
+        byte[] raw = new byte[stream.remaining()];
+        stream.get(raw);
+
+        MpegTsContinuityFix fix = new MpegTsContinuityFix();
+        java.io.ByteArrayOutputStream acc = new java.io.ByteArrayOutputStream(raw.length + 188);
+        int[] cuts = {100, 250, 188 * 3 + 50, 188 * 5 + 17, raw.length};
+        int from = 0;
+        for (int cut : cuts) {
+            byte[] slice = Arrays.copyOfRange(raw, from, cut);
+            MpegTsContinuityFix.ProcessResult r = fix.processWithPending(slice);
+            if (r.data().length > 0) {
+                acc.writeBytes(r.data());
+            }
+            from = cut;
+        }
+        assertEquals(0, fix.pendingLen(), "no partial packet left after last full cut");
+        byte[] emitted = acc.toByteArray();
+        assertTrue(emitted.length >= 188 * 6, "emitted most packets, got " + emitted.length);
+        assertTrue(demuxerPayloadCcContinuous(ByteBuffer.wrap(emitted)),
+                "pending-aware rewrite must keep demuxer CC continuous across mid-packet cuts");
+    }
+
+    @Test
     void naiveAfcRewriteWouldNotFixDemuxerGap() {
         // Document why stuffing must not advance CC: if we advanced on empty afc=3,
         // next-fragment CC=0 would look continuous in the file but tsdemux still sees 3→0.
