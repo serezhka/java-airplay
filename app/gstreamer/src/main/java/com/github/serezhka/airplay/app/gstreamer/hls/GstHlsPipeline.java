@@ -203,6 +203,19 @@ public final class GstHlsPipeline {
                 lastContinuityLogNanos = now;
                 return;
             }
+            // VA "code not implemented" / invalid buffer storms map 1:1 to periodic smear.
+            if (message != null && (message.contains("code not implemented")
+                    || message.contains("invalid video buffer"))) {
+                continuitySuppressed++;
+                long now = System.nanoTime();
+                if (now - lastContinuityLogNanos < 2_000_000_000L) {
+                    return;
+                }
+                log.warn("HLS decode/display warn x{} (latest: {})", continuitySuppressed, message);
+                continuitySuppressed = 0;
+                lastContinuityLogNanos = now;
+                return;
+            }
             log.warn("HLS pipeline warning: code={} message={}", code, message);
         });
         pipeline.getBus().connect((Bus.ASYNC_DONE) source -> {

@@ -56,6 +56,15 @@ class GstHlsAutoplugTest {
         assertDoesNotThrow(GstHlsAutoplug::supportsIgnoreContinuityCounter);
     }
 
+    @Test
+    void preferSoftwareH264ForHlsIsIdempotent() {
+        Assumptions.assumeTrue(gstReady, "GStreamer native libs not available");
+        assertDoesNotThrow(() -> {
+            GstHlsAutoplug.preferSoftwareH264ForHls();
+            GstHlsAutoplug.preferSoftwareH264ForHls();
+        });
+    }
+
     /** Unit CI may have base GST without mpegtsdemux; make() throws instead of null. */
     private static Element tryMake(String factory, String name) {
         try {
