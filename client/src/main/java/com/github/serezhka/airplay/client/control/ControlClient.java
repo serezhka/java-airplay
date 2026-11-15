@@ -76,7 +76,9 @@ public class ControlClient implements Runnable, AutoCloseable {
                     // Outbound uses framed bytes via sendRaw (RtspEncoder header quirks
                     // are rejected by some receivers). Decoder still parses responses.
                     p.addLast("decoder", new RtspDecoder());
-                    p.addLast("logger", new LoggingHandler(LogLevel.DEBUG, ByteBufFormat.SIMPLE));
+                    if (log.isDebugEnabled()) {
+                        p.addLast("logger", new LoggingHandler(LogLevel.DEBUG, ByteBufFormat.SIMPLE));
+                    }
                     p.addLast("aggregator", new HttpObjectAggregator(64 * 1024));
                     p.addLast("control handler", controlHandler);
                 }
@@ -98,9 +100,7 @@ public class ControlClient implements Runnable, AutoCloseable {
             }
         } finally {
             log.info("Control client stopped");
-            if (workerGroup != null) {
-                workerGroup.shutdownGracefully();
-            }
+            // Shared event loop lives for the process.
         }
     }
 
@@ -109,10 +109,6 @@ public class ControlClient implements Runnable, AutoCloseable {
         io.netty.channel.Channel ch = channel;
         if (ch != null) {
             ch.close();
-        }
-        EventLoopGroup group = workerGroup;
-        if (group != null) {
-            group.shutdownGracefully(0, 2, java.util.concurrent.TimeUnit.SECONDS);
         }
     }
 
@@ -194,7 +190,7 @@ public class ControlClient implements Runnable, AutoCloseable {
     }
 
     private EventLoopGroup eventLoopGroup() {
-        return NettyEventLoops.create();
+        return NettyEventLoops.shared();
     }
 
     private Class<? extends SocketChannel> socketChannelClass() {

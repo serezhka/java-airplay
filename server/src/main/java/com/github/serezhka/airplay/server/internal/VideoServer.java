@@ -5,14 +5,11 @@ import com.github.serezhka.airplay.server.Playback;
 import com.github.serezhka.airplay.server.internal.decoder.VideoDecoder;
 import com.github.serezhka.airplay.server.internal.handler.video.VideoHandler;
 import io.netty.bootstrap.ServerBootstrap;
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
-import io.netty.channel.epoll.Epoll;
-import io.netty.channel.epoll.EpollServerSocketChannel;
-import io.netty.channel.socket.ServerSocketChannel;
 import io.netty.channel.socket.SocketChannel;
-import io.netty.channel.socket.nio.NioServerSocketChannel;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -27,6 +24,7 @@ public class VideoServer implements Runnable {
 
     private Thread thread;
     private Playback airPlayConsumer;
+    private volatile Channel serverChannel;
 
     @Getter
     private int port;
@@ -41,6 +39,11 @@ public class VideoServer implements Runnable {
     }
 
     public void stop() {
+        Channel ch = serverChannel;
+        if (ch != null) {
+            ch.close();
+            serverChannel = null;
+        }
         if (thread != null) {
             thread.interrupt();
             thread = null;
@@ -56,13 +59,13 @@ public class VideoServer implements Runnable {
     @Override
     public void run() {
         var serverBootstrap = new ServerBootstrap();
-        var bossGroup = eventLoopGroup();
-        var workerGroup = eventLoopGroup();
+        EventLoopGroup bossGroup = NettyEventLoops.sharedBoss();
+        EventLoopGroup workerGroup = NettyEventLoops.sharedWorker();
         try {
             serverBootstrap
                     .group(bossGroup, workerGroup)
-                    .channel(serverSocketChannelClass())
-                    .localAddress(new InetSocketAddress(0)) // bind random port
+                    .channel(NettyEventLoops.serverSocketChannelClass())
+                    .localAddress(new InetSocketAddress(0))
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         public void initChannel(final SocketChannel ch) {
@@ -74,6 +77,7 @@ public class VideoServer implements Runnable {
                     .childOption(ChannelOption.SO_REUSEADDR, true)
                     .childOption(ChannelOption.SO_KEEPALIVE, true);
             var channelFuture = serverBootstrap.bind().sync();
+            serverChannel = channelFuture.channel();
 
             log.info("AirPlay video server listening on port: {}",
                     port = ((InetSocketAddress) channelFuture.channel().localAddress()).getPort());
@@ -85,18 +89,11 @@ public class VideoServer implements Runnable {
             channelFuture.channel().closeFuture().sync();
         } catch (InterruptedException e) {
             log.debug("AirPlay video server interrupted");
+            Thread.currentThread().interrupt();
         } finally {
             log.debug("AirPlay video server stopped");
-            bossGroup.shutdownGracefully();
-            workerGroup.shutdownGracefully();
+            serverChannel = null;
+            // Shared event loops stay alive for the process.
         }
-    }
-
-    private EventLoopGroup eventLoopGroup() {
-        return NettyEventLoops.create();
-    }
-
-    private Class<? extends ServerSocketChannel> serverSocketChannelClass() {
-        return Epoll.isAvailable() ? EpollServerSocketChannel.class : NioServerSocketChannel.class;
     }
 }

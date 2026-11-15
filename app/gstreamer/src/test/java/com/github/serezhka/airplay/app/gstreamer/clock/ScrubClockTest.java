@@ -33,4 +33,13 @@ class ScrubClockTest {
         // Guard released; later playback follows the demux, including a small lead.
         assertEquals(110.0, clock.report(110.0, 109.0), 0.001);
     }
+
+    @Test
+    void clearDropsHoldSoDemuxClockWins() {
+        ScrubClock clock = new ScrubClock();
+        clock.arm(50);
+        assertEquals(51.0, clock.report(40.0, 51.0), 0.001);
+        clock.clear();
+        assertEquals(42.0, clock.report(42.0, 60.0), 0.001);
+    }
 }

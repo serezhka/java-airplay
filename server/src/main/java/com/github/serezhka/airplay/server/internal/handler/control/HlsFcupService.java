@@ -398,12 +398,14 @@ public class HlsFcupService {
         } else {
             body = PropertyListUtil.preparePlaybackStateEvent(state);
         }
-        String xml = new String(body, StandardCharsets.UTF_8).replaceAll("\\s+", " ").trim();
-        if (playback != null) {
-            log.debug("Playback state event: {} position={} rate={} session={} xml={}",
-                    state, playback.position(), playback.rate(), session.getId(), xml);
-        } else {
-            log.debug("Playback state event: {} session={} xml={}", state, session.getId(), xml);
+        if (log.isDebugEnabled()) {
+            String xml = new String(body, StandardCharsets.UTF_8).replaceAll("\\s+", " ").trim();
+            if (playback != null) {
+                log.debug("Playback state event: {} position={} rate={} session={} xml={}",
+                        state, playback.position(), playback.rate(), session.getId(), xml);
+            } else {
+                log.debug("Playback state event: {} session={} xml={}", state, session.getId(), xml);
+            }
         }
         return body;
     }

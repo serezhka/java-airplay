@@ -17,6 +17,8 @@ public final class HlsUriRewrite {
 
     private static final Pattern MLHLS_URI = Pattern.compile("mlhls://localhost[^\\s\"']+");
     private static final Pattern MEDIA_URI = Pattern.compile("mlhls://localhost[^\\s\"']+/mediadata\\.m3u8");
+    private static final java.util.concurrent.ConcurrentHashMap<String, Pattern> ATTR_PATTERNS =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     private HlsUriRewrite() {
     }
@@ -159,7 +161,8 @@ public final class HlsUriRewrite {
     }
 
     private static java.util.Optional<String> extractAttr(String line, String name) {
-        Pattern p = Pattern.compile(name + "=(?:\"([^\"]*)\"|([^,]*))", Pattern.CASE_INSENSITIVE);
+        Pattern p = ATTR_PATTERNS.computeIfAbsent(name,
+                n -> Pattern.compile(n + "=(?:\"([^\"]*)\"|([^,]*))", Pattern.CASE_INSENSITIVE));
         Matcher m = p.matcher(line);
         if (!m.find()) {
             return java.util.Optional.empty();

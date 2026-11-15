@@ -1,5 +1,6 @@
 package com.github.serezhka.airplay.app.gstreamer;
 
+import com.github.serezhka.airplay.app.common.hls.HlsPlaybackMath;
 import com.github.serezhka.airplay.app.common.support.NativeProcessLog;
 import com.github.serezhka.airplay.app.gstreamer.display.GstFullscreenWindow;
 import com.github.serezhka.airplay.app.gstreamer.display.GstVideoSinkFactory;
@@ -300,7 +301,7 @@ public class GstPlayer implements Playback {
 
     @Override
     public void onVolume(double volumeLinear) {
-        this.volumeLinear = Math.max(0.0, Math.min(1.0, volumeLinear));
+        this.volumeLinear = HlsPlaybackMath.clampVolume(volumeLinear);
         applyVolume(alacPipeline, "alac-vol");
         applyVolume(aacEldPipeline, "aac-eld-vol");
         applyVolume(aacLcPipeline, "aac-lc-vol");
