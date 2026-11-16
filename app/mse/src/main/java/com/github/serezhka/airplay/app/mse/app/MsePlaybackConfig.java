@@ -13,6 +13,7 @@ public class MsePlaybackConfig {
 
     @Bean
     public Playback playback(AirPlayConfig airPlayConfig, DumpConfig dumpConfig) {
-        return PlaybackFactory.withDump(new MsePlayer(airPlayConfig.getFps()), dumpConfig);
+        return PlaybackFactory.withDump(
+                new MsePlayer(airPlayConfig.getFps(), airPlayConfig.isFullscreen()), dumpConfig);
     }
 }

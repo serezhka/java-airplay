@@ -2,8 +2,8 @@ package com.github.serezhka.airplay.app.gstreamer.hls;
 
 import com.github.serezhka.airplay.app.common.hls.HlsPlaybackMath;
 import com.github.serezhka.airplay.app.gstreamer.clock.ScrubClock;
-import com.github.serezhka.airplay.app.gstreamer.display.GstFullscreenWindow;
 import com.github.serezhka.airplay.app.gstreamer.display.GstVideoSinkFactory;
+import com.github.serezhka.airplay.app.gstreamer.display.GstVideoWindow;
 import com.sun.jna.Native;
 import lombok.extern.slf4j.Slf4j;
 import org.freedesktop.gstreamer.Bus;
@@ -91,11 +91,17 @@ public final class GstHlsPipeline {
     private volatile boolean mediaClockTrusted;
     private final ScrubClock scrubClock = new ScrubClock();
     private volatile double volumeLinear = 1.0;
+    private volatile boolean fullscreen = true;
     private volatile int pipelineGeneration;
     private final Object pipelineLock = new Object();
     /** CONTINUITY bus spam can stall the JVM logger; coalesce. */
     private long lastContinuityLogNanos;
     private int continuitySuppressed;
+
+    /** Exclusive fullscreen vs decorated resizable window ({@code airplay.fullscreen}). */
+    public void setFullscreen(boolean fullscreen) {
+        this.fullscreen = fullscreen;
+    }
 
     public void start(String playlistUri, double volumeLinear) {
         // Build on the GStreamer service thread — never on Netty (same rule as teardown).
@@ -157,8 +163,9 @@ public final class GstHlsPipeline {
         log.info("HLS pipeline using playbin3 headless={}", headless);
 
         if (!headless && display != null && display.overlay() && display.canvas() != null) {
-            window = GstFullscreenWindow.create(display.canvas());
-            GstFullscreenWindow.show(window);
+            boolean exclusive = fullscreen;
+            window = GstVideoWindow.create(display.canvas(), exclusive);
+            GstVideoWindow.show(window, exclusive);
             Element overlaySink = GstVideoSinkFactory.overlayTarget(videoSink, "hls-sink");
             VideoOverlay overlay = VideoOverlay.wrap(overlaySink);
             long hwnd = Native.getComponentID(display.canvas());
@@ -263,7 +270,7 @@ public final class GstHlsPipeline {
         JFrame closingWindow = window;
         window = null;
         if (closingWindow != null) {
-            GstFullscreenWindow.hide(closingWindow);
+            GstVideoWindow.hide(closingWindow);
         }
         if (orphan == null) {
             return;

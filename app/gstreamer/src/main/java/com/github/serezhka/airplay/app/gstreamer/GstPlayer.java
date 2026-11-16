@@ -2,8 +2,8 @@ package com.github.serezhka.airplay.app.gstreamer;
 
 import com.github.serezhka.airplay.app.common.hls.HlsPlaybackMath;
 import com.github.serezhka.airplay.app.common.support.NativeProcessLog;
-import com.github.serezhka.airplay.app.gstreamer.display.GstFullscreenWindow;
 import com.github.serezhka.airplay.app.gstreamer.display.GstVideoSinkFactory;
+import com.github.serezhka.airplay.app.gstreamer.display.GstVideoWindow;
 import com.github.serezhka.airplay.app.gstreamer.hls.GstHlsPipeline;
 import com.github.serezhka.airplay.app.gstreamer.util.GstPluginFeatureProbe;
 import com.github.serezhka.airplay.app.gstreamer.util.GstPlayerUtils;
@@ -51,7 +51,7 @@ public class GstPlayer implements Playback {
     private final Pipeline aacLcPipeline;
     private final JFrame window;
     private final Runnable attachWindow;
-    private final boolean nativeFullscreen;
+    private final boolean fullscreen;
     private final boolean useD3d11;
 
     private final AppSrc h264Src;
@@ -66,10 +66,14 @@ public class GstPlayer implements Playback {
     private AudioStreamInfo.CompressionType audioCompressionType;
 
     public GstPlayer() {
-        this(60);
+        this(60, true);
     }
 
     public GstPlayer(int fps) {
+        this(fps, true);
+    }
+
+    public GstPlayer(int fps, boolean fullscreen) {
         log.info("GStreamer debug log: {}", NativeProcessLog.playerLogFile("gstreamer"));
         hls.setOnEnded(() -> observer.onEnded());
         hls.setOnPresented(() -> observer.onPresented());
@@ -78,7 +82,8 @@ public class GstPlayer implements Playback {
         boolean useXimage = GstVideoSinkFactory.hasXimage();
         boolean forceAppsink = Boolean.parseBoolean(System.getProperty("airplay.gst.appsink", "false"))
                 || Boolean.parseBoolean(System.getenv().getOrDefault("AIRPLAY_GST_APPSINK", "false"));
-        nativeFullscreen = useD3d11 && !forceAppsink;
+        this.fullscreen = fullscreen && !forceAppsink;
+        hls.setFullscreen(this.fullscreen);
         String sinkLaunch;
         if (forceAppsink) {
             sinkLaunch = " ! fakesink name=sink sync=false async=false";
@@ -95,9 +100,10 @@ public class GstPlayer implements Playback {
         String audioSink = forceAppsink
                 ? "fakesink sync=false async=false"
                 : "autoaudiosink sync=false";
-        log.info("GStreamer video sink: {}; audio sink: {}",
+        log.info("GStreamer video sink: {}; audio sink: {}; fullscreen={}",
                 forceAppsink ? "fakesink(forced)" : useD3d11 ? "d3d11videosink" : useXimage ? "ximagesink" : "appsink",
-                forceAppsink ? "fakesink(forced)" : "autoaudiosink");
+                forceAppsink ? "fakesink(forced)" : "autoaudiosink",
+                this.fullscreen);
         // Never leaky before avdec — mid-GOP drops freeze / ghost the picture.
         // Cap display latency after decode; videoflip kept for orientation.
         h264Pipeline = (Pipeline) Gst.parseLaunch(
@@ -164,7 +170,7 @@ public class GstPlayer implements Playback {
         } else if (useD3d11 || useXimage) {
             Canvas canvas = new Canvas();
             canvas.setBackground(Color.BLACK);
-            window = GstFullscreenWindow.create(canvas);
+            window = GstVideoWindow.create(canvas, this.fullscreen);
             VideoOverlay overlay = VideoOverlay.wrap(sink);
             attachWindow = () -> overlay.setWindowHandle(Native.getComponentID(canvas));
             h264Pipeline.getBus().setSyncHandler(message -> {
@@ -177,7 +183,7 @@ public class GstPlayer implements Playback {
         } else {
             GstVideoComponent video = new GstVideoComponent((AppSink) sink);
             video.setBackground(Color.BLACK);
-            window = GstFullscreenWindow.create(video);
+            window = GstVideoWindow.create(video, this.fullscreen);
             attachWindow = () -> {
             };
         }
@@ -193,8 +199,8 @@ public class GstPlayer implements Playback {
             h264Pipeline.stop();
         }
         if (window != null) {
-            GstFullscreenWindow.show(window);
-            GstFullscreenWindow.onEdt(attachWindow);
+            GstVideoWindow.show(window, fullscreen);
+            GstVideoWindow.onEdt(attachWindow);
         }
         h264Pipeline.play();
     }
@@ -210,7 +216,7 @@ public class GstPlayer implements Playback {
     @Override
     public void onVideoSrcDisconnect() {
         if (window != null) {
-            GstFullscreenWindow.hide(window);
+            GstVideoWindow.hide(window);
         }
         h264Pipeline.stop();
     }
@@ -349,6 +355,6 @@ public class GstPlayer implements Playback {
     }
 
     boolean isFullscreenConfigured() {
-        return nativeFullscreen || window != null && window.isUndecorated() && !window.isResizable();
+        return fullscreen && window != null && window.isUndecorated() && !window.isResizable();
     }
 }

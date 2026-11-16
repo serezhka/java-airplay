@@ -77,6 +77,8 @@ airplay.fps=60
 airplay.hls-enabled=true
 airplay.mdns-loopback=false
 airplay.tray-enabled=true
+airplay.fullscreen=true
+# false = resizable 1280x720 window for mirror/HLS (GST / FFmpeg / MSE)
 # Cast sender (gst/ffmpeg): videotest|screencapture|none  /  audiotest|none
 # MSE jar default is none/none (cast off)
 client.video.src=videotest
