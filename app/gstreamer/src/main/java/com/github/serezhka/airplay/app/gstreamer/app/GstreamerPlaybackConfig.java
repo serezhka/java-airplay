@@ -13,6 +13,7 @@ public class GstreamerPlaybackConfig {
 
     @Bean
     public Playback playback(AirPlayConfig airPlayConfig, DumpConfig dumpConfig) {
-        return PlaybackFactory.withDump(new GstPlayer(airPlayConfig.getFps()), dumpConfig);
+        return PlaybackFactory.withDump(
+                new GstPlayer(airPlayConfig.getFps(), airPlayConfig.isFullscreen()), dumpConfig);
     }
 }

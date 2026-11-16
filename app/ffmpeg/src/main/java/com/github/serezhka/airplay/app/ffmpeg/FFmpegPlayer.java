@@ -23,6 +23,7 @@ public class FFmpegPlayer implements Playback {
     private static final long VIDEO_FLUSH_INTERVAL_NS = TimeUnit.MILLISECONDS.toNanos(8);
 
     private final int fps;
+    private final boolean fullscreen;
     private final FfmpegHlsPipeline hls = new FfmpegHlsPipeline();
     private final Object videoLock = new Object();
     private final Object audioLock = new Object();
@@ -38,15 +39,21 @@ public class FFmpegPlayer implements Playback {
     private volatile Double pendingStartSeekSeconds;
 
     public FFmpegPlayer() {
-        this(60);
+        this(60, true);
     }
 
     public FFmpegPlayer(int fps) {
+        this(fps, true);
+    }
+
+    public FFmpegPlayer(int fps, boolean fullscreen) {
         this.fps = fps;
+        this.fullscreen = fullscreen;
+        hls.setFullscreen(fullscreen);
         hls.setOnEnded(() -> observer.onEnded());
         hls.setOnPresented(() -> observer.onPresented());
         hls.setOnSeekDisplayed(() -> observer.onSeekDisplayed());
-        log.info("FFmpeg debug log: {}", NativeProcessLog.playerLogFile("ffmpeg"));
+        log.info("FFmpeg debug log: {}; fullscreen={}", NativeProcessLog.playerLogFile("ffmpeg"), fullscreen);
     }
 
     @Override
@@ -57,7 +64,7 @@ public class FFmpegPlayer implements Playback {
             stopVideoProcessLocked();
             try {
                 // Video-only: -an + dummy SDL audio (see FfplayProcess.applyDisplayEnv).
-                h264Process = FfplayProcess.startH264Pipe(this.fps);
+                h264Process = FfplayProcess.startH264Pipe(this.fps, this.fullscreen);
                 h264Out = h264Process.getOutputStream();
                 lastVideoFlushNanos = 0;
             } catch (IOException e) {

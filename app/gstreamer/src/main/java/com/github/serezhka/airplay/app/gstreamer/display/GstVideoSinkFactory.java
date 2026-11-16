@@ -12,7 +12,7 @@ import java.awt.Canvas;
 import java.awt.Color;
 
 /**
- * Shared fullscreen video sinks for mirroring and HLS (d3d11 / ximage / auto).
+ * Shared video sinks for mirroring and HLS (d3d11 / ximage / auto).
  */
 @Slf4j
 public final class GstVideoSinkFactory {

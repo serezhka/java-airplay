@@ -1,5 +1,6 @@
 package com.github.serezhka.airplay.app.mse;
 
+import com.github.serezhka.airplay.app.common.support.PlayerWindowDefaults;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
@@ -10,20 +11,27 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Launches system Chromium/Chrome against the local MSE page (fullscreen {@code --app=} window).
- * Starts lazily on the first mirror/HLS session — same idea on every OS as GST/FFmpeg opening
- * a full-screen sink. The page shows a spinner until the first decoded frame.
+ * Launches system Chromium/Chrome against the local MSE page ({@code --app=} window).
+ * Starts lazily on the first mirror/HLS session — same idea on every OS as GST/FFmpeg
+ * opening a video sink. Fullscreen follows {@code airplay.fullscreen}. The page shows a
+ * spinner until the first decoded frame.
  */
 @Slf4j
 final class ChromiumHost implements AutoCloseable {
 
     private final String pageUrl;
     private final Path userData;
+    private final boolean fullscreen;
     private volatile Process process;
     private volatile String browserBin;
 
     ChromiumHost(String pageUrl) throws IOException {
+        this(pageUrl, true);
+    }
+
+    ChromiumHost(String pageUrl, boolean fullscreen) throws IOException {
         this.pageUrl = pageUrl;
+        this.fullscreen = fullscreen;
         this.userData = Files.createTempDirectory("airplay-mse-chromium-");
         this.userData.toFile().deleteOnExit();
         this.browserBin = resolveBrowser();
@@ -68,19 +76,24 @@ final class ChromiumHost implements AutoCloseable {
     }
 
     private void startProcess() throws IOException {
-        List<String> cmd = buildLaunchCommand(browserBin, userData, pageUrl, headless());
+        List<String> cmd = buildLaunchCommand(browserBin, userData, pageUrl, headless(), fullscreen);
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.redirectErrorStream(true);
         pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
         process = pb.start();
-        log.info("MSE Chromium started pid={} url={}", process.pid(), pageUrl);
+        log.info("MSE Chromium started pid={} url={} fullscreen={}", process.pid(), pageUrl, fullscreen);
     }
 
     /**
-     * Chromium argv for the MSE player window. Headed builds always use
-     * {@code --start-fullscreen} (same full-screen sink idea as GST/FFmpeg).
+     * Chromium argv for the MSE player window. Headed + fullscreen uses
+     * {@code --start-fullscreen}; headed + windowed uses {@code --window-size}.
      */
     static List<String> buildLaunchCommand(String browserBin, Path userData, String pageUrl, boolean headless) {
+        return buildLaunchCommand(browserBin, userData, pageUrl, headless, true);
+    }
+
+    static List<String> buildLaunchCommand(String browserBin, Path userData, String pageUrl,
+                                           boolean headless, boolean fullscreen) {
         List<String> cmd = new ArrayList<>();
         cmd.add(browserBin);
         cmd.add("--user-data-dir=" + userData.toAbsolutePath());
@@ -94,8 +107,10 @@ final class ChromiumHost implements AutoCloseable {
         if (headless) {
             cmd.add("--headless=new");
             cmd.add("--disable-gpu");
-        } else {
+        } else if (fullscreen) {
             cmd.add("--start-fullscreen");
+        } else {
+            cmd.add("--window-size=" + PlayerWindowDefaults.WIDTH + "," + PlayerWindowDefaults.HEIGHT);
         }
         if (Boolean.parseBoolean(System.getProperty("airplay.mse.chrome.noSandbox", "false"))) {
             cmd.add("--no-sandbox");
@@ -111,7 +126,7 @@ final class ChromiumHost implements AutoCloseable {
 
     /**
      * Tear down the browser process (e.g. AirPlay client disconnected). Next session
-     * starts a fresh fullscreen window via {@link #ensureAlive()}.
+     * starts a fresh player window via {@link #ensureAlive()}.
      */
     synchronized void stop() {
         destroyQuietly();

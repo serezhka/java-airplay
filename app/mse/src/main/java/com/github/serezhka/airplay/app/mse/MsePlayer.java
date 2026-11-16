@@ -74,10 +74,14 @@ public class MsePlayer implements Playback, AutoCloseable {
     private volatile boolean audioConfigured;
 
     public MsePlayer() {
-        this(60);
+        this(60, true);
     }
 
     public MsePlayer(int fps) {
+        this(fps, true);
+    }
+
+    public MsePlayer(int fps, boolean fullscreen) {
         this.fps = Math.max(1, fps);
         this.browserExecutor = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "mse-chromium");
@@ -89,7 +93,7 @@ public class MsePlayer implements Playback, AutoCloseable {
             media = new MseMediaServer();
             media.start(assets);
             media.setOnEnded(() -> observer.onEnded());
-            chromium = new ChromiumHost(media.pageUrl());
+            chromium = new ChromiumHost(media.pageUrl(), fullscreen);
             browserAvailable = chromium.browserAvailable();
             if (!browserAvailable) {
                 browserFailed = true;
@@ -97,8 +101,8 @@ public class MsePlayer implements Playback, AutoCloseable {
                         + "-Dairplay.mse.browser=/path/to/chrome — receiver will advertise "
                         + "but mirror/HLS will not display until a browser is available");
             } else {
-                log.info("MsePlayer ready page={} fps={} (Chromium starts on first session)",
-                        media.pageUrl(), this.fps);
+                log.info("MsePlayer ready page={} fps={} fullscreen={} (Chromium starts on first session)",
+                        media.pageUrl(), this.fps, fullscreen);
             }
         } catch (Exception e) {
             throw new IllegalStateException("Failed to start MSE media server", e);
