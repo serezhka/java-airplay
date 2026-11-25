@@ -78,6 +78,9 @@ final class MseMediaServer implements AutoCloseable {
      * permanent black/Starting window in testing). Keep about half a second at 30fps.
      */
     private static final int MAX_PENDING_NAL_FRAMES = 16;
+    /** ~0.5s of stereo ALAC/AAC AUs while /audio WS is still connecting after late control. */
+    private static final int MAX_PENDING_AUDIO_AUS = 64;
+    private static final int MAX_PENDING_AUDIO_BYTES = 256 * 1024;
 
     private final EventLoopGroup boss = NettyEventLoops.create();
     private final EventLoopGroup worker = NettyEventLoops.create();
@@ -96,6 +99,14 @@ final class MseMediaServer implements AutoCloseable {
     private final Object pendingNalsLock = new Object();
     private final ArrayDeque<byte[]> pendingNals = new ArrayDeque<>();
     private int pendingNalBytes;
+    private final Object pendingAudioLock = new Object();
+    private final ArrayDeque<byte[]> pendingAudioAus = new ArrayDeque<>();
+    private int pendingAudioBytes;
+    /**
+     * Last {@code configureAac}/{@code configureAlac} JSON. Music SETUP often races ahead of
+     * Chromium /control — replayed from {@link #resyncPresentationToControlClients()}.
+     */
+    private volatile String lastAudioConfigureJson;
 
     private volatile int port = -1;
     private volatile boolean hlsActive;
@@ -208,8 +219,8 @@ final class MseMediaServer implements AutoCloseable {
     }
 
     /**
-     * Chromium often connects /control after SETUP already called {@link #startMirror}/{@link #startHls}.
-     * Re-push the active presentation so the page opens /mirror or loads HLS (avoids a black idle window).
+     * Chromium often connects /control after SETUP already called {@link #startMirror}/{@link #startHls}
+     * / audio configure. Re-push the active presentation so the page catches up.
      */
     void resyncPresentationToControlClients() {
         if (!hasControlClient()) {
@@ -219,6 +230,8 @@ final class MseMediaServer implements AutoCloseable {
             log.info("MSE resync startMirror → late control client (fps={} epoch={})",
                     lastMirrorFps, lastMirrorEpoch);
             sendStartMirrorControl(lastMirrorFps, lastMirrorEpoch);
+            // Mirror also needs AAC/ALAC configure when audio SETUP raced ahead of /control.
+            pushAudioConfigureIfPresent();
             applyVolume();
             return;
         }
@@ -228,10 +241,35 @@ final class MseMediaServer implements AutoCloseable {
             sendControl("{\"cmd\":\"startHls\",\"url\":" + jsonString(proxied)
                     + ",\"epoch\":" + activeHlsEpoch + "}");
             applyVolume();
+            return;
         }
+        // Audio-only Music: no mirror/HLS — still must replay configure + cover.
+        if (pushAudioConfigureIfPresent()) {
+            log.info("MSE resync audio configure → late control client");
+        }
+        applyVolume();
+    }
+
+    private boolean pushAudioConfigureIfPresent() {
+        String json = lastAudioConfigureJson;
+        if (json == null || json.isBlank()) {
+            return false;
+        }
+        sendControl(json);
+        return true;
+    }
+
+    /** Test hook: last audio configure command, or null. */
+    String lastAudioConfigureJson() {
+        return lastAudioConfigureJson;
+    }
+
+    boolean hasAudioClient() {
+        return !audioClients.isEmpty();
     }
 
     private void sendStartMirrorControl(int fps, int epoch) {
+        // Cover is for audio-only; hide when video takes the stage.
         sendControl("{\"cmd\":\"startMirror\",\"wsUrl\":\"" + mirrorWsUrl()
                 + "\",\"audioWsUrl\":\"" + audioWsUrl() + "\",\"fps\":" + fps
                 + ",\"epoch\":" + epoch + "}");
@@ -242,25 +280,37 @@ final class MseMediaServer implements AutoCloseable {
      * {@code codec} is {@code aac-eld}, {@code aac-lc}, or {@code none} to tear down.
      */
     void configureAac(String codec, int sampleRate, int channels, byte[] asc) {
-        StringBuilder sb = new StringBuilder(128);
+        StringBuilder sb = new StringBuilder(160);
         sb.append("{\"cmd\":\"configureAac\",\"codec\":").append(jsonString(codec == null ? "none" : codec))
                 .append(",\"sampleRate\":").append(sampleRate)
                 .append(",\"channels\":").append(channels)
-                .append(",\"ascHex\":").append(jsonString(toHex(asc)));
+                .append(",\"ascHex\":").append(jsonString(toHex(asc)))
+                .append(",\"audioWsUrl\":").append(jsonString(audioWsUrl()));
         sb.append('}');
-        sendControl(sb.toString());
+        String json = sb.toString();
+        if (codec == null || "none".equals(codec)) {
+            lastAudioConfigureJson = null;
+            clearPendingAudio();
+        } else {
+            lastAudioConfigureJson = json;
+        }
+        sendControl(json);
     }
 
     /** Tell the page to open pure-JS ALAC with the 24-byte ALACSpecificConfig. */
     void configureAlac(int sampleRate, int channels, byte[] cookie) {
-        sendControl("{\"cmd\":\"configureAlac\",\"sampleRate\":" + sampleRate
+        String json = "{\"cmd\":\"configureAlac\",\"sampleRate\":" + sampleRate
                 + ",\"channels\":" + channels
-                + ",\"cookieHex\":" + jsonString(toHex(cookie)) + "}");
+                + ",\"cookieHex\":" + jsonString(toHex(cookie))
+                + ",\"audioWsUrl\":" + jsonString(audioWsUrl()) + "}";
+        lastAudioConfigureJson = json;
+        sendControl(json);
     }
+
 
     /** Send one raw AAC or ALAC access unit to the page for in-browser decode. */
     void sendAudioAu(byte[] au, int offset, int length) {
-        if (au == null || length <= 0 || audioClients.isEmpty()) {
+        if (au == null || length <= 0) {
             return;
         }
         int off = Math.max(0, offset);
@@ -268,7 +318,55 @@ final class MseMediaServer implements AutoCloseable {
         if (len <= 0) {
             return;
         }
+        if (audioClients.isEmpty()) {
+            bufferPendingAudio(au, off, len);
+            return;
+        }
         audioClients.writeAndFlush(new BinaryWebSocketFrame(Unpooled.copiedBuffer(au, off, len)));
+    }
+
+    private void bufferPendingAudio(byte[] au, int off, int len) {
+        byte[] copy = new byte[len];
+        System.arraycopy(au, off, copy, 0, len);
+        synchronized (pendingAudioLock) {
+            while ((pendingAudioBytes + copy.length > MAX_PENDING_AUDIO_BYTES
+                    || pendingAudioAus.size() >= MAX_PENDING_AUDIO_AUS) && !pendingAudioAus.isEmpty()) {
+                byte[] dropped = pendingAudioAus.removeFirst();
+                pendingAudioBytes -= dropped.length;
+            }
+            pendingAudioAus.addLast(copy);
+            pendingAudioBytes += copy.length;
+        }
+    }
+
+    private void flushPendingAudio() {
+        ArrayDeque<byte[]> batch;
+        synchronized (pendingAudioLock) {
+            if (pendingAudioAus.isEmpty()) {
+                return;
+            }
+            batch = new ArrayDeque<>(pendingAudioAus);
+            pendingAudioAus.clear();
+            pendingAudioBytes = 0;
+        }
+        log.info("MSE flushing {} buffered audio AU(s) to late /audio client", batch.size());
+        for (byte[] au : batch) {
+            audioClients.writeAndFlush(new BinaryWebSocketFrame(Unpooled.copiedBuffer(au)));
+        }
+    }
+
+    private void clearPendingAudio() {
+        synchronized (pendingAudioLock) {
+            pendingAudioAus.clear();
+            pendingAudioBytes = 0;
+        }
+    }
+
+    /** Test hook: AUs waiting for the first /audio WebSocket. */
+    int pendingAudioAuCount() {
+        synchronized (pendingAudioLock) {
+            return pendingAudioAus.size();
+        }
     }
 
     private static String toHex(byte[] bytes) {
@@ -323,6 +421,7 @@ final class MseMediaServer implements AutoCloseable {
         mirrorActive = false;
         clearHlsClock(true);
         clearPendingNals();
+        lastAudioConfigureJson = null;
         closeMirrorClients();
         closeAudioClients();
         sendControl("{\"cmd\":\"stopAll\"}");
@@ -547,6 +646,7 @@ final class MseMediaServer implements AutoCloseable {
     }
 
     private void closeAudioClients() {
+        clearPendingAudio();
         for (Channel ch : audioClients.toArray(new Channel[0])) {
             ch.writeAndFlush(new CloseWebSocketFrame()).addListener(ChannelFutureListener.CLOSE);
         }
@@ -736,13 +836,13 @@ final class MseMediaServer implements AutoCloseable {
                         flushPendingNals();
                     } else if ("/audio".equals(path)) {
                         audioClients.add(ctx.channel());
-                        log.debug("MSE audio client {}", ctx.channel().remoteAddress());
+                        log.info("MSE audio client connected {}", ctx.channel().remoteAddress());
+                        flushPendingAudio();
                     } else {
                         controlClients.add(ctx.channel());
                         log.info("MSE control client connected");
                         applyVolume();
-                        // Do not resync here — page emits ready next; a second startMirror would
-                        // tear down the first /mirror WS after NALs were already flushed into it.
+                        // Full presentation resync waits for page "ready" (see handleControlMessage).
                     }
                 });
                 return;

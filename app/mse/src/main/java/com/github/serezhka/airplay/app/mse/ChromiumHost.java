@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -70,6 +71,7 @@ final class ChromiumHost implements AutoCloseable {
     private void startProcess() throws IOException {
         List<String> cmd = buildLaunchCommand(browserBin, userData, pageUrl, headless());
         ProcessBuilder pb = new ProcessBuilder(cmd);
+        applyBrowserEnv(pb);
         pb.redirectErrorStream(true);
         pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
         process = pb.start();
@@ -80,6 +82,25 @@ final class ChromiumHost implements AutoCloseable {
      * Chromium argv for the MSE player window. Headed builds always use
      * {@code --start-fullscreen} (same full-screen sink idea as GST/FFmpeg).
      */
+
+    static void applyBrowserEnv(ProcessBuilder pb) {
+        Map<String, String> env = pb.environment();
+        copyEnv(env, "DISPLAY");
+        copyEnv(env, "WAYLAND_DISPLAY");
+        copyEnv(env, "XAUTHORITY");
+        copyEnv(env, "XDG_RUNTIME_DIR");
+        copyEnv(env, "DBUS_SESSION_BUS_ADDRESS");
+        copyEnv(env, "PULSE_SERVER");
+        copyEnv(env, "PULSE_SINK");
+    }
+
+    private static void copyEnv(Map<String, String> env, String key) {
+        String value = System.getenv(key);
+        if (value != null && !value.isBlank()) {
+            env.put(key, value);
+        }
+    }
+
     static List<String> buildLaunchCommand(String browserBin, Path userData, String pageUrl, boolean headless) {
         List<String> cmd = new ArrayList<>();
         cmd.add(browserBin);
@@ -91,6 +112,7 @@ final class ChromiumHost implements AutoCloseable {
         cmd.add("--autoplay-policy=no-user-gesture-required");
         cmd.add("--disable-session-crashed-bubble");
         cmd.add("--check-for-update-interval=31536000");
+        cmd.add("--password-store=basic");
         if (headless) {
             cmd.add("--headless=new");
             cmd.add("--disable-gpu");

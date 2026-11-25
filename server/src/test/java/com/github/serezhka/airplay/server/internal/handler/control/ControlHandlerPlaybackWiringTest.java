@@ -241,11 +241,31 @@ class ControlHandlerPlaybackWiringTest {
     }
 
     @Test
-    void rtspTeardownAudioDisconnectsAudioOnly() throws Exception {
+    void rtspTeardownAudioOnlyMusicKeepsPresentation() throws Exception {
         writeInbound(rtspTeardownWithStream(AirPlayStreamType.AUDIO_REALTIME));
         assertTrue(playback.eventsContainInOrder("audioDisconnect"));
         assertFalse(playback.events().contains("videoDisconnect"));
+        // Next Music track often SETUP on the same control TCP — keep Chromium.
         assertFalse(playback.events().contains("presentationEnded"));
+    }
+
+    @Test
+    void rtspTeardownAudioWhileHlsKeepsPresentation() throws Exception {
+        seedHlsStarted();
+        writeInbound(rtspTeardownWithStream(AirPlayStreamType.AUDIO_REALTIME));
+        assertTrue(playback.eventsContainInOrder("audioDisconnect"));
+        assertFalse(playback.events().contains("presentationEnded"));
+    }
+
+    @Test
+    void controlChannelDropAfterBoundSessionEndsPresentation() {
+        sessions.getSession(SESSION);
+        // Same pooled name as ControlHandler.BOUND_SESSION_ID.
+        channel.attr(io.netty.util.AttributeKey.<String>valueOf("airplay.boundSessionId")).set(SESSION);
+        channel.close().syncUninterruptibly();
+        channel.checkException();
+        assertNull(sessions.findSession(SESSION));
+        assertTrue(playback.eventsContainInOrder("presentationEnded"));
     }
 
     @Test

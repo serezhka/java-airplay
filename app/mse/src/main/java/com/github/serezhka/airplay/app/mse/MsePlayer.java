@@ -71,7 +71,9 @@ public class MsePlayer implements Playback, AutoCloseable {
     private volatile boolean browserFailed;
     private volatile Observer observer = Observer.NONE;
     private volatile AudioStreamInfo.CompressionType audioCompressionType;
+    private volatile AudioStreamInfo lastAudioFormat;
     private volatile boolean audioConfigured;
+    private volatile long lastAudioDiscontinuityNanos;
 
     public MsePlayer() {
         this(60);
@@ -267,30 +269,62 @@ public class MsePlayer implements Playback, AutoCloseable {
     @Override
     public void onAudioFormat(AudioStreamInfo audioStreamInfo) {
         audioConfigured = false;
+        lastAudioFormat = audioStreamInfo;
         audioCompressionType = audioStreamInfo == null ? null : audioStreamInfo.getCompressionType();
         if (audioCompressionType == null) {
             return;
         }
         ensureBrowserAsync();
-        int rate = sampleRate(audioStreamInfo);
-        int ch = channels(audioStreamInfo);
-        switch (audioCompressionType) {
+        applyAudioConfigure(audioStreamInfo, audioCompressionType, false);
+    }
+
+    @Override
+    public void onAudioDiscontinuity() {
+        AudioStreamInfo info = lastAudioFormat;
+        AudioStreamInfo.CompressionType type = audioCompressionType;
+        if (info == null || type == null || !audioConfigured) {
+            return;
+        }
+        long now = System.nanoTime();
+        if (now - lastAudioDiscontinuityNanos < 500_000_000L) {
+            return;
+        }
+        lastAudioDiscontinuityNanos = now;
+        log.debug("MSE audio discontinuity — reopening {} decoder", type);
+        applyAudioConfigure(info, type, true);
+    }
+
+    private void applyAudioConfigure(AudioStreamInfo info, AudioStreamInfo.CompressionType type,
+                                     boolean reopen) {
+        int rate = sampleRate(info);
+        int ch = channels(info);
+        switch (type) {
             case AAC_ELD -> {
                 media.configureAac("aac-eld", rate, ch, ASC_ELD_44100_2);
                 audioConfigured = true;
-                log.info("MSE audio fdk-wasm AAC-ELD {}Hz x{}", rate, ch);
+                if (!reopen) {
+                    log.info("MSE audio fdk-wasm AAC-ELD {}Hz x{}", rate, ch);
+                }
             }
             case AAC -> {
                 media.configureAac("aac-lc", rate, ch, ASC_LC_44100_2);
                 audioConfigured = true;
-                log.info("MSE audio fdk-wasm AAC-LC {}Hz x{}", rate, ch);
+                if (!reopen) {
+                    log.info("MSE audio fdk-wasm AAC-LC {}Hz x{}", rate, ch);
+                }
             }
             case ALAC -> {
-                media.configureAlac(rate, ch, alacCookie(audioStreamInfo));
+                media.configureAlac(rate, ch, alacCookie(info));
                 audioConfigured = true;
-                log.info("MSE audio alac.js ALAC {}Hz x{}", rate, ch);
+                if (!reopen) {
+                    log.info("MSE audio alac.js ALAC {}Hz x{}", rate, ch);
+                }
             }
-            default -> log.warn("MSE unsupported audio compression {}", audioCompressionType);
+            default -> {
+                if (!reopen) {
+                    log.warn("MSE unsupported audio compression {}", type);
+                }
+            }
         }
     }
 
@@ -316,6 +350,7 @@ public class MsePlayer implements Playback, AutoCloseable {
     public void onAudioSrcDisconnect() {
         audioConfigured = false;
         audioCompressionType = null;
+        lastAudioFormat = null;
         media.configureAac("none", 0, 0, new byte[0]);
     }
 

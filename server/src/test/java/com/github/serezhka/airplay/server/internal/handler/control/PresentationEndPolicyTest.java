@@ -47,4 +47,24 @@ class PresentationEndPolicyTest {
     void fullTeardownWhileOtherSessionHasHlsKeepsPresentation() {
         assertEquals(KEEP, PresentationEndPolicy.afterFullTeardown(true));
     }
+
+    @Test
+    void audioOnlyTeardownKeepsPresentationForNextTrack() {
+        assertEquals(KEEP, PresentationEndPolicy.afterAudioTeardown(false, false));
+    }
+
+    @Test
+    void audioTeardownDuringMirrorKeepsPresentation() {
+        assertEquals(KEEP, PresentationEndPolicy.afterAudioTeardown(false, true));
+    }
+
+    @Test
+    void audioTeardownDuringHlsKeepsPresentation() {
+        assertEquals(KEEP, PresentationEndPolicy.afterAudioTeardown(true, false));
+    }
+
+    @Test
+    void controlDropWithoutOtherMediaEndsPresentation() {
+        assertEquals(END, PresentationEndPolicy.afterControlChannelDrop(false, false));
+    }
 }

@@ -34,4 +34,11 @@ class ChromiumHostLaunchCommandTest {
         assertTrue(cmd.contains("--headless=new"), cmd.toString());
         assertFalse(cmd.contains("--start-fullscreen"), cmd.toString());
     }
+
+    @Test
+    void launchUsesBasicPasswordStore() {
+        List<String> cmd = ChromiumHost.buildLaunchCommand(
+                "chrome", temp.resolve("ud"), "http://127.0.0.1:9/", false);
+        assertTrue(cmd.contains("--password-store=basic"), cmd.toString());
+    }
 }

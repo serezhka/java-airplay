@@ -4,6 +4,7 @@ import com.github.serezhka.airplay.protocol.FairPlaySession;
 import com.github.serezhka.airplay.server.Playback;
 import com.github.serezhka.airplay.server.internal.decoder.AudioDecoder;
 import com.github.serezhka.airplay.server.internal.handler.audio.AudioHandler;
+import com.github.serezhka.airplay.server.internal.handler.audio.AudioResendRequests;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
@@ -24,13 +25,20 @@ public class AudioServer implements Runnable {
 
     private Thread thread;
     private Playback airPlayConsumer;
+    private AudioResendRequests resendRequests = AudioResendRequests.NOOP;
     private volatile Channel serverChannel;
+    private volatile AudioHandler audioHandler;
 
     @Getter
     private int port;
 
     public void start(Playback airPlayConsumer) throws InterruptedException {
+        start(airPlayConsumer, AudioResendRequests.NOOP);
+    }
+
+    public void start(Playback airPlayConsumer, AudioResendRequests resendRequests) throws InterruptedException {
         this.airPlayConsumer = airPlayConsumer;
+        this.resendRequests = resendRequests != null ? resendRequests : AudioResendRequests.NOOP;
         thread = new Thread(this);
         thread.start();
         synchronized (this) {
@@ -44,10 +52,24 @@ public class AudioServer implements Runnable {
             ch.close();
             serverChannel = null;
         }
+        audioHandler = null;
         if (thread != null) {
             thread.interrupt();
             thread = null;
             airPlayConsumer = null;
+            resendRequests = AudioResendRequests.NOOP;
+        }
+    }
+
+    public boolean isRunning() {
+        Channel ch = serverChannel;
+        return ch != null && ch.isActive();
+    }
+
+    public void resetReorder() {
+        AudioHandler handler = audioHandler;
+        if (handler != null) {
+            handler.reset();
         }
     }
 
@@ -55,6 +77,7 @@ public class AudioServer implements Runnable {
     public void run() {
         var bootstrap = new Bootstrap();
         EventLoopGroup workerGroup = NettyEventLoops.sharedWorker();
+        AudioResendRequests resend = this.resendRequests;
 
         try {
             bootstrap
@@ -64,8 +87,10 @@ public class AudioServer implements Runnable {
                     .handler(new ChannelInitializer<DatagramChannel>() {
                         @Override
                         public void initChannel(final DatagramChannel ch) {
+                            AudioHandler handler = new AudioHandler(airPlay, airPlayConsumer, resend);
+                            audioHandler = handler;
                             ch.pipeline().addLast("audioDecoder", new DatagramPacketDecoder(new AudioDecoder()));
-                            ch.pipeline().addLast("audioHandler", new AudioHandler(airPlay, airPlayConsumer));
+                            ch.pipeline().addLast("audioHandler", handler);
                         }
                     });
             var channelFuture = bootstrap.bind().sync();

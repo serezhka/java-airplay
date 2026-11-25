@@ -161,4 +161,98 @@ class MseMediaServerTest {
             assertEquals(0.0, server.playback().rate(), 0.001);
         }
     }
+
+    @Test
+    void audioConfigureBeforeControlIsReplayedOnReady() throws Exception {
+        Path dir = Files.createTempDirectory("mse-audio-resync-");
+        extractAssets(dir);
+        try (MseMediaServer server = new MseMediaServer()) {
+            server.start(dir);
+            byte[] cookie = hex("000001600010280a0e0200ff00000000000000000000ac44");
+            server.configureAlac(44_100, 2, cookie);
+            assertNotNull(server.lastAudioConfigureJson());
+            assertTrue(server.lastAudioConfigureJson().contains("configureAlac"));
+            assertTrue(server.lastAudioConfigureJson().contains("audioWsUrl"));
+
+            AtomicReference<String> lastCmd = new AtomicReference<>();
+            CompletableFuture<Void> gotConfigure = new CompletableFuture<>();
+            WebSocket control = HttpClient.newHttpClient().newWebSocketBuilder()
+                    .connectTimeout(Duration.ofSeconds(5))
+                    .buildAsync(URI.create("ws://127.0.0.1:" + server.port() + "/control"),
+                            new WebSocket.Listener() {
+                                @Override
+                                public void onOpen(WebSocket webSocket) {
+                                    webSocket.request(1);
+                                    webSocket.sendText("{\"event\":\"ready\"}", true);
+                                }
+
+                                @Override
+                                public CompletionStage<?> onText(WebSocket webSocket, CharSequence data, boolean last) {
+                                    String msg = data.toString();
+                                    lastCmd.set(msg);
+                                    if (msg.contains("configureAlac")) {
+                                        gotConfigure.complete(null);
+                                    }
+                                    webSocket.request(1);
+                                    return null;
+                                }
+                            })
+                    .get(5, TimeUnit.SECONDS);
+
+            gotConfigure.get(5, TimeUnit.SECONDS);
+            assertTrue(lastCmd.get().contains("configureAlac"), lastCmd.get());
+            control.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(2, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    void audioAusBufferUntilAudioSocketConnects() throws Exception {
+        Path dir = Files.createTempDirectory("mse-audio-pending-");
+        extractAssets(dir);
+        try (MseMediaServer server = new MseMediaServer()) {
+            server.start(dir);
+            byte[] au = new byte[]{1, 2, 3, 4, 5};
+            server.sendAudioAu(au, 0, au.length);
+            server.sendAudioAu(au, 0, au.length);
+            assertEquals(2, server.pendingAudioAuCount());
+            assertFalse(server.hasAudioClient());
+
+            AtomicReference<byte[]> received = new AtomicReference<>();
+            CompletableFuture<Void> got = new CompletableFuture<>();
+            WebSocket audio = HttpClient.newHttpClient().newWebSocketBuilder()
+                    .connectTimeout(Duration.ofSeconds(5))
+                    .buildAsync(URI.create(server.audioWsUrl()), new WebSocket.Listener() {
+                        @Override
+                        public void onOpen(WebSocket webSocket) {
+                            webSocket.request(1);
+                        }
+
+                        @Override
+                        public CompletionStage<?> onBinary(WebSocket webSocket, ByteBuffer data, boolean last) {
+                            byte[] bytes = new byte[data.remaining()];
+                            data.get(bytes);
+                            received.set(bytes);
+                            got.complete(null);
+                            webSocket.request(1);
+                            return null;
+                        }
+                    })
+                    .get(5, TimeUnit.SECONDS);
+
+            got.get(5, TimeUnit.SECONDS);
+            assertEquals(0, server.pendingAudioAuCount());
+            assertTrue(server.hasAudioClient());
+            assertEquals(5, received.get().length);
+            audio.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(2, TimeUnit.SECONDS);
+        }
+    }
+
+    private static byte[] hex(String hex) {
+        int n = hex.length();
+        byte[] out = new byte[n / 2];
+        for (int i = 0; i < n; i += 2) {
+            out[i / 2] = (byte) Integer.parseInt(hex.substring(i, i + 2), 16);
+        }
+        return out;
+    }
 }

@@ -1,21 +1,26 @@
 package com.github.serezhka.airplay.server.internal;
 
 import com.github.serezhka.airplay.server.internal.handler.audio.AudioControlHandler;
+import com.github.serezhka.airplay.server.internal.handler.audio.AudioResendPacket;
+import com.github.serezhka.airplay.server.internal.handler.audio.AudioResendRequests;
 import io.netty.bootstrap.Bootstrap;
+import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.socket.DatagramChannel;
+import io.netty.channel.socket.DatagramPacket;
 import lombok.extern.slf4j.Slf4j;
 
 import java.net.InetSocketAddress;
 
 @Slf4j
-public class AudioControlServer implements Runnable {
+public class AudioControlServer implements Runnable, AudioResendRequests {
 
     private Thread thread;
     private int port;
     private volatile Channel serverChannel;
+    private volatile InetSocketAddress peer;
 
     public void start() throws InterruptedException {
         thread = new Thread(this);
@@ -31,10 +36,36 @@ public class AudioControlServer implements Runnable {
             ch.close();
             serverChannel = null;
         }
+        peer = null;
         if (thread != null) {
             thread.interrupt();
             thread = null;
         }
+    }
+
+    @Override
+    public void requestResend(int firstSeq, int count) {
+        if (count <= 0) {
+            return;
+        }
+        InetSocketAddress target = peer;
+        Channel ch = serverChannel;
+        if (target == null || ch == null || !ch.isActive()) {
+            return;
+        }
+        byte[] payload = AudioResendPacket.encode(firstSeq, count);
+        ch.writeAndFlush(new DatagramPacket(Unpooled.wrappedBuffer(payload), target));
+        log.debug("Audio resend requested first={} count={} -> {}", firstSeq & 0xFFFF, count, target);
+    }
+
+    void rememberPeer(InetSocketAddress address) {
+        if (address != null) {
+            peer = address;
+        }
+    }
+
+    public InetSocketAddress peer() {
+        return peer;
     }
 
     @Override
@@ -50,7 +81,8 @@ public class AudioControlServer implements Runnable {
                     .handler(new ChannelInitializer<DatagramChannel>() {
                         @Override
                         public void initChannel(final DatagramChannel ch) {
-                            ch.pipeline().addLast("audioControlHandler", new AudioControlHandler());
+                            ch.pipeline().addLast("audioControlHandler",
+                                    new AudioControlHandler(AudioControlServer.this::rememberPeer));
                         }
                     });
 

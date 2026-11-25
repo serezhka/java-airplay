@@ -9,7 +9,8 @@ import java.util.function.Consumer;
 @Builder
 public class AudioPacket {
 
-    private final byte[] encodedAudio = new byte[480 * 4];
+    /** RTP payload after 12-byte header; Music ALAC frames fit well under 2 KiB. */
+    private final byte[] encodedAudio = new byte[2048];
 
     private boolean available;
     private int flag;

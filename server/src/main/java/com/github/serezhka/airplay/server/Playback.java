@@ -66,6 +66,12 @@ public interface Playback {
 
     void onAudioSrcDisconnect();
 
+    /**
+     * RTP audio hole was abandoned after resend give-up. Stateful codecs should re-init.
+     */
+    default void onAudioDiscontinuity() {
+    }
+
     default void onPlaylist(String playlistUri) {
     }
 
