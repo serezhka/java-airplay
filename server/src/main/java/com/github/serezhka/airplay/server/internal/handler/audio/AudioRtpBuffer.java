@@ -146,10 +146,6 @@ final class AudioRtpBuffer {
         return nextRead;
     }
 
-    int writeNext() {
-        return writeNext;
-    }
-
     int missingCount() {
         if (nextRead < 0 || writeNext < 0) {
             return 0;

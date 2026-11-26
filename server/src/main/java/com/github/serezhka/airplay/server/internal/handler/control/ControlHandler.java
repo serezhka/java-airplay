@@ -405,15 +405,10 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         if (mediaStreamInfo.isPresent()) {
             switch (mediaStreamInfo.get().getStreamType()) {
                 case AUDIO -> {
-                    // Music track boundaries often TEARDOWN+SETUP quickly — keep Chromium briefly.
+                    // Music track boundaries often TEARDOWN+SETUP quickly — keep player briefly.
                     airPlayConsumer.onAudioSrcDisconnect();
                     session.getAudioServer().stop();
                     session.getAudioControlServer().stop();
-                    applyPresentationEnd(
-                            PresentationEndPolicy.afterAudioTeardown(
-                                    anySessionHasHls(), anyVideoServerRunning()),
-                            "RTSP TEARDOWN (audio)",
-                            session.getId());
                     scheduleAudioOnlyPresentationEnd(session.getId());
                 }
                 case VIDEO -> {

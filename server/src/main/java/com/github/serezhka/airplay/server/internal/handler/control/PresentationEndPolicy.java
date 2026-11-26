@@ -43,15 +43,6 @@ final class PresentationEndPolicy {
         return anyHlsLeft ? Decision.KEEP : Decision.END;
     }
 
-    /**
-     * RTSP AUDIO TEARDOWN (Music / speaker). Always keep the player: track changes
-     * often TEARDOWN+SETUP on the same control TCP, and mirror can reconnect audio
-     * under picture. Presentation ends on full TEARDOWN, control-drop, or idle.
-     */
-    static Decision afterAudioTeardown(boolean anyHlsLeft, boolean anyVideoRunning) {
-        return Decision.KEEP;
-    }
-
     /** RTSP full TEARDOWN (no stream list) after local A/V/HLS cleanup. */
     static Decision afterFullTeardown(boolean anyHlsLeft) {
         return anyHlsLeft ? Decision.KEEP : Decision.END;

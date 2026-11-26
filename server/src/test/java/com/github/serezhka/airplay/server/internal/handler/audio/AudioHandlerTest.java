@@ -21,9 +21,9 @@ class AudioHandlerTest {
         List<Integer> emitted = new ArrayList<>();
         AudioHandler handler = handler(recording(emitted), AudioResendRequests.NOOP, new AtomicLong());
 
-        handler.channelRead(null, packet(10));
-        handler.channelRead(null, packet(11));
-        handler.channelRead(null, packet(12));
+        handler.offer(packet(10));
+        handler.offer(packet(11));
+        handler.offer(packet(12));
 
         assertEquals(List.of(10, 11, 12), emitted);
     }
@@ -36,17 +36,18 @@ class AudioHandlerTest {
         AudioHandler handler = handler(recording(emitted), (first, count) ->
                 resends.add(new AudioRtpBuffer.Resend(first, count)), clock);
 
-        handler.channelRead(null, packet(100));
-        handler.channelRead(null, packet(103));
+        handler.offer(packet(100));
+        handler.offer(packet(103));
         assertEquals(List.of(100), emitted);
         assertTrue(resends.isEmpty(), "too early for first resend check");
 
         clock.set(AudioRtpBuffer.RESEND_FIRST_NS);
-        handler.channelRead(null, packet(104));
+        handler.offer(packet(104));
         assertEquals(List.of(new AudioRtpBuffer.Resend(101, 2)), resends);
 
-        handler.channelRead(null, packet(101));
-        handler.channelRead(null, packet(102));
+        // Control-port resend replies take the same offer path as data-port RTP.
+        handler.offer(packet(101));
+        handler.offer(packet(102));
         assertEquals(List.of(100, 101, 102, 103, 104), emitted);
         assertEquals(0, handler.missingCount());
     }
@@ -58,12 +59,12 @@ class AudioHandlerTest {
         AtomicLong clock = new AtomicLong(0L);
         AudioHandler handler = handler(recording(emitted, discontinuities), AudioResendRequests.NOOP, clock);
 
-        handler.channelRead(null, packet(100));
-        handler.channelRead(null, packet(102));
+        handler.offer(packet(100));
+        handler.offer(packet(102));
         assertEquals(List.of(100), emitted);
 
         clock.set(AudioRtpBuffer.MISSING_GIVE_UP_NS);
-        handler.channelRead(null, packet(103));
+        handler.offer(packet(103));
 
         assertTrue(emitted.contains(102), emitted.toString());
         assertTrue(emitted.contains(103), emitted.toString());
@@ -75,10 +76,10 @@ class AudioHandlerTest {
         List<Integer> emitted = new ArrayList<>();
         AudioHandler handler = handler(recording(emitted), AudioResendRequests.NOOP, new AtomicLong());
 
-        handler.channelRead(null, packet(65534));
-        handler.channelRead(null, packet(65535));
-        handler.channelRead(null, packet(0));
-        handler.channelRead(null, packet(1));
+        handler.offer(packet(65534));
+        handler.offer(packet(65535));
+        handler.offer(packet(0));
+        handler.offer(packet(1));
 
         assertEquals(List.of(65534, 65535, 0, 1), emitted);
     }
@@ -88,10 +89,10 @@ class AudioHandlerTest {
         List<Integer> emitted = new ArrayList<>();
         AudioHandler handler = handler(recording(emitted), AudioResendRequests.NOOP, new AtomicLong());
 
-        handler.channelRead(null, packet(5000));
-        handler.channelRead(null, packet(5001));
-        handler.channelRead(null, packet(40));
-        handler.channelRead(null, packet(41));
+        handler.offer(packet(5000));
+        handler.offer(packet(5001));
+        handler.offer(packet(40));
+        handler.offer(packet(41));
 
         assertEquals(List.of(5000, 5001, 40, 41), emitted);
     }
@@ -101,9 +102,9 @@ class AudioHandlerTest {
         List<Integer> emitted = new ArrayList<>();
         AudioHandler handler = handler(recording(emitted), AudioResendRequests.NOOP, new AtomicLong());
 
-        handler.channelRead(null, packet(200));
+        handler.offer(packet(200));
         handler.reset();
-        handler.channelRead(null, packet(5));
+        handler.offer(packet(5));
 
         assertEquals(List.of(200, 5), emitted);
         assertEquals(6, handler.nextRead());
@@ -120,9 +121,9 @@ class AudioHandlerTest {
             }
         }, recording(emitted), AudioResendRequests.NOOP, clock::get);
 
-        handler.channelRead(null, packet(1));
-        handler.channelRead(null, packet(2));
-        handler.channelRead(null, packet(3));
+        handler.offer(packet(1));
+        handler.offer(packet(2));
+        handler.offer(packet(3));
 
         assertEquals(List.of(1, 3), emitted);
     }

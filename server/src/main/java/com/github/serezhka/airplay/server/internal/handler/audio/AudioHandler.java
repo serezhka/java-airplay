@@ -48,7 +48,14 @@ public class AudioHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        AudioPacket packet = (AudioPacket) msg;
+        offer((AudioPacket) msg);
+    }
+
+    /** Data-port RTP or control-port resend reply — same reorder path. */
+    public void offer(AudioPacket packet) {
+        if (packet == null) {
+            return;
+        }
         synchronized (this) {
             long now = clock.getAsLong();
             buffer.offer(packet, now);

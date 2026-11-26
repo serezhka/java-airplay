@@ -47,6 +47,10 @@ public class AudioServer implements Runnable {
     }
 
     public void stop() {
+        AudioResendRequests resend = resendRequests;
+        if (resend instanceof AudioControlServer control) {
+            control.setRetransmitSink(null);
+        }
         Channel ch = serverChannel;
         if (ch != null) {
             ch.close();
@@ -89,6 +93,9 @@ public class AudioServer implements Runnable {
                         public void initChannel(final DatagramChannel ch) {
                             AudioHandler handler = new AudioHandler(airPlay, airPlayConsumer, resend);
                             audioHandler = handler;
+                            if (resend instanceof AudioControlServer control) {
+                                control.setRetransmitSink(handler::offer);
+                            }
                             ch.pipeline().addLast("audioDecoder", new DatagramPacketDecoder(new AudioDecoder()));
                             ch.pipeline().addLast("audioHandler", handler);
                         }
