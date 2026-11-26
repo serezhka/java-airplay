@@ -283,6 +283,8 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                     airPlayConsumer.onAudioFormat((AudioStreamInfo) mediaStreamInfo.get());
                     session.getAudioControlServer().start();
                     session.getAudioServer().start(airPlayConsumer, session.getAudioControlServer());
+                    // ~2 s lead until sync packets can refine latency (resend give-up uses this).
+                    session.getAudioServer().setStreamLatency(88_200, 44_100);
                     bindControlSession(ctx, session.getId());
                     log.info("SESSION mode=AUDIO session={} audioPort={} controlPort={}",
                             session.getId(),

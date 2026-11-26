@@ -9,14 +9,22 @@ import java.util.Optional;
 
 /**
  * Power-of-two RTP reorder window: mark gaps, accept late fills, skip only after give-up.
- * Timing defaults match common AirPlay receiver practice (100 ms / 250 ms / ~750 ms).
+ * Resend pacing: first check 100 ms, then every 250 ms. Give-up is latency-aware
+ * ({@code latency − 250 ms} tail margin), not a flat wall-clock.
  */
 final class AudioRtpBuffer {
 
     static final int CAPACITY = 512;
     static final long RESEND_FIRST_NS = 100_000_000L;
     static final long RESEND_INTERVAL_NS = 250_000_000L;
-    static final long MISSING_GIVE_UP_NS = 750_000_000L;
+    /**
+     * Last-check (0.10 s) + backend buffer (0.15 s): stop requesting when remaining
+     * lead time before assumed playout falls below this.
+     */
+    static final long RESEND_TAIL_MARGIN_NS = 250_000_000L;
+    /** ~2 s lead at 44.1 kHz — typical classic AirPlay buffer until sync packets arrive. */
+    static final int DEFAULT_LATENCY_FRAMES = 88_200;
+    static final int DEFAULT_SAMPLE_RATE_HZ = 44_100;
 
     record Resend(int firstSeq, int count) {
     }
@@ -40,6 +48,7 @@ final class AudioRtpBuffer {
      * (FLUSH/RECORD {@code rtptime=} point, exclusive keep).
      */
     private long pendingFlushRtp = NO_PENDING_FLUSH;
+    private long latencyNs = framesToNs(DEFAULT_LATENCY_FRAMES, DEFAULT_SAMPLE_RATE_HZ);
 
     void reset() {
         Arrays.fill(state, EMPTY);
@@ -49,6 +58,32 @@ final class AudioRtpBuffer {
         nextRead = -1;
         writeNext = -1;
         pendingFlushRtp = NO_PENDING_FLUSH;
+        // Keep stream latency across flush/reset — RECORD/sync set it for the session.
+    }
+
+    /**
+     * Stream latency in RTP frames at {@code sampleRateHz}. Used for resend cut-off /
+     * give-up. Invalid values are ignored.
+     */
+    void setStreamLatency(int frames, int sampleRateHz) {
+        if (frames <= 0 || sampleRateHz <= 0) {
+            return;
+        }
+        latencyNs = framesToNs(frames, sampleRateHz);
+    }
+
+    long latencyNs() {
+        return latencyNs;
+    }
+
+    /**
+     * Age after which a missing slot is abandoned (and no further resends).
+     * {@code max(first+interval, latency − tailMargin)}.
+     */
+    long giveUpNs() {
+        long fromLatency = latencyNs - RESEND_TAIL_MARGIN_NS;
+        long minWindow = RESEND_FIRST_NS + RESEND_INTERVAL_NS;
+        return Math.max(minWindow, fromLatency);
     }
 
     /**
@@ -151,7 +186,7 @@ final class AudioRtpBuffer {
         if (nextRead < 0 || state[idx(nextRead)] != MISSING) {
             return 0;
         }
-        if (nowNs - missingSinceNs[idx(nextRead)] < MISSING_GIVE_UP_NS) {
+        if (nowNs - missingSinceNs[idx(nextRead)] < giveUpNs()) {
             return 0;
         }
         int skipped = 0;
@@ -261,11 +296,15 @@ final class AudioRtpBuffer {
 
     private boolean resendDue(int i, long nowNs) {
         long age = nowNs - missingSinceNs[i];
-        if (age < RESEND_FIRST_NS) {
+        if (age < RESEND_FIRST_NS || age >= giveUpNs()) {
             return false;
         }
         long last = lastResendNs[i];
         return last == 0L || nowNs - last >= RESEND_INTERVAL_NS;
+    }
+
+    static long framesToNs(int frames, int sampleRateHz) {
+        return frames * 1_000_000_000L / sampleRateHz;
     }
 
     private void placeReady(int seq, AudioPacket packet) {

@@ -53,22 +53,45 @@ class AudioHandlerTest {
     }
 
     @Test
-    void expiredGapSkipsAndSignalsDiscontinuity() {
+    void smallExpiredGapSkipsWithoutDiscontinuity() {
         List<Integer> emitted = new ArrayList<>();
         AtomicInteger discontinuities = new AtomicInteger();
+        AtomicInteger gaps = new AtomicInteger();
         AtomicLong clock = new AtomicLong(0L);
-        AudioHandler handler = handler(recording(emitted, discontinuities), AudioResendRequests.NOOP, clock);
+        AudioHandler handler = handler(recording(emitted, discontinuities, gaps), AudioResendRequests.NOOP, clock);
+        handler.setStreamLatency(44_100, 44_100);
 
         handler.offer(packet(100));
         handler.offer(packet(102));
         assertEquals(List.of(100), emitted);
 
-        clock.set(AudioRtpBuffer.MISSING_GIVE_UP_NS);
+        clock.set(750_000_000L);
         handler.offer(packet(103));
 
         assertTrue(emitted.contains(102), emitted.toString());
         assertTrue(emitted.contains(103), emitted.toString());
+        assertEquals(1, gaps.get());
+        assertEquals(0, discontinuities.get(), "single-packet hole is soft-concealed");
+    }
+
+    @Test
+    void largeExpiredGapSignalsDiscontinuity() {
+        List<Integer> emitted = new ArrayList<>();
+        AtomicInteger discontinuities = new AtomicInteger();
+        AtomicInteger gaps = new AtomicInteger();
+        AtomicLong clock = new AtomicLong(0L);
+        AudioHandler handler = handler(recording(emitted, discontinuities, gaps), AudioResendRequests.NOOP, clock);
+        handler.setStreamLatency(44_100, 44_100);
+
+        handler.offer(packet(100));
+        handler.offer(packet(109)); // 8 missing: 101..108
+        clock.set(750_000_000L);
+        handler.offer(packet(110));
+
+        assertEquals(1, gaps.get());
         assertEquals(1, discontinuities.get());
+        assertTrue(emitted.contains(109), emitted.toString());
+        assertTrue(emitted.contains(110), emitted.toString());
     }
 
     @Test
@@ -162,10 +185,16 @@ class AudioHandlerTest {
     }
 
     private static Playback recording(List<Integer> emittedSeqs) {
-        return recording(emittedSeqs, null);
+        return recording(emittedSeqs, null, null);
     }
 
     private static Playback recording(List<Integer> emittedSeqs, AtomicInteger discontinuities) {
+        return recording(emittedSeqs, discontinuities, null);
+    }
+
+    private static Playback recording(List<Integer> emittedSeqs,
+                                      AtomicInteger discontinuities,
+                                      AtomicInteger gaps) {
         return new Playback() {
             @Override
             public void onAudio(byte[] bytes) {
@@ -183,6 +212,14 @@ class AudioHandlerTest {
                 if (discontinuities != null) {
                     discontinuities.incrementAndGet();
                 }
+            }
+
+            @Override
+            public void onAudioGap(int packetsSkipped) {
+                if (gaps != null) {
+                    gaps.incrementAndGet();
+                }
+                Playback.super.onAudioGap(packetsSkipped);
             }
 
             @Override

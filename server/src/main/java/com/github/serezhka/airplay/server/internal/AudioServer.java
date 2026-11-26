@@ -82,6 +82,13 @@ public class AudioServer implements Runnable {
         }
     }
 
+    public void setStreamLatency(int frames, int sampleRateHz) {
+        AudioHandler handler = audioHandler;
+        if (handler != null) {
+            handler.setStreamLatency(frames, sampleRateHz);
+        }
+    }
+
     @Override
     public void run() {
         var bootstrap = new Bootstrap();

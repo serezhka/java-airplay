@@ -64,14 +64,35 @@ class AudioRtpBufferTest {
     @Test
     void skipExpiredMissingAdvancesReadHead() {
         AudioRtpBuffer buf = new AudioRtpBuffer();
+        // 1.0 s latency → give-up = 0.75 s (latency − 0.25 s tail margin).
+        buf.setStreamLatency(44_100, 44_100);
+        long giveUp = buf.giveUpNs();
+        assertEquals(750_000_000L, giveUp);
+
         buf.offer(packet(50), 0L);
         buf.pollReady();
         buf.offer(packet(53), 0L);
 
-        assertEquals(0, buf.skipExpiredMissing(AudioRtpBuffer.MISSING_GIVE_UP_NS - 1));
-        assertEquals(2, buf.skipExpiredMissing(AudioRtpBuffer.MISSING_GIVE_UP_NS));
+        assertEquals(0, buf.skipExpiredMissing(giveUp - 1));
+        assertEquals(2, buf.skipExpiredMissing(giveUp));
         assertEquals(53, buf.pollReady().orElseThrow().getSequenceNumber());
         assertEquals(0, buf.missingCount());
+    }
+
+    @Test
+    void resendStopsWhenPastLatencyAwareGiveUp() {
+        AudioRtpBuffer buf = new AudioRtpBuffer();
+        buf.setStreamLatency(44_100, 44_100);
+        long giveUp = buf.giveUpNs();
+
+        buf.offer(packet(1), 0L);
+        buf.pollReady();
+        buf.offer(packet(3), 0L);
+
+        assertEquals(List.of(new AudioRtpBuffer.Resend(2, 1)),
+                buf.dueResends(AudioRtpBuffer.RESEND_FIRST_NS));
+        assertTrue(buf.dueResends(giveUp).isEmpty(), "too late for further resends");
+        assertEquals(1, buf.skipExpiredMissing(giveUp));
     }
 
     @Test

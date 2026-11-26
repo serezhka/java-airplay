@@ -72,6 +72,20 @@ public interface Playback {
     default void onAudioDiscontinuity() {
     }
 
+    /**
+     * Contiguous missing RTP packets were skipped after resend give-up.
+     * Small gaps are normally concealed by simply advancing (no codec reset);
+     * larger holes fall back to {@link #onAudioDiscontinuity()}.
+     */
+    default void onAudioGap(int packetsSkipped) {
+        if (packetsSkipped >= AUDIO_GAP_DISCONTINUITY_PACKETS) {
+            onAudioDiscontinuity();
+        }
+    }
+
+    /** Soft-conceal gaps shorter than this; longer gaps re-init the decoder. */
+    int AUDIO_GAP_DISCONTINUITY_PACKETS = 8;
+
     default void onPlaylist(String playlistUri) {
     }
 

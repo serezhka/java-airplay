@@ -53,6 +53,11 @@ public class AudioHandler extends ChannelInboundHandlerAdapter {
         buffer.flush(info != null ? info : AudioRtpInfo.empty());
     }
 
+    /** Session stream latency (frames @ sample rate) for resend give-up. */
+    public synchronized void setStreamLatency(int frames, int sampleRateHz) {
+        buffer.setStreamLatency(frames, sampleRateHz);
+    }
+
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
         offer((AudioPacket) msg);
@@ -90,9 +95,9 @@ public class AudioHandler extends ChannelInboundHandlerAdapter {
             }
             log.debug("Audio RTP gave up on {} missing packet(s)", skipped);
             try {
-                playback.onAudioDiscontinuity();
+                playback.onAudioGap(skipped);
             } catch (Exception e) {
-                log.debug("onAudioDiscontinuity: {}", e.toString());
+                log.debug("onAudioGap: {}", e.toString());
             }
         }
     }
