@@ -7,6 +7,7 @@ import com.github.serezhka.airplay.protocol.media.AudioStreamInfo;
 import com.github.serezhka.airplay.protocol.media.VideoStreamInfo;
 import com.github.serezhka.airplay.server.AirPlayConfig;
 import com.github.serezhka.airplay.server.Playback;
+import com.github.serezhka.airplay.server.internal.handler.audio.AudioRtpInfo;
 import com.github.serezhka.airplay.server.internal.handler.session.Session;
 import com.github.serezhka.airplay.server.internal.handler.session.SessionManager;
 import com.github.serezhka.airplay.server.internal.handler.util.AirPlayVolume;
@@ -357,6 +358,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     }
 
     private void handleRtspRecord(ChannelHandlerContext ctx, FullHttpRequest request) {
+        applyAudioRtpInfoFlush(request, "RTSP RECORD");
         var response = responses.createRtspResponse(request);
         response.headers().add("Audio-Latency", "11025");
         response.headers().add("Audio-Jack-Status", "connected; type=analog");
@@ -386,17 +388,23 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     }
 
     private void handleRtspFlush(ChannelHandlerContext ctx, FullHttpRequest request) {
-        try {
-            Session session = resolveSession(request);
-            if (session.getAudioServer() != null && session.getAudioServer().isRunning()) {
-                session.getAudioServer().resetReorder();
-                log.debug("RTSP FLUSH: audio RTP reorder reset session={}", session.getId());
-            }
-        } catch (Exception e) {
-            log.debug("RTSP FLUSH reorder reset ignored: {}", e.toString());
-        }
+        applyAudioRtpInfoFlush(request, "RTSP FLUSH");
         var response = responses.createRtspResponse(request);
         responses.sendResponse(ctx, request, response);
+    }
+
+    private void applyAudioRtpInfoFlush(FullHttpRequest request, String reason) {
+        try {
+            Session session = resolveSession(request);
+            if (session.getAudioServer() == null || !session.getAudioServer().isRunning()) {
+                return;
+            }
+            AudioRtpInfo info = AudioRtpInfo.parse(request.headers().get("RTP-Info"));
+            session.getAudioServer().flushReorder(info);
+            log.debug("{}: audio RTP flush {} session={}", reason, info, session.getId());
+        } catch (Exception e) {
+            log.debug("{} audio flush ignored: {}", reason, e.toString());
+        }
     }
 
     private void handleRtspTeardown(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {

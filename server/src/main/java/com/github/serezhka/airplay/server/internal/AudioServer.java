@@ -5,6 +5,7 @@ import com.github.serezhka.airplay.server.Playback;
 import com.github.serezhka.airplay.server.internal.decoder.AudioDecoder;
 import com.github.serezhka.airplay.server.internal.handler.audio.AudioHandler;
 import com.github.serezhka.airplay.server.internal.handler.audio.AudioResendRequests;
+import com.github.serezhka.airplay.server.internal.handler.audio.AudioRtpInfo;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
@@ -71,9 +72,13 @@ public class AudioServer implements Runnable {
     }
 
     public void resetReorder() {
+        flushReorder(AudioRtpInfo.empty());
+    }
+
+    public void flushReorder(AudioRtpInfo info) {
         AudioHandler handler = audioHandler;
         if (handler != null) {
-            handler.reset();
+            handler.flush(info != null ? info : AudioRtpInfo.empty());
         }
     }
 

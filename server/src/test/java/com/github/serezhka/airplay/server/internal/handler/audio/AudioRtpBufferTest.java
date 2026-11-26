@@ -112,6 +112,59 @@ class AudioRtpBufferTest {
     }
 
     @Test
+    void flushWithSeqReanchorsEmptyWindowAtTarget() {
+        AudioRtpBuffer buf = new AudioRtpBuffer();
+        buf.offer(packet(10, 1000), 0L);
+        buf.offer(packet(11, 1352), 0L);
+        buf.offer(packet(12, 1704), 0L);
+        assertEquals(3, buf.flush(AudioRtpInfo.of(20, null)));
+        assertEquals(20, buf.nextRead());
+        assertTrue(buf.pollReady().isEmpty());
+        buf.offer(packet(20, 5000), 1L);
+        assertEquals(20, buf.pollReady().orElseThrow().getSequenceNumber());
+    }
+
+    @Test
+    void flushWithRtpTimeDropsEarlierPacketsAndPendingRejectsLate() {
+        AudioRtpBuffer buf = new AudioRtpBuffer();
+        buf.offer(packet(10, 1000), 0L);
+        buf.offer(packet(11, 2000), 0L);
+        buf.offer(packet(12, 3000), 0L);
+        buf.flush(AudioRtpInfo.of(null, 2500L));
+        assertEquals(12, buf.pollReady().orElseThrow().getSequenceNumber());
+        assertTrue(buf.pollReady().isEmpty());
+
+        // Pending rejects pre-flush timestamps until a post-flush packet arrives.
+        buf.offer(packet(13, 2400), 2L);
+        assertTrue(buf.pollReady().isEmpty());
+        buf.offer(packet(13, 2600), 3L);
+        assertEquals(13, buf.pollReady().orElseThrow().getSequenceNumber());
+    }
+
+    @Test
+    void flushWithSeqAndRtpTimeDropsPreFlushAndReanchors() {
+        AudioRtpBuffer buf = new AudioRtpBuffer();
+        buf.offer(packet(10, 1000), 0L);
+        buf.offer(packet(11, 2000), 0L);
+        assertTrue(buf.flush(AudioRtpInfo.of(50, 9000L)) >= 2);
+        assertEquals(50, buf.nextRead());
+        buf.offer(packet(49, 8999), 1L); // before rtptime — dropped by pending
+        assertTrue(buf.pollReady().isEmpty());
+        buf.offer(packet(50, 9000), 2L);
+        assertEquals(50, buf.pollReady().orElseThrow().getSequenceNumber());
+    }
+
+    @Test
+    void flushEmptyInfoResetsCompletely() {
+        AudioRtpBuffer buf = new AudioRtpBuffer();
+        buf.offer(packet(1, 1), 0L);
+        buf.flush(AudioRtpInfo.empty());
+        assertEquals(-1, buf.nextRead());
+        buf.offer(packet(9, 9), 1L);
+        assertEquals(9, buf.pollReady().orElseThrow().getSequenceNumber());
+    }
+
+    @Test
     void seqDiffIsSignedOnUint16Circle() {
         assertEquals(1, AudioRtpBuffer.seqDiff(10, 11));
         assertEquals(-1, AudioRtpBuffer.seqDiff(11, 10));
@@ -120,8 +173,13 @@ class AudioRtpBufferTest {
     }
 
     private static AudioPacket packet(int seq) {
+        return packet(seq, seq * 352L);
+    }
+
+    private static AudioPacket packet(int seq, long timestamp) {
         return AudioPacket.builder()
                 .sequenceNumber(seq)
+                .timestamp(timestamp)
                 .available(true)
                 .encodedAudioSize(2)
                 .build()

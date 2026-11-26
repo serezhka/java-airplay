@@ -111,6 +111,20 @@ class AudioHandlerTest {
     }
 
     @Test
+    void flushWithSeqDropsBufferedAndResumesAtTarget() {
+        List<Integer> emitted = new ArrayList<>();
+        AudioHandler handler = handler(recording(emitted), AudioResendRequests.NOOP, new AtomicLong());
+
+        handler.offer(packet(10));
+        handler.offer(packet(11));
+        handler.flush(AudioRtpInfo.of(40, null));
+        handler.offer(packet(40));
+
+        assertEquals(List.of(10, 11, 40), emitted);
+        assertEquals(41, handler.nextRead());
+    }
+
+    @Test
     void decryptFailureDoesNotMuteFollowingFrames() {
         List<Integer> emitted = new ArrayList<>();
         AtomicInteger decryptCalls = new AtomicInteger();

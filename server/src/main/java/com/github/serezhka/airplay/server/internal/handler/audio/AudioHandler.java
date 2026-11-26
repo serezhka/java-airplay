@@ -46,6 +46,13 @@ public class AudioHandler extends ChannelInboundHandlerAdapter {
         buffer.reset();
     }
 
+    /**
+     * RTSP FLUSH/RECORD with {@code RTP-Info}: drop pre-flush audio and re-anchor the window.
+     */
+    public synchronized void flush(AudioRtpInfo info) {
+        buffer.flush(info != null ? info : AudioRtpInfo.empty());
+    }
+
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
         offer((AudioPacket) msg);

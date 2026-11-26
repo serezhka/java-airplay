@@ -24,6 +24,7 @@ final class AudioRtpBuffer {
     private static final byte EMPTY = 0;
     private static final byte MISSING = 1;
     private static final byte READY = 2;
+    private static final long NO_PENDING_FLUSH = -1L;
 
     private final AudioPacket[] packets = new AudioPacket[CAPACITY];
     private final byte[] state = new byte[CAPACITY];
@@ -34,6 +35,11 @@ final class AudioRtpBuffer {
     private int nextRead = -1;
     /** One past the highest contiguous received (or marked) sequence. */
     private int writeNext = -1;
+    /**
+     * When set, drop inbound packets with RTP timestamp strictly before this value
+     * (FLUSH/RECORD {@code rtptime=} point, exclusive keep).
+     */
+    private long pendingFlushRtp = NO_PENDING_FLUSH;
 
     void reset() {
         Arrays.fill(state, EMPTY);
@@ -42,9 +48,51 @@ final class AudioRtpBuffer {
         Arrays.fill(lastResendNs, 0L);
         nextRead = -1;
         writeNext = -1;
+        pendingFlushRtp = NO_PENDING_FLUSH;
+    }
+
+    /**
+     * Apply RTSP FLUSH/RECORD {@link AudioRtpInfo}.
+     * Prefer {@code seq=} (re-anchor empty window at that seq); also honor {@code rtptime=}
+     * so late pre-flush packets are discarded. With neither field, full {@link #reset()}.
+     *
+     * @return packets discarded from the window (0 if only pending / empty)
+     */
+    int flush(AudioRtpInfo info) {
+        if (info == null || info.isEmpty()) {
+            reset();
+            return 0;
+        }
+        int dropped = 0;
+        if (info.rtpTime().isPresent()) {
+            pendingFlushRtp = info.rtpTime().get();
+            dropped += dropReadyBeforeRtp(pendingFlushRtp);
+        }
+        if (info.seq().isPresent()) {
+            dropped += reanchorAtSeq(info.seq().get());
+        } else if (info.rtpTime().isPresent() && nextRead >= 0) {
+            while (nextRead != writeNext && state[idx(nextRead)] == EMPTY) {
+                nextRead = succ(nextRead);
+            }
+        }
+        return dropped;
     }
 
     void offer(AudioPacket packet, long nowNs) {
+        if (packet == null) {
+            return;
+        }
+        if (pendingFlushRtp != NO_PENDING_FLUSH) {
+            long ts = packet.getTimestamp() & 0xFFFF_FFFFL;
+            // Drop when ts < flush point (exclusive keep at equality).
+            if (signedTsDiff(ts, pendingFlushRtp) > 0) {
+                packet.available(false);
+                return;
+            }
+            // First packet at/after flush point — clear pending filter.
+            pendingFlushRtp = NO_PENDING_FLUSH;
+        }
+
         int seq = packet.getSequenceNumber() & 0xFFFF;
         if (nextRead < 0) {
             placeReady(seq, packet);
@@ -78,7 +126,9 @@ final class AudioRtpBuffer {
         }
 
         // Far outside the window (track change / new timeline).
+        long keepPending = pendingFlushRtp;
         reset();
+        pendingFlushRtp = keepPending;
         offer(packet, nowNs);
     }
 
@@ -159,6 +209,56 @@ final class AudioRtpBuffer {
         return n;
     }
 
+    long pendingFlushRtp() {
+        return pendingFlushRtp;
+    }
+
+    private int reanchorAtSeq(int nextSeq) {
+        int target = nextSeq & 0xFFFF;
+        int dropped = 0;
+        if (nextRead < 0) {
+            nextRead = target;
+            writeNext = target;
+            return 0;
+        }
+        // Drop everything currently buffered; resume expecting {@code target}.
+        for (int seq = nextRead; seq != writeNext; seq = succ(seq)) {
+            if (state[idx(seq)] != EMPTY) {
+                dropped++;
+            }
+            clear(seq);
+        }
+        nextRead = target;
+        writeNext = target;
+        return dropped;
+    }
+
+    private int dropReadyBeforeRtp(long rtpExclusive) {
+        if (nextRead < 0 || writeNext < 0) {
+            return 0;
+        }
+        int dropped = 0;
+        for (int seq = nextRead; seq != writeNext; seq = succ(seq)) {
+            int i = idx(seq);
+            if (state[i] == READY) {
+                AudioPacket p = packets[i];
+                long ts = p != null ? p.getTimestamp() & 0xFFFF_FFFFL : 0L;
+                if (signedTsDiff(ts, rtpExclusive) > 0) {
+                    clear(seq);
+                    dropped++;
+                }
+            } else if (state[i] == MISSING) {
+                // Unknown timestamp for a hole before flush — drop the marker.
+                clear(seq);
+                dropped++;
+            }
+        }
+        while (nextRead != writeNext && state[idx(nextRead)] == EMPTY) {
+            nextRead = succ(nextRead);
+        }
+        return dropped;
+    }
+
     private boolean resendDue(int i, long nowNs) {
         long age = nowNs - missingSinceNs[i];
         if (age < RESEND_FIRST_NS) {
@@ -210,5 +310,10 @@ final class AudioRtpBuffer {
     /** Signed distance {@code to - from} on the uint16 circle. */
     static int seqDiff(int from, int to) {
         return (short) ((to - from) & 0xFFFF);
+    }
+
+    /** Signed distance {@code to - from} on the uint32 RTP timestamp circle. */
+    static int signedTsDiff(long from, long to) {
+        return (int) ((to - from) & 0xFFFF_FFFFL);
     }
 }
