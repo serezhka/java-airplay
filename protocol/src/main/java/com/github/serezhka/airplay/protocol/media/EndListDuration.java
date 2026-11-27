@@ -17,16 +17,28 @@ public final class EndListDuration {
             return 0;
         }
         double sum = 0;
-        for (String line : content.split("\n")) {
-            if (!line.startsWith("#EXTINF:")) {
-                continue;
+        int from = 0;
+        final int n = content.length();
+        while (from < n) {
+            int to = content.indexOf('\n', from);
+            if (to < 0) {
+                to = n;
             }
-            String value = line.substring("#EXTINF:".length()).split(",", 2)[0].trim();
-            try {
-                sum += Double.parseDouble(value);
-            } catch (NumberFormatException ignored) {
-                // skip malformed tags
+            if (content.startsWith("#EXTINF:", from)) {
+                int valueStart = from + "#EXTINF:".length();
+                int comma = content.indexOf(',', valueStart);
+                int valueEnd = comma >= 0 && comma < to ? comma : to;
+                // Trim CR from CRLF playlists.
+                if (valueEnd > valueStart && content.charAt(valueEnd - 1) == '\r') {
+                    valueEnd--;
+                }
+                try {
+                    sum += Double.parseDouble(content.substring(valueStart, valueEnd).trim());
+                } catch (NumberFormatException ignored) {
+                    // skip malformed tags
+                }
             }
+            from = to + 1;
         }
         return sum;
     }

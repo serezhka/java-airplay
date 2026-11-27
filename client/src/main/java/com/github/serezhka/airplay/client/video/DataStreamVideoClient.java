@@ -176,10 +176,7 @@ public final class DataStreamVideoClient extends ChannelInboundHandlerAdapter im
         if (local == null || closed) {
             return;
         }
-        byte[] packet = new byte[header.length + payload.length];
-        System.arraycopy(header, 0, packet, 0, header.length);
-        System.arraycopy(payload, 0, packet, header.length, payload.length);
-        local.writeAndFlush(Unpooled.wrappedBuffer(packet));
+        local.writeAndFlush(Unpooled.wrappedBuffer(header, payload));
         long n = packetsSent.incrementAndGet();
         if (n == 1 || n == 30 || n % 300 == 0) {
             log.info("DataStream packets sent={} lastLen={}", n, payload.length);
@@ -202,10 +199,7 @@ public final class DataStreamVideoClient extends ChannelInboundHandlerAdapter im
         if (ch != null) {
             ch.close();
         }
-        EventLoopGroup group = workerGroup;
-        if (group != null) {
-            group.shutdownGracefully(0, 2, TimeUnit.SECONDS);
-        }
+        // Shared event loop lives for the process; only the channel is closed.
     }
 
     private void closeQuietly() {
@@ -229,7 +223,7 @@ public final class DataStreamVideoClient extends ChannelInboundHandlerAdapter im
     }
 
     private EventLoopGroup eventLoopGroup() {
-        return NettyEventLoops.create();
+        return NettyEventLoops.shared();
     }
 
     private Class<? extends SocketChannel> socketChannelClass() {

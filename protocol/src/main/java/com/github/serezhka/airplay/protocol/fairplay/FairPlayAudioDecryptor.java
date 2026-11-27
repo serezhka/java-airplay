@@ -8,14 +8,12 @@ import java.util.Arrays;
 
 public class FairPlayAudioDecryptor {
 
-    private final byte[] aesIV;
-    private final byte[] eaesKey;
-
     private final Cipher aesCbcDecrypt;
+    private final SecretKeySpec keySpec;
+    private final IvParameterSpec ivSpec;
 
     public FairPlayAudioDecryptor(byte[] aesKey, byte[] aesIV, byte[] sharedSecret) throws Exception {
-        this.aesIV = aesIV;
-
+        byte[] eaesKey;
         if (sharedSecret == null || sharedSecret.length == 0) {
             eaesKey = Arrays.copyOf(aesKey, 16);
         } else {
@@ -25,15 +23,14 @@ public class FairPlayAudioDecryptor {
             eaesKey = Arrays.copyOfRange(sha512Digest.digest(), 0, 16);
         }
 
+        keySpec = new SecretKeySpec(eaesKey, "AES");
+        ivSpec = new IvParameterSpec(aesIV);
         aesCbcDecrypt = Cipher.getInstance("AES/CBC/NoPadding");
     }
 
     public void decrypt(byte[] audio, int audioLength) throws Exception {
-        initAesCbcCipher();
+        // CBC packets each start from the same IV — re-init is required, but key/IV objects are reused.
+        aesCbcDecrypt.init(Cipher.DECRYPT_MODE, keySpec, ivSpec);
         aesCbcDecrypt.update(audio, 0, audioLength / 16 * 16, audio, 0);
-    }
-
-    private void initAesCbcCipher() throws Exception {
-        aesCbcDecrypt.init(Cipher.DECRYPT_MODE, new SecretKeySpec(eaesKey, "AES"), new IvParameterSpec(aesIV));
     }
 }

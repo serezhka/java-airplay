@@ -2,12 +2,10 @@ package com.github.serezhka.airplay.server.internal;
 
 import com.github.serezhka.airplay.server.internal.handler.audio.AudioControlHandler;
 import io.netty.bootstrap.Bootstrap;
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.EventLoopGroup;
-import io.netty.channel.epoll.Epoll;
-import io.netty.channel.epoll.EpollDatagramChannel;
 import io.netty.channel.socket.DatagramChannel;
-import io.netty.channel.socket.nio.NioDatagramChannel;
 import lombok.extern.slf4j.Slf4j;
 
 import java.net.InetSocketAddress;
@@ -17,6 +15,7 @@ public class AudioControlServer implements Runnable {
 
     private Thread thread;
     private int port;
+    private volatile Channel serverChannel;
 
     public void start() throws InterruptedException {
         thread = new Thread(this);
@@ -27,6 +26,11 @@ public class AudioControlServer implements Runnable {
     }
 
     public void stop() {
+        Channel ch = serverChannel;
+        if (ch != null) {
+            ch.close();
+            serverChannel = null;
+        }
         if (thread != null) {
             thread.interrupt();
             thread = null;
@@ -36,13 +40,13 @@ public class AudioControlServer implements Runnable {
     @Override
     public void run() {
         var bootstrap = new Bootstrap();
-        var workerGroup = eventLoopGroup();
+        EventLoopGroup workerGroup = NettyEventLoops.sharedWorker();
 
         try {
             bootstrap
                     .group(workerGroup)
-                    .channel(datagramChannelClass())
-                    .localAddress(new InetSocketAddress(0)) // bind random port
+                    .channel(NettyEventLoops.datagramChannelClass())
+                    .localAddress(new InetSocketAddress(0))
                     .handler(new ChannelInitializer<DatagramChannel>() {
                         @Override
                         public void initChannel(final DatagramChannel ch) {
@@ -51,6 +55,7 @@ public class AudioControlServer implements Runnable {
                     });
 
             var channelFuture = bootstrap.bind().sync();
+            serverChannel = channelFuture.channel();
 
             log.info("AirPlay audio control server listening on port: {}",
                     port = ((InetSocketAddress) channelFuture.channel().localAddress()).getPort());
@@ -62,21 +67,14 @@ public class AudioControlServer implements Runnable {
             channelFuture.channel().closeFuture().sync();
         } catch (InterruptedException e) {
             log.debug("AirPlay audio control server interrupted");
+            Thread.currentThread().interrupt();
         } finally {
             log.debug("AirPlay audio control server stopped");
-            workerGroup.shutdownGracefully();
+            serverChannel = null;
         }
     }
 
     public int getPort() {
         return port;
-    }
-
-    private EventLoopGroup eventLoopGroup() {
-        return NettyEventLoops.create();
-    }
-
-    private Class<? extends DatagramChannel> datagramChannelClass() {
-        return Epoll.isAvailable() ? EpollDatagramChannel.class : NioDatagramChannel.class;
     }
 }

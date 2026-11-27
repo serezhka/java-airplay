@@ -1,5 +1,6 @@
 package com.github.serezhka.airplay.app.ffmpeg.audio;
 
+import com.github.serezhka.airplay.app.common.hls.HlsPlaybackMath;
 import com.github.serezhka.airplay.app.ffmpeg.process.FfplayProcess;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -77,7 +78,7 @@ public final class FfplayPcmSink implements AutoCloseable {
     }
 
     public void setVolume(double volumeLinear) {
-        this.volumeLinear = Math.max(0.0, Math.min(1.0, volumeLinear));
+        this.volumeLinear = HlsPlaybackMath.clampVolume(volumeLinear);
     }
 
     public void write(byte[] pcm, int offset, int length) throws IOException {
@@ -103,7 +104,7 @@ public final class FfplayPcmSink implements AutoCloseable {
         if (pcm == null || pcm.length < 2 || gain >= 0.999) {
             return;
         }
-        double clamped = Math.max(0.0, Math.min(1.0, gain));
+        double clamped = HlsPlaybackMath.clampVolume(gain);
         for (int i = 0; i + 1 < pcm.length; i += 2) {
             int sample = (short) ((pcm[i] & 0xFF) | (pcm[i + 1] << 8));
             int scaled = (int) Math.round(sample * clamped);

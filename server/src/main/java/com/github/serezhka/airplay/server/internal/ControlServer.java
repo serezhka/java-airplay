@@ -10,11 +10,7 @@ import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
-import io.netty.channel.epoll.Epoll;
-import io.netty.channel.epoll.EpollServerSocketChannel;
-import io.netty.channel.socket.ServerSocketChannel;
 import io.netty.channel.socket.SocketChannel;
-import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.rtsp.RtspDecoder;
 import io.netty.handler.codec.rtsp.RtspEncoder;
@@ -81,12 +77,12 @@ public class ControlServer implements Runnable {
     @Override
     public void run() {
         var serverBootstrap = new ServerBootstrap();
-        var bossGroup = eventLoopGroup();
-        var workerGroup = eventLoopGroup();
+        EventLoopGroup bossGroup = NettyEventLoops.sharedBoss();
+        EventLoopGroup workerGroup = NettyEventLoops.sharedWorker();
         try {
             serverBootstrap
                     .group(bossGroup, workerGroup)
-                    .channel(serverSocketChannelClass())
+                    .channel(NettyEventLoops.serverSocketChannelClass())
                     .localAddress(new InetSocketAddress(0))
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
@@ -94,8 +90,13 @@ public class ControlServer implements Runnable {
                             ch.pipeline().addLast(
                                     new RtspDecoder(),
                                     new RtspEncoder(),
-                                    new HttpObjectAggregator(2 * 1024 * 1024),
-                                    new LoggingHandler(LogLevel.DEBUG, ByteBufFormat.SIMPLE),
+                                    new HttpObjectAggregator(2 * 1024 * 1024));
+                            // LoggingHandler allocates on every message — only when DEBUG is on.
+                            if (log.isDebugEnabled()) {
+                                ch.pipeline().addLast(
+                                        new LoggingHandler(LogLevel.DEBUG, ByteBufFormat.SIMPLE));
+                            }
+                            ch.pipeline().addLast(
                                     new ControlHandler(sessionManager, hlsFcupService, airPlayConfig, airPlayConsumer));
                         }
                     })
@@ -116,16 +117,7 @@ public class ControlServer implements Runnable {
             throw new RuntimeException(e);
         } finally {
             log.info("AirPlay control server stopped");
-            bossGroup.shutdownGracefully();
-            workerGroup.shutdownGracefully();
+            // Shared event loops stay alive for the process.
         }
-    }
-
-    private EventLoopGroup eventLoopGroup() {
-        return NettyEventLoops.create();
-    }
-
-    private Class<? extends ServerSocketChannel> serverSocketChannelClass() {
-        return Epoll.isAvailable() ? EpollServerSocketChannel.class : NioServerSocketChannel.class;
     }
 }

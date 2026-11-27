@@ -3,6 +3,7 @@ package com.github.serezhka.airplay.server.internal.handler.control;
 import com.dd.plist.NSData;
 import com.dd.plist.NSDictionary;
 import com.github.serezhka.airplay.server.Playback;
+import com.github.serezhka.airplay.server.internal.handler.session.HlsCdnProxy;
 import com.github.serezhka.airplay.server.internal.handler.session.HlsPlaylistState;
 import com.github.serezhka.airplay.server.internal.handler.session.HlsUriRewrite;
 import com.github.serezhka.airplay.server.internal.handler.session.PlaylistRequest;
@@ -12,6 +13,7 @@ import io.lindstrom.m3u8.parser.MediaPlaylistParser;
 import io.lindstrom.m3u8.parser.ParsingMode;
 import io.lindstrom.m3u8.parser.PlaylistParserException;
 import io.netty.buffer.ByteBufUtil;
+import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.socket.ServerSocketChannel;
@@ -28,6 +30,7 @@ import lombok.extern.slf4j.Slf4j;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -72,7 +75,7 @@ final class HlsPlaylistHttp {
                 body = rewritten.localBody();
                 remoteMediaUris = rewritten.remoteMediaUris();
             } else if (fcupResponseURL.contains("mediadata.m3u8")) {
-                body = mediaPlaylistBody(fcupResponse);
+                body = mediaPlaylistBody(fcupResponse, playlistBaseUrl(ctx), session.getId());
             } else {
                 body = fcupResponse;
             }
@@ -131,8 +134,12 @@ final class HlsPlaylistHttp {
     }
 
     void handleGetPlaylist(ChannelHandlerContext ctx, FullHttpRequest request) {
-        var playlistUriRemote = playlistPathToRemote(request.uri());
         var decoder = new QueryStringDecoder(request.uri());
+        if ("/playlist/cdn".equals(decoder.path())) {
+            handleCdnProxy(ctx, request, decoder);
+            return;
+        }
+        var playlistUriRemote = playlistPathToRemote(request.uri());
         var session = sessionManager.getSession(decoder.parameters().get("session").get(0));
 
         var pending = new PlaylistRequest(
@@ -196,10 +203,114 @@ final class HlsPlaylistHttp {
         return replied;
     }
 
-    private String mediaPlaylistBody(String fcupResponse) throws PlaylistParserException {
+    private String mediaPlaylistBody(String fcupResponse, String playlistBaseUrl, String sessionId)
+            throws PlaylistParserException {
         var parser = new MediaPlaylistParser(ParsingMode.LENIENT);
         var mediaPlaylist = HlsCondensedUrls.expand(parser.readPlaylist(fcupResponse));
-        return parser.writePlaylistAsString(mediaPlaylist);
+        String expanded = parser.writePlaylistAsString(mediaPlaylist);
+        // Resolve relatives against a https base so absolute CDN URIs stay absolute.
+        String proxyPrefix = HlsCdnProxy.proxyPrefix(playlistBaseUrl, sessionId);
+        return HlsCdnProxy.rewritePlaylistForProxy(expanded, "https://cdn.invalid/", proxyPrefix);
+    }
+
+    /**
+     * Local CDN hop for GST/FFmpeg: fetch googlevideo (etc.) via Java HttpClient so
+     * native IPv6-first HTTP stacks never open the CDN socket themselves.
+     */
+    private void handleCdnProxy(ChannelHandlerContext ctx, FullHttpRequest request, QueryStringDecoder decoder) {
+        List<String> sessions = decoder.parameters().get("session");
+        List<String> upstreams = decoder.parameters().get("u");
+        if (sessions == null || sessions.isEmpty() || upstreams == null || upstreams.isEmpty()) {
+            writePlain(ctx, request, HttpResponseStatus.BAD_REQUEST, "missing session or u");
+            return;
+        }
+        String sessionId = sessions.getFirst();
+        String upstream = upstreams.getFirst();
+        Session session = sessionManager.getSession(sessionId);
+        if (session.getHlsPlaylistState() == null) {
+            writePlain(ctx, request, HttpResponseStatus.SERVICE_UNAVAILABLE, "hls inactive");
+            return;
+        }
+        if (!HlsCdnProxy.isAllowedUpstream(upstream)) {
+            writePlain(ctx, request, HttpResponseStatus.FORBIDDEN, "upstream not allowed");
+            return;
+        }
+
+        // Retain across async hop: inbound handler may release after channelRead.
+        request.retain();
+        Optional<String> range = Optional.ofNullable(request.headers().get(HttpHeaderNames.RANGE));
+        HlsCdnProxy.fetchAsync(upstream, range).whenComplete((upstreamResponse, err) ->
+                ctx.channel().eventLoop().execute(() -> {
+                    try {
+                        if (err != null) {
+                            log.warn("HLS CDN proxy failed for {}: {}", upstream, err.toString());
+                            writePlain(ctx, request, HttpResponseStatus.BAD_GATEWAY, err.toString());
+                            return;
+                        }
+                        int status = upstreamResponse.statusCode();
+                        if (status >= 400) {
+                            writePlain(ctx, request, HttpResponseStatus.valueOf(status), "upstream " + status);
+                            return;
+                        }
+                        byte[] bytes = upstreamResponse.body();
+                        if (bytes.length > HlsCdnProxy.MAX_BYTES) {
+                            writePlain(ctx, request, HttpResponseStatus.REQUEST_ENTITY_TOO_LARGE, "too large");
+                            return;
+                        }
+                        String contentType = upstreamResponse.headers()
+                                .firstValue("content-type")
+                                .orElse("application/octet-stream");
+                        if (HlsCdnProxy.looksLikePlaylist(contentType, bytes)) {
+                            String text = new String(bytes, StandardCharsets.UTF_8);
+                            String rewritten = HlsCdnProxy.rewritePlaylistForProxy(
+                                    text, upstream, HlsCdnProxy.proxyPrefix(playlistBaseUrl(ctx), sessionId));
+                            writeBytes(ctx, request, HttpResponseStatus.OK,
+                                    rewritten.getBytes(StandardCharsets.UTF_8),
+                                    "application/vnd.apple.mpegurl");
+                        } else {
+                            HttpResponseStatus ok = status == 206
+                                    ? HttpResponseStatus.PARTIAL_CONTENT
+                                    : HttpResponseStatus.OK;
+                            DefaultFullHttpResponse response = new DefaultFullHttpResponse(
+                                    HttpVersion.HTTP_1_1, ok, Unpooled.wrappedBuffer(bytes));
+                            response.headers().set(HttpHeaderNames.CONTENT_TYPE, contentType);
+                            HttpUtil.setContentLength(response, bytes.length);
+                            response.headers().set(HttpHeaderNames.CACHE_CONTROL, "no-store");
+                            upstreamResponse.headers().firstValue("content-range")
+                                    .ifPresent(v -> response.headers().set(HttpHeaderNames.CONTENT_RANGE, v));
+                            boolean keepAlive = HttpUtil.isKeepAlive(request);
+                            if (!keepAlive) {
+                                response.headers().set(HttpHeaderNames.CONNECTION, "close");
+                            }
+                            ctx.writeAndFlush(response).addListener(keepAlive
+                                    ? ChannelFutureListener.CLOSE_ON_FAILURE
+                                    : ChannelFutureListener.CLOSE);
+                        }
+                    } finally {
+                        request.release();
+                    }
+                }));
+    }
+
+    private void writePlain(ChannelHandlerContext ctx, FullHttpRequest request,
+                            HttpResponseStatus status, String message) {
+        writeBytes(ctx, request, status, message.getBytes(StandardCharsets.UTF_8), "text/plain");
+    }
+
+    private void writeBytes(ChannelHandlerContext ctx, FullHttpRequest request,
+                            HttpResponseStatus status, byte[] body, String contentType) {
+        DefaultFullHttpResponse response = new DefaultFullHttpResponse(
+                HttpVersion.HTTP_1_1, status, Unpooled.wrappedBuffer(body));
+        response.headers().set(HttpHeaderNames.CONTENT_TYPE, contentType);
+        HttpUtil.setContentLength(response, body.length);
+        response.headers().set(HttpHeaderNames.CACHE_CONTROL, "no-store");
+        boolean keepAlive = HttpUtil.isKeepAlive(request);
+        if (!keepAlive) {
+            response.headers().set(HttpHeaderNames.CONNECTION, "close");
+        }
+        ctx.writeAndFlush(response).addListener(keepAlive
+                ? ChannelFutureListener.CLOSE_ON_FAILURE
+                : ChannelFutureListener.CLOSE);
     }
 
     private void replyPlaylist(PlaylistRequest pending, String body) {

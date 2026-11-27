@@ -5,12 +5,10 @@ import com.github.serezhka.airplay.server.Playback;
 import com.github.serezhka.airplay.server.internal.decoder.AudioDecoder;
 import com.github.serezhka.airplay.server.internal.handler.audio.AudioHandler;
 import io.netty.bootstrap.Bootstrap;
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.EventLoopGroup;
-import io.netty.channel.epoll.Epoll;
-import io.netty.channel.epoll.EpollDatagramChannel;
 import io.netty.channel.socket.DatagramChannel;
-import io.netty.channel.socket.nio.NioDatagramChannel;
 import io.netty.handler.codec.DatagramPacketDecoder;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
@@ -26,6 +24,7 @@ public class AudioServer implements Runnable {
 
     private Thread thread;
     private Playback airPlayConsumer;
+    private volatile Channel serverChannel;
 
     @Getter
     private int port;
@@ -40,6 +39,11 @@ public class AudioServer implements Runnable {
     }
 
     public void stop() {
+        Channel ch = serverChannel;
+        if (ch != null) {
+            ch.close();
+            serverChannel = null;
+        }
         if (thread != null) {
             thread.interrupt();
             thread = null;
@@ -50,13 +54,13 @@ public class AudioServer implements Runnable {
     @Override
     public void run() {
         var bootstrap = new Bootstrap();
-        var workerGroup = eventLoopGroup();
+        EventLoopGroup workerGroup = NettyEventLoops.sharedWorker();
 
         try {
             bootstrap
                     .group(workerGroup)
-                    .channel(datagramChannelClass())
-                    .localAddress(new InetSocketAddress(0)) // bind random port
+                    .channel(NettyEventLoops.datagramChannelClass())
+                    .localAddress(new InetSocketAddress(0))
                     .handler(new ChannelInitializer<DatagramChannel>() {
                         @Override
                         public void initChannel(final DatagramChannel ch) {
@@ -65,6 +69,7 @@ public class AudioServer implements Runnable {
                         }
                     });
             var channelFuture = bootstrap.bind().sync();
+            serverChannel = channelFuture.channel();
 
             log.info("AirPlay audio server listening on port: {}",
                     port = ((InetSocketAddress) channelFuture.channel().localAddress()).getPort());
@@ -76,17 +81,10 @@ public class AudioServer implements Runnable {
             channelFuture.channel().closeFuture().sync();
         } catch (InterruptedException e) {
             log.debug("AirPlay audio server interrupted");
+            Thread.currentThread().interrupt();
         } finally {
             log.debug("AirPlay audio server stopped");
-            workerGroup.shutdownGracefully();
+            serverChannel = null;
         }
-    }
-
-    private EventLoopGroup eventLoopGroup() {
-        return NettyEventLoops.create();
-    }
-
-    private Class<? extends DatagramChannel> datagramChannelClass() {
-        return Epoll.isAvailable() ? EpollDatagramChannel.class : NioDatagramChannel.class;
     }
 }

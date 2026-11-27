@@ -1,5 +1,6 @@
 package com.github.serezhka.airplay.app.ffmpeg;
 
+import com.github.serezhka.airplay.app.common.hls.HlsPlaybackMath;
 import com.github.serezhka.airplay.app.common.support.NativeProcessLog;
 import com.github.serezhka.airplay.app.ffmpeg.audio.FfplayPcmSink;
 import com.github.serezhka.airplay.app.ffmpeg.decode.LibavAacDecoder;
@@ -191,7 +192,7 @@ public class FFmpegPlayer implements Playback {
 
     @Override
     public void onVolume(double volumeLinear) {
-        this.volumeLinear = Math.max(0.0, Math.min(1.0, volumeLinear));
+        this.volumeLinear = HlsPlaybackMath.clampVolume(volumeLinear);
         synchronized (audioLock) {
             if (pcmSink != null) {
                 pcmSink.setVolume(this.volumeLinear);
