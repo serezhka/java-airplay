@@ -13,6 +13,7 @@ public class FfmpegPlaybackConfig {
 
     @Bean
     public Playback playback(AirPlayConfig airPlayConfig, DumpConfig dumpConfig) {
-        return PlaybackFactory.withDump(new FFmpegPlayer(airPlayConfig.getFps()), dumpConfig);
+        return PlaybackFactory.withDump(
+                new FFmpegPlayer(airPlayConfig.getFps(), airPlayConfig.isFullscreen()), dumpConfig);
     }
 }

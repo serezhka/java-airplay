@@ -46,6 +46,7 @@ public final class FfmpegHlsPipeline {
 
     private volatile String uri;
     private volatile double volumeLinear = 1.0;
+    private volatile boolean fullscreen = true;
     private volatile double playlistDurationSeconds;
     private volatile double positionBaseSeconds;
     private volatile long positionAnchorNanos;
@@ -55,6 +56,11 @@ public final class FfmpegHlsPipeline {
     /** Frozen window kept on screen until the seek replacement has a picture. */
     private volatile Process heldFrame;
     private volatile AtomicBoolean incomingPicture = new AtomicBoolean();
+
+    /** Exclusive fullscreen ({@code -fs}) vs resizable window ({@code airplay.fullscreen}). */
+    public void setFullscreen(boolean fullscreen) {
+        this.fullscreen = fullscreen;
+    }
 
     public void start(String playlistUri, double volume) {
         start(playlistUri, volume, 0);
@@ -534,7 +540,7 @@ public final class FfmpegHlsPipeline {
         boolean headless = Boolean.parseBoolean(System.getProperty("airplay.ffmpeg.hls.headless", "false"));
         AtomicBoolean picture = new AtomicBoolean();
         incomingPicture = picture;
-        Process process = FfplayProcess.startHls(playlistUri, startAt, volume, headless);
+        Process process = FfplayProcess.startHls(playlistUri, startAt, volume, headless, fullscreen);
         synchronized (processLock) {
             ffplayProcess = process;
         }

@@ -1,6 +1,7 @@
 package com.github.serezhka.airplay.app.ffmpeg.process;
 
 import com.github.serezhka.airplay.app.common.support.NativeProcessLog;
+import com.github.serezhka.airplay.app.common.support.PlayerWindowDefaults;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,12 +25,31 @@ public final class FfplayProcess {
 
     /** Video-only H.264 Annex-B pipe for screen mirroring ({@code -an}, dummy SDL audio). */
     public static Process startH264Pipe(int fps) throws IOException {
-        ProcessBuilder pb = new ProcessBuilder(
-                "ffplay", "-fs", "-an", "-loglevel", "debug",
-                "-f", "h264",
-                "-framerate", String.valueOf(fps),
-                "-codec:v", "h264", "-probesize", "32",
-                "-analyzeduration", "0", "-flags", "low_delay", "-");
+        return startH264Pipe(fps, true);
+    }
+
+    /** Video-only H.264 Annex-B pipe; {@code fullscreen=false} opens a resizable SDL window. */
+    public static Process startH264Pipe(int fps, boolean fullscreen) throws IOException {
+        List<String> cmd = new ArrayList<>();
+        cmd.add("ffplay");
+        appendDisplayMode(cmd, false, fullscreen);
+        cmd.add("-an");
+        cmd.add("-loglevel");
+        cmd.add("debug");
+        cmd.add("-f");
+        cmd.add("h264");
+        cmd.add("-framerate");
+        cmd.add(String.valueOf(fps));
+        cmd.add("-codec:v");
+        cmd.add("h264");
+        cmd.add("-probesize");
+        cmd.add("32");
+        cmd.add("-analyzeduration");
+        cmd.add("0");
+        cmd.add("-flags");
+        cmd.add("low_delay");
+        cmd.add("-");
+        ProcessBuilder pb = new ProcessBuilder(cmd);
         applyDisplayEnv(pb);
         NativeProcessLog.configureProcessLogging(pb, "ffmpeg");
         Process process = pb.start();
@@ -45,9 +65,19 @@ public final class FfplayProcess {
      */
     public static Process startHls(String playlistUri, double startAt, double volumeLinear, boolean headless)
             throws IOException {
+        return startHls(playlistUri, startAt, volumeLinear, headless, true);
+    }
+
+    /**
+     * HLS playback. Headless uses {@code -nodisp}; otherwise fullscreen ({@code -fs}) or a
+     * fixed-size resizable window when {@code fullscreen=false}.
+     */
+    public static Process startHls(String playlistUri, double startAt, double volumeLinear,
+                                   boolean headless, boolean fullscreen)
+            throws IOException {
         List<String> cmd = new ArrayList<>();
         cmd.add("ffplay");
-        cmd.add(headless ? "-nodisp" : "-fs");
+        appendDisplayMode(cmd, headless, fullscreen);
         cmd.add("-autoexit");
         // info (not error) so the status line is visible; the log pump keeps only real messages.
         cmd.add("-loglevel");
@@ -235,6 +265,25 @@ public final class FfplayProcess {
             lower = lower.substring(0, q);
         }
         return lower.endsWith(".m3u8") || lower.endsWith(".m3u");
+    }
+
+    /**
+     * Display flags for headed/headless ffplay. Package-visible for unit tests.
+     * Headless → {@code -nodisp}; fullscreen → {@code -fs}; else {@code -x/-y} window size.
+     */
+    static void appendDisplayMode(List<String> cmd, boolean headless, boolean fullscreen) {
+        if (headless) {
+            cmd.add("-nodisp");
+            return;
+        }
+        if (fullscreen) {
+            cmd.add("-fs");
+            return;
+        }
+        cmd.add("-x");
+        cmd.add(String.valueOf(PlayerWindowDefaults.WIDTH));
+        cmd.add("-y");
+        cmd.add(String.valueOf(PlayerWindowDefaults.HEIGHT));
     }
 
     private static void copyEnv(Map<String, String> env, String key) {
