@@ -43,7 +43,7 @@ public class SystemTrayMenu {
      * Stripe Payment Link (customers choose amount; suggested €10). Override with
      * {@code -Dairplay.donate-url=…}.
      */
-    static final String DONATE_URL_DEFAULT = "https://donate.stripe.com/dRm5kDf2u8L75Se37I7EQ04";
+    static final String DONATE_URL_DEFAULT = "https://donate.stripe.com/7sYdR907A5yV1BYgYy7EQ05";
 
     private final ApplicationContext context;
     private final MirrorCaster mirrorCaster;
