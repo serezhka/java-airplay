@@ -164,6 +164,6 @@ This monorepo unites the former:
 [badge-views]: https://views.whatilearened.today/views/github/serezhka/java-airplay.svg
 [ci]: https://github.com/serezhka/java-airplay/actions/workflows/ci.yaml
 [releases]: https://github.com/serezhka/java-airplay/releases
-[donate]: https://donate.stripe.com/dRm5kDf2u8L75Se37I7EQ04
+[donate]: https://donate.stripe.com/7sYdR907A5yV1BYgYy7EQ05
 [license]: https://opensource.org/licenses/MIT
 [openjdk]: https://openjdk.org/
