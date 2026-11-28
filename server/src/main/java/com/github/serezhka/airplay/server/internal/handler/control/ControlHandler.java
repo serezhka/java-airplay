@@ -280,6 +280,8 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             switch (mediaStreamInfo.get().getStreamType()) {
                 case AUDIO -> {
                     cancelAudioOnlyPresentationEnd();
+                    // Music→Mirror (or a second phone) must not leave foreign UDP audio ports open.
+                    stopForeignAudioServers(session.getId());
                     airPlayConsumer.onAudioFormat((AudioStreamInfo) mediaStreamInfo.get());
                     session.getAudioControlServer().start();
                     session.getAudioServer().start(airPlayConsumer, session.getAudioControlServer());
@@ -297,6 +299,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 case VIDEO -> {
                     cancelAudioOnlyPresentationEnd();
                     sessionManager.markScreenMirrorSeen();
+                    stopForeignAudioServers(session.getId());
                     airPlayConsumer.onVideoFormat((VideoStreamInfo) mediaStreamInfo.get());
                     // MSE: wait for Chromium /control before advertising the video port so the
                     // phone does not push into a black window. Pairing is already done.
@@ -871,6 +874,38 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 airPlayConsumer.onVideoSrcDisconnect();
             } catch (Exception e) {
                 log.debug("Mirror disconnect after {} ignored: {}", reason, e.toString());
+            }
+        }
+    }
+
+    /**
+     * Music and mirror use different RTSP session ids; without this, old Music UDP ports
+     * stay bound and ALAC keeps feeding the player under AAC-ELD.
+     */
+    private void stopForeignAudioServers(String keepSessionId) {
+        boolean any = false;
+        for (Session s : sessionManager.allSessions()) {
+            if (keepSessionId != null && keepSessionId.equals(s.getId())) {
+                continue;
+            }
+            try {
+                if (s.getAudioServer() != null && s.getAudioServer().isRunning()) {
+                    s.getAudioServer().stop();
+                    any = true;
+                    if (s.getAudioControlServer() != null) {
+                        s.getAudioControlServer().stop();
+                    }
+                }
+            } catch (Exception e) {
+                log.debug("Foreign audio stop ignored: {}", e.toString());
+            }
+        }
+        if (any) {
+            log.info("Stopped foreign audio servers (keep session={})", keepSessionId);
+            try {
+                airPlayConsumer.onAudioSrcDisconnect();
+            } catch (Exception e) {
+                log.debug("Foreign audio disconnect ignored: {}", e.toString());
             }
         }
     }

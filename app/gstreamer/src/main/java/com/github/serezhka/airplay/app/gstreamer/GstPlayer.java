@@ -130,35 +130,37 @@ public class GstPlayer implements Playback {
         h264Src.set("block", false);
         h264Src.set("max-bytes", 2L * 1024 * 1024);
 
-        // ~2 s @ ~125 ALAC frames/s; no leaky — WiFi bursts must not drop AUs.
-        final String audioQueue = "queue max-size-buffers=0 max-size-bytes=0 max-size-time=2000000000";
+        // Music ALAC: ~2 s non-leaky queue (AirPlay latency budget) — WiFi bursts must not drop AUs.
+        // Mirror AAC-ELD: short live queue — a Music-sized buffer makes mirror audio sound ~0.25×.
+        final String musicQueue = "queue max-size-buffers=0 max-size-bytes=0 max-size-time=2000000000";
+        final String mirrorQueue = "queue max-size-buffers=0 max-size-bytes=0 max-size-time=100000000";
         alacPipeline = (Pipeline) Gst.parseLaunch(
-                "appsrc name=alac-src ! " + audioQueue
+                "appsrc name=alac-src ! " + musicQueue
                         + " ! avdec_alac ! audioconvert ! audioresample"
                         + " ! volume name=alac-vol ! " + audioSink);
         alacSrc = (AppSrc) alacPipeline.getElementByName("alac-src");
         alacSrc.setStreamType(AppSrc.StreamType.STREAM);
         alacSrc.setCaps(Caps.fromString("audio/x-alac,mpegversion=(int)4,channels=(int)2,rate=(int)44100,stream-format=raw,codec_data=(buffer)00000024616c616300000000000001600010280a0e0200ff00000000000000000000ac44"));
-        configureAudioAppSrc(alacSrc);
+        configureMusicAudioAppSrc(alacSrc);
 
         aacEldPipeline = (Pipeline) Gst.parseLaunch(
-                "appsrc name=aac-eld-src ! " + audioQueue
+                "appsrc name=aac-eld-src ! " + mirrorQueue
                         + " ! avdec_aac ! audioconvert ! audioresample"
                         + " ! volume name=aac-eld-vol ! " + audioSink);
         aacEldSrc = (AppSrc) aacEldPipeline.getElementByName("aac-eld-src");
         aacEldSrc.setStreamType(AppSrc.StreamType.STREAM);
         // AirPlay mirror AAC-ELD ASC used by iOS senders (do not "fix" for CAF aace fixtures).
         aacEldSrc.setCaps(Caps.fromString("audio/mpeg,mpegversion=(int)4,channels=(int)2,rate=(int)44100,stream-format=raw,codec_data=(buffer)f8e85000"));
-        configureAudioAppSrc(aacEldSrc);
+        configureMirrorAudioAppSrc(aacEldSrc);
 
         aacLcPipeline = (Pipeline) Gst.parseLaunch(
-                "appsrc name=aac-lc-src ! " + audioQueue
+                "appsrc name=aac-lc-src ! " + musicQueue
                         + " ! aacparse ! avdec_aac ! audioconvert ! audioresample"
                         + " ! volume name=aac-lc-vol ! " + audioSink);
         aacLcSrc = (AppSrc) aacLcPipeline.getElementByName("aac-lc-src");
         aacLcSrc.setStreamType(AppSrc.StreamType.STREAM);
         aacLcSrc.setCaps(Caps.fromString("audio/mpeg,mpegversion=(int)4,stream-format=adts,channels=(int)2,rate=(int)44100"));
-        configureAudioAppSrc(aacLcSrc);
+        configureMusicAudioAppSrc(aacLcSrc);
 
         Element sink = h264Pipeline.getElementByName("sink");
         if (forceAppsink) {
@@ -191,6 +193,8 @@ public class GstPlayer implements Playback {
     public void onVideoFormat(VideoStreamInfo videoStreamInfo) {
         // Release HLS before starting the appsrc mirror pipeline (shared GPU/display).
         hls.stop();
+        // Music ALAC must not keep draining into Pulse alongside mirror AAC-ELD.
+        stopAudioPipelines();
         // Fresh decoder state — a previous session / mid-GOP drop leaves avdec with
         // bad refs and paints ghosted / duplicated-looking frames.
         if (h264Pipeline.isPlaying()) {
@@ -222,6 +226,9 @@ public class GstPlayer implements Playback {
     @Override
     public void onAudioFormat(AudioStreamInfo audioStreamInfo) {
         this.audioCompressionType = audioStreamInfo.getCompressionType();
+        // Only one audio codec pipeline may run — Music→Mirror left ALAC PLAYING and
+        // sounded like ~0.25× when AAC-ELD started on top.
+        stopAudioPipelines();
         if (audioCompressionType == AudioStreamInfo.CompressionType.ALAC) {
             alacPipeline.play();
         } else if (audioCompressionType == AudioStreamInfo.CompressionType.AAC_ELD) {
@@ -257,6 +264,11 @@ public class GstPlayer implements Playback {
 
     @Override
     public void onAudioSrcDisconnect() {
+        stopAudioPipelines();
+        audioCompressionType = null;
+    }
+
+    private void stopAudioPipelines() {
         alacPipeline.stop();
         aacEldPipeline.stop();
         aacLcPipeline.stop();
@@ -324,13 +336,23 @@ public class GstPlayer implements Playback {
      * Music RTP is bursty; treat appsrc as buffered (not ultra-low-latency live) so the
      * sink keeps a real pre-roll instead of prebuf=0 underruns.
      */
-    private static void configureAudioAppSrc(AppSrc src) {
+    private static void configureMusicAudioAppSrc(AppSrc src) {
         src.set("is-live", false);
         src.set("format", Format.TIME);
         src.set("do-timestamp", true);
         src.set("emit-signals", true);
         src.set("block", false);
         src.set("max-bytes", 2L * 1024 * 1024);
+    }
+
+    /** Screen-mirror AAC-ELD must stay low-latency live. */
+    private static void configureMirrorAudioAppSrc(AppSrc src) {
+        src.set("is-live", true);
+        src.set("format", Format.TIME);
+        src.set("do-timestamp", true);
+        src.set("emit-signals", true);
+        src.set("block", false);
+        src.set("max-bytes", 512L * 1024);
     }
 
     private static boolean pulseSinkAvailable() {
