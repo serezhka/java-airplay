@@ -8,6 +8,7 @@ import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
+import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.socket.DatagramChannel;
 import io.netty.channel.socket.DatagramPacket;
@@ -18,6 +19,8 @@ import java.util.function.Consumer;
 
 @Slf4j
 public class AudioControlServer implements Runnable, AudioResendRequests {
+
+    private static final int UDP_RCVBUF_BYTES = 2 * 1024 * 1024;
 
     private Thread thread;
     private int port;
@@ -86,6 +89,7 @@ public class AudioControlServer implements Runnable, AudioResendRequests {
             bootstrap
                     .group(workerGroup)
                     .channel(NettyEventLoops.datagramChannelClass())
+                    .option(ChannelOption.SO_RCVBUF, UDP_RCVBUF_BYTES)
                     .localAddress(new InetSocketAddress(0))
                     .handler(new ChannelInitializer<DatagramChannel>() {
                         @Override

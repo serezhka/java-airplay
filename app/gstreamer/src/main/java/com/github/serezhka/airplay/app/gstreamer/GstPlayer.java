@@ -17,6 +17,7 @@ import org.freedesktop.gstreamer.Buffer;
 import org.freedesktop.gstreamer.BusSyncReply;
 import org.freedesktop.gstreamer.Caps;
 import org.freedesktop.gstreamer.Element;
+import org.freedesktop.gstreamer.ElementFactory;
 import org.freedesktop.gstreamer.Format;
 import org.freedesktop.gstreamer.Gst;
 import org.freedesktop.gstreamer.Pipeline;
@@ -92,12 +93,22 @@ public class GstPlayer implements Playback {
             sinkLaunch = " ! appsink name=sink sync=false";
         }
         // Headless CI (appsink/fakesink video) has no usable audio device either.
-        String audioSink = forceAppsink
-                ? "fakesink sync=false async=false"
-                : "autoaudiosink sync=false";
+        // Music RTP arrives in WiFi bursts; a tiny leaky queue + live prebuf=0 made
+        // pulsesink underflow then play the next burst too fast ("holes + catch-up").
+        // Keep ~2 s of encoded audio (AirPlay latency budget), never drop, and give
+        // Pulse a real buffer-time so jitter does not underrun.
+        String audioSink;
+        if (forceAppsink) {
+            audioSink = "fakesink sync=false async=false";
+        } else if (pulseSinkAvailable()) {
+            // Explicit pulsesink so we can set buffer-time (autoaudiosink hides it).
+            audioSink = "pulsesink sync=false buffer-time=200000 latency-time=20000";
+        } else {
+            audioSink = "autoaudiosink sync=false";
+        }
         log.info("GStreamer video sink: {}; audio sink: {}",
                 forceAppsink ? "fakesink(forced)" : useD3d11 ? "d3d11videosink" : useXimage ? "ximagesink" : "appsink",
-                forceAppsink ? "fakesink(forced)" : "autoaudiosink");
+                forceAppsink ? "fakesink(forced)" : audioSink.startsWith("pulsesink") ? "pulsesink" : "autoaudiosink");
         // Never leaky before avdec — mid-GOP drops freeze / ghost the picture.
         // Cap display latency after decode; videoflip kept for orientation.
         h264Pipeline = (Pipeline) Gst.parseLaunch(
@@ -119,42 +130,35 @@ public class GstPlayer implements Playback {
         h264Src.set("block", false);
         h264Src.set("max-bytes", 2L * 1024 * 1024);
 
+        // ~2 s @ ~125 ALAC frames/s; no leaky — WiFi bursts must not drop AUs.
+        final String audioQueue = "queue max-size-buffers=0 max-size-bytes=0 max-size-time=2000000000";
         alacPipeline = (Pipeline) Gst.parseLaunch(
-                "appsrc name=alac-src ! queue max-size-buffers=8 leaky=downstream"
+                "appsrc name=alac-src ! " + audioQueue
                         + " ! avdec_alac ! audioconvert ! audioresample"
                         + " ! volume name=alac-vol ! " + audioSink);
         alacSrc = (AppSrc) alacPipeline.getElementByName("alac-src");
         alacSrc.setStreamType(AppSrc.StreamType.STREAM);
         alacSrc.setCaps(Caps.fromString("audio/x-alac,mpegversion=(int)4,channels=(int)2,rate=(int)44100,stream-format=raw,codec_data=(buffer)00000024616c616300000000000001600010280a0e0200ff00000000000000000000ac44"));
-        alacSrc.set("is-live", true);
-        alacSrc.set("format", Format.TIME);
-        alacSrc.set("emit-signals", true);
-        alacSrc.set("block", false);
+        configureAudioAppSrc(alacSrc);
 
         aacEldPipeline = (Pipeline) Gst.parseLaunch(
-                "appsrc name=aac-eld-src ! queue max-size-buffers=8 leaky=downstream"
+                "appsrc name=aac-eld-src ! " + audioQueue
                         + " ! avdec_aac ! audioconvert ! audioresample"
                         + " ! volume name=aac-eld-vol ! " + audioSink);
         aacEldSrc = (AppSrc) aacEldPipeline.getElementByName("aac-eld-src");
         aacEldSrc.setStreamType(AppSrc.StreamType.STREAM);
         // AirPlay mirror AAC-ELD ASC used by iOS senders (do not "fix" for CAF aace fixtures).
         aacEldSrc.setCaps(Caps.fromString("audio/mpeg,mpegversion=(int)4,channels=(int)2,rate=(int)44100,stream-format=raw,codec_data=(buffer)f8e85000"));
-        aacEldSrc.set("is-live", true);
-        aacEldSrc.set("format", Format.TIME);
-        aacEldSrc.set("emit-signals", true);
-        aacEldSrc.set("block", false);
+        configureAudioAppSrc(aacEldSrc);
 
         aacLcPipeline = (Pipeline) Gst.parseLaunch(
-                "appsrc name=aac-lc-src ! queue max-size-buffers=8 leaky=downstream"
+                "appsrc name=aac-lc-src ! " + audioQueue
                         + " ! aacparse ! avdec_aac ! audioconvert ! audioresample"
                         + " ! volume name=aac-lc-vol ! " + audioSink);
         aacLcSrc = (AppSrc) aacLcPipeline.getElementByName("aac-lc-src");
         aacLcSrc.setStreamType(AppSrc.StreamType.STREAM);
         aacLcSrc.setCaps(Caps.fromString("audio/mpeg,mpegversion=(int)4,stream-format=adts,channels=(int)2,rate=(int)44100"));
-        aacLcSrc.set("is-live", true);
-        aacLcSrc.set("format", Format.TIME);
-        aacLcSrc.set("emit-signals", true);
-        aacLcSrc.set("block", false);
+        configureAudioAppSrc(aacLcSrc);
 
         Element sink = h264Pipeline.getElementByName("sink");
         if (forceAppsink) {
@@ -313,6 +317,32 @@ public class GstPlayer implements Playback {
         Element vol = pipeline.getElementByName(elementName);
         if (vol != null) {
             vol.set("volume", volumeLinear);
+        }
+    }
+
+    /**
+     * Music RTP is bursty; treat appsrc as buffered (not ultra-low-latency live) so the
+     * sink keeps a real pre-roll instead of prebuf=0 underruns.
+     */
+    private static void configureAudioAppSrc(AppSrc src) {
+        src.set("is-live", false);
+        src.set("format", Format.TIME);
+        src.set("do-timestamp", true);
+        src.set("emit-signals", true);
+        src.set("block", false);
+        src.set("max-bytes", 2L * 1024 * 1024);
+    }
+
+    private static boolean pulseSinkAvailable() {
+        try {
+            Element probe = ElementFactory.make("pulsesink", "pulse-probe");
+            if (probe == null) {
+                return false;
+            }
+            probe.dispose();
+            return true;
+        } catch (Exception e) {
+            return false;
         }
     }
 

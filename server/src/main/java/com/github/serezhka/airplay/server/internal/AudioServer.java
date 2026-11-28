@@ -9,6 +9,7 @@ import com.github.serezhka.airplay.server.internal.handler.audio.AudioRtpInfo;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
+import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.socket.DatagramChannel;
 import io.netty.handler.codec.DatagramPacketDecoder;
@@ -21,6 +22,9 @@ import java.net.InetSocketAddress;
 @Slf4j
 @RequiredArgsConstructor
 public class AudioServer implements Runnable {
+
+    /** WiFi ALAC bursts overrun the default ~208 KiB UDP rcvbuf (seen as socket drops). */
+    private static final int UDP_RCVBUF_BYTES = 2 * 1024 * 1024;
 
     private final FairPlaySession airPlay;
 
@@ -99,6 +103,7 @@ public class AudioServer implements Runnable {
             bootstrap
                     .group(workerGroup)
                     .channel(NettyEventLoops.datagramChannelClass())
+                    .option(ChannelOption.SO_RCVBUF, UDP_RCVBUF_BYTES)
                     .localAddress(new InetSocketAddress(0))
                     .handler(new ChannelInitializer<DatagramChannel>() {
                         @Override
