@@ -8,9 +8,14 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Power-of-two RTP reorder window: mark gaps, accept late fills, skip only after give-up.
- * Resend pacing: first check 100 ms, then every 250 ms. Give-up is latency-aware
- * ({@code latency − 250 ms} tail margin), not a flat wall-clock.
+ * Power-of-two RTP reorder window: mark gaps, accept late fills, skip after give-up.
+ *
+ * <p>RTP resend request pacing ({@link #dueResends}: first check 100 ms, then every
+ * 250 ms; latency-aware give-up) is kept and unit-tested, but
+ * {@link #resendRequestsEnabled} is {@code false} for the live receiver. Waiting for
+ * retransmits only pays off with a multi-second playout buffer and fights Music/mirror
+ * low-latency — holes are skipped after {@link #LIVE_GIVE_UP_NS} (audible gap) instead.
+ * Flip the flag (and wire {@link AudioResendRequests} again) only for buffered experiments.
  */
 final class AudioRtpBuffer {
 
@@ -22,9 +27,17 @@ final class AudioRtpBuffer {
      * lead time before assumed playout falls below this.
      */
     static final long RESEND_TAIL_MARGIN_NS = 250_000_000L;
-    /** ~2 s lead at 44.1 kHz — typical classic AirPlay buffer until sync packets arrive. */
+    /** ~2 s lead at 44.1 kHz — classic AirPlay buffer when resend is enabled. */
     static final int DEFAULT_LATENCY_FRAMES = 88_200;
     static final int DEFAULT_SAMPLE_RATE_HZ = 44_100;
+    /** Live path: short reorder window, then drop the hole (no resend wait). */
+    static final long LIVE_GIVE_UP_NS = 40_000_000L;
+
+    /**
+     * Off by default for low-latency. Package-visible so unit tests can flip it when
+     * exercising the resend request / latency-aware give-up path.
+     */
+    static boolean resendRequestsEnabled = false;
 
     record Resend(int firstSeq, int count) {
     }
@@ -78,9 +91,13 @@ final class AudioRtpBuffer {
 
     /**
      * Age after which a missing slot is abandoned (and no further resends).
-     * {@code max(first+interval, latency − tailMargin)}.
+     * Live (resend off): {@link #LIVE_GIVE_UP_NS}.
+     * Resend on: {@code max(first+interval, latency − tailMargin)}.
      */
     long giveUpNs() {
+        if (!resendRequestsEnabled) {
+            return LIVE_GIVE_UP_NS;
+        }
         long fromLatency = latencyNs - RESEND_TAIL_MARGIN_NS;
         long minWindow = RESEND_FIRST_NS + RESEND_INTERVAL_NS;
         return Math.max(minWindow, fromLatency);

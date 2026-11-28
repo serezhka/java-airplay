@@ -7,6 +7,7 @@ import com.github.serezhka.airplay.protocol.media.AudioStreamInfo;
 import com.github.serezhka.airplay.protocol.media.VideoStreamInfo;
 import com.github.serezhka.airplay.server.AirPlayConfig;
 import com.github.serezhka.airplay.server.Playback;
+import com.github.serezhka.airplay.server.internal.handler.audio.AudioResendRequests;
 import com.github.serezhka.airplay.server.internal.handler.audio.AudioRtpInfo;
 import com.github.serezhka.airplay.server.internal.handler.session.Session;
 import com.github.serezhka.airplay.server.internal.handler.session.SessionManager;
@@ -284,9 +285,10 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                     stopForeignAudioServers(session.getId());
                     airPlayConsumer.onAudioFormat((AudioStreamInfo) mediaStreamInfo.get());
                     session.getAudioControlServer().start();
-                    session.getAudioServer().start(airPlayConsumer, session.getAudioControlServer());
-                    // ~2 s lead until sync packets can refine latency (resend give-up uses this).
-                    session.getAudioServer().setStreamLatency(88_200, 44_100);
+                    // Live low-latency: do not wire control as a resend requester
+                    // (AudioRtpBuffer.resendRequestsEnabled=false). Pass the control
+                    // server here only when experimenting with buffered resend.
+                    session.getAudioServer().start(airPlayConsumer, AudioResendRequests.NOOP);
                     bindControlSession(ctx, session.getId());
                     log.info("SESSION mode=AUDIO session={} audioPort={} controlPort={}",
                             session.getId(),

@@ -30,68 +30,109 @@ class AudioHandlerTest {
 
     @Test
     void gapRequestsResendThenEmitsAfterLateFill() {
-        List<Integer> emitted = new ArrayList<>();
-        List<AudioRtpBuffer.Resend> resends = new ArrayList<>();
-        AtomicLong clock = new AtomicLong(0L);
-        AudioHandler handler = handler(recording(emitted), (first, count) ->
-                resends.add(new AudioRtpBuffer.Resend(first, count)), clock);
+        boolean prev = AudioRtpBuffer.resendRequestsEnabled;
+        AudioRtpBuffer.resendRequestsEnabled = true;
+        try {
+            List<Integer> emitted = new ArrayList<>();
+            List<AudioRtpBuffer.Resend> resends = new ArrayList<>();
+            AtomicLong clock = new AtomicLong(0L);
+            AudioHandler handler = handler(recording(emitted), (first, count) ->
+                    resends.add(new AudioRtpBuffer.Resend(first, count)), clock);
 
-        handler.offer(packet(100));
-        handler.offer(packet(103));
-        assertEquals(List.of(100), emitted);
-        assertTrue(resends.isEmpty(), "too early for first resend check");
+            handler.offer(packet(100));
+            handler.offer(packet(103));
+            assertEquals(List.of(100), emitted);
+            assertTrue(resends.isEmpty(), "too early for first resend check");
 
-        clock.set(AudioRtpBuffer.RESEND_FIRST_NS);
-        handler.offer(packet(104));
-        assertEquals(List.of(new AudioRtpBuffer.Resend(101, 2)), resends);
+            clock.set(AudioRtpBuffer.RESEND_FIRST_NS);
+            handler.offer(packet(104));
+            assertEquals(List.of(new AudioRtpBuffer.Resend(101, 2)), resends);
 
-        // Control-port resend replies take the same offer path as data-port RTP.
-        handler.offer(packet(101));
-        handler.offer(packet(102));
-        assertEquals(List.of(100, 101, 102, 103, 104), emitted);
-        assertEquals(0, handler.missingCount());
+            // Control-port resend replies take the same offer path as data-port RTP.
+            handler.offer(packet(101));
+            handler.offer(packet(102));
+            assertEquals(List.of(100, 101, 102, 103, 104), emitted);
+            assertEquals(0, handler.missingCount());
+        } finally {
+            AudioRtpBuffer.resendRequestsEnabled = prev;
+        }
     }
 
     @Test
     void smallExpiredGapSkipsWithoutDiscontinuity() {
+        boolean prev = AudioRtpBuffer.resendRequestsEnabled;
+        AudioRtpBuffer.resendRequestsEnabled = true;
+        try {
+            List<Integer> emitted = new ArrayList<>();
+            AtomicInteger discontinuities = new AtomicInteger();
+            AtomicInteger gaps = new AtomicInteger();
+            AtomicLong clock = new AtomicLong(0L);
+            AudioHandler handler = handler(recording(emitted, discontinuities, gaps), AudioResendRequests.NOOP, clock);
+            handler.setStreamLatency(44_100, 44_100);
+
+            handler.offer(packet(100));
+            handler.offer(packet(102));
+            assertEquals(List.of(100), emitted);
+
+            clock.set(750_000_000L);
+            handler.offer(packet(103));
+
+            assertTrue(emitted.contains(102), emitted.toString());
+            assertTrue(emitted.contains(103), emitted.toString());
+            assertEquals(1, gaps.get());
+            assertEquals(0, discontinuities.get(), "single-packet hole is soft-concealed");
+        } finally {
+            AudioRtpBuffer.resendRequestsEnabled = prev;
+        }
+    }
+
+    @Test
+    void largeExpiredGapSignalsDiscontinuity() {
+        boolean prev = AudioRtpBuffer.resendRequestsEnabled;
+        AudioRtpBuffer.resendRequestsEnabled = true;
+        try {
+            List<Integer> emitted = new ArrayList<>();
+            AtomicInteger discontinuities = new AtomicInteger();
+            AtomicInteger gaps = new AtomicInteger();
+            AtomicLong clock = new AtomicLong(0L);
+            AudioHandler handler = handler(recording(emitted, discontinuities, gaps), AudioResendRequests.NOOP, clock);
+            handler.setStreamLatency(44_100, 44_100);
+
+            handler.offer(packet(100));
+            handler.offer(packet(109)); // 8 missing: 101..108
+            clock.set(750_000_000L);
+            handler.offer(packet(110));
+
+            assertEquals(1, gaps.get());
+            assertEquals(1, discontinuities.get());
+            assertTrue(emitted.contains(109), emitted.toString());
+            assertTrue(emitted.contains(110), emitted.toString());
+        } finally {
+            AudioRtpBuffer.resendRequestsEnabled = prev;
+        }
+    }
+
+    @Test
+    void livePathSkipsHoleAfterShortGiveUpWithoutResend() {
         List<Integer> emitted = new ArrayList<>();
-        AtomicInteger discontinuities = new AtomicInteger();
+        List<AudioRtpBuffer.Resend> resends = new ArrayList<>();
         AtomicInteger gaps = new AtomicInteger();
         AtomicLong clock = new AtomicLong(0L);
-        AudioHandler handler = handler(recording(emitted, discontinuities, gaps), AudioResendRequests.NOOP, clock);
-        handler.setStreamLatency(44_100, 44_100);
+        AudioHandler handler = handler(recording(emitted, new AtomicInteger(), gaps),
+                (first, count) -> resends.add(new AudioRtpBuffer.Resend(first, count)), clock);
 
         handler.offer(packet(100));
         handler.offer(packet(102));
         assertEquals(List.of(100), emitted);
+        assertTrue(resends.isEmpty());
 
-        clock.set(750_000_000L);
+        clock.set(AudioRtpBuffer.LIVE_GIVE_UP_NS);
         handler.offer(packet(103));
 
         assertTrue(emitted.contains(102), emitted.toString());
         assertTrue(emitted.contains(103), emitted.toString());
         assertEquals(1, gaps.get());
-        assertEquals(0, discontinuities.get(), "single-packet hole is soft-concealed");
-    }
-
-    @Test
-    void largeExpiredGapSignalsDiscontinuity() {
-        List<Integer> emitted = new ArrayList<>();
-        AtomicInteger discontinuities = new AtomicInteger();
-        AtomicInteger gaps = new AtomicInteger();
-        AtomicLong clock = new AtomicLong(0L);
-        AudioHandler handler = handler(recording(emitted, discontinuities, gaps), AudioResendRequests.NOOP, clock);
-        handler.setStreamLatency(44_100, 44_100);
-
-        handler.offer(packet(100));
-        handler.offer(packet(109)); // 8 missing: 101..108
-        clock.set(750_000_000L);
-        handler.offer(packet(110));
-
-        assertEquals(1, gaps.get());
-        assertEquals(1, discontinuities.get());
-        assertTrue(emitted.contains(109), emitted.toString());
-        assertTrue(emitted.contains(110), emitted.toString());
+        assertTrue(resends.isEmpty(), "live path must not request resend");
     }
 
     @Test

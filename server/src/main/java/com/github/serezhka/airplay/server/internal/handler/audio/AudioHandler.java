@@ -72,11 +72,15 @@ public class AudioHandler extends ChannelInboundHandlerAdapter {
             long now = clock.getAsLong();
             buffer.offer(packet, now);
             drain(now);
-            for (AudioRtpBuffer.Resend gap : buffer.dueResends(now)) {
-                try {
-                    resend.requestResend(gap.firstSeq(), gap.count());
-                } catch (Exception e) {
-                    log.debug("Audio resend request failed: {}", e.toString());
+            // Resend requests need multi-second buffering; live path leaves this off
+            // (see AudioRtpBuffer.resendRequestsEnabled) and skips holes instead.
+            if (AudioRtpBuffer.resendRequestsEnabled) {
+                for (AudioRtpBuffer.Resend gap : buffer.dueResends(now)) {
+                    try {
+                        resend.requestResend(gap.firstSeq(), gap.count());
+                    } catch (Exception e) {
+                        log.debug("Audio resend request failed: {}", e.toString());
+                    }
                 }
             }
         }
