@@ -174,7 +174,9 @@ class MseMediaServerTest {
             assertTrue(server.lastAudioConfigureJson().contains("configureAlac"));
             assertTrue(server.lastAudioConfigureJson().contains("audioWsUrl"));
 
-            AtomicReference<String> lastCmd = new AtomicReference<>();
+            // Resync pushes configureAlac then setVolume — do not assert on "last" text,
+            // or a trailing volume frame races the assertion on CI.
+            AtomicReference<String> configureCmd = new AtomicReference<>();
             CompletableFuture<Void> gotConfigure = new CompletableFuture<>();
             WebSocket control = HttpClient.newHttpClient().newWebSocketBuilder()
                     .connectTimeout(Duration.ofSeconds(5))
@@ -189,8 +191,8 @@ class MseMediaServerTest {
                                 @Override
                                 public CompletionStage<?> onText(WebSocket webSocket, CharSequence data, boolean last) {
                                     String msg = data.toString();
-                                    lastCmd.set(msg);
                                     if (msg.contains("configureAlac")) {
+                                        configureCmd.set(msg);
                                         gotConfigure.complete(null);
                                     }
                                     webSocket.request(1);
@@ -200,7 +202,9 @@ class MseMediaServerTest {
                     .get(5, TimeUnit.SECONDS);
 
             gotConfigure.get(5, TimeUnit.SECONDS);
-            assertTrue(lastCmd.get().contains("configureAlac"), lastCmd.get());
+            assertNotNull(configureCmd.get());
+            assertTrue(configureCmd.get().contains("configureAlac"), configureCmd.get());
+            assertTrue(configureCmd.get().contains("audioWsUrl"), configureCmd.get());
             control.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(2, TimeUnit.SECONDS);
         }
     }
