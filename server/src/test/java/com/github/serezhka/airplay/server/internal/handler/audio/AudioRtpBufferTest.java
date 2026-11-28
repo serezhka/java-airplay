@@ -44,21 +44,27 @@ class AudioRtpBufferTest {
 
     @Test
     void resendDueAfterFirstCheckThenInterval() {
-        AudioRtpBuffer buf = new AudioRtpBuffer();
-        buf.offer(packet(1), 0L);
-        buf.pollReady();
-        buf.offer(packet(4), 0L);
+        boolean prev = AudioRtpBuffer.resendRequestsEnabled;
+        AudioRtpBuffer.resendRequestsEnabled = true;
+        try {
+            AudioRtpBuffer buf = new AudioRtpBuffer();
+            buf.offer(packet(1), 0L);
+            buf.pollReady();
+            buf.offer(packet(4), 0L);
 
-        assertTrue(buf.dueResends(AudioRtpBuffer.RESEND_FIRST_NS - 1).isEmpty());
+            assertTrue(buf.dueResends(AudioRtpBuffer.RESEND_FIRST_NS - 1).isEmpty());
 
-        List<AudioRtpBuffer.Resend> first = buf.dueResends(AudioRtpBuffer.RESEND_FIRST_NS);
-        assertEquals(List.of(new AudioRtpBuffer.Resend(2, 2)), first);
+            List<AudioRtpBuffer.Resend> first = buf.dueResends(AudioRtpBuffer.RESEND_FIRST_NS);
+            assertEquals(List.of(new AudioRtpBuffer.Resend(2, 2)), first);
 
-        assertTrue(buf.dueResends(AudioRtpBuffer.RESEND_FIRST_NS + 1).isEmpty());
+            assertTrue(buf.dueResends(AudioRtpBuffer.RESEND_FIRST_NS + 1).isEmpty());
 
-        List<AudioRtpBuffer.Resend> retry = buf.dueResends(
-                AudioRtpBuffer.RESEND_FIRST_NS + AudioRtpBuffer.RESEND_INTERVAL_NS);
-        assertEquals(List.of(new AudioRtpBuffer.Resend(2, 2)), retry);
+            List<AudioRtpBuffer.Resend> retry = buf.dueResends(
+                    AudioRtpBuffer.RESEND_FIRST_NS + AudioRtpBuffer.RESEND_INTERVAL_NS);
+            assertEquals(List.of(new AudioRtpBuffer.Resend(2, 2)), retry);
+        } finally {
+            AudioRtpBuffer.resendRequestsEnabled = prev;
+        }
     }
 
     @Test
