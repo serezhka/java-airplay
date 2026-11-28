@@ -7,6 +7,8 @@ import com.github.serezhka.airplay.protocol.media.AudioStreamInfo;
 import com.github.serezhka.airplay.protocol.media.VideoStreamInfo;
 import com.github.serezhka.airplay.server.AirPlayConfig;
 import com.github.serezhka.airplay.server.Playback;
+import com.github.serezhka.airplay.server.internal.handler.audio.AudioResendRequests;
+import com.github.serezhka.airplay.server.internal.handler.audio.AudioRtpInfo;
 import com.github.serezhka.airplay.server.internal.handler.session.Session;
 import com.github.serezhka.airplay.server.internal.handler.session.SessionManager;
 import com.github.serezhka.airplay.server.internal.handler.util.AirPlayVolume;
@@ -19,15 +21,38 @@ import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.socket.ServerSocketChannel;
 import io.netty.handler.codec.http.*;
 import io.netty.handler.codec.rtsp.*;
+import io.netty.handler.timeout.IdleStateEvent;
+import io.netty.handler.timeout.IdleStateHandler;
+import io.netty.util.AttributeKey;
 import io.netty.util.ReferenceCountUtil;
+import io.netty.util.concurrent.GlobalEventExecutor;
 import lombok.extern.slf4j.Slf4j;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 @Slf4j
 public class ControlHandler extends ChannelInboundHandlerAdapter {
+
+    /**
+     * RTSP control channel that completed AUDIO/VIDEO SETUP. Drop cleanup + idle
+     * watchdog only apply to these (not reverse-event / playlist HTTP).
+     */
+    private static final AttributeKey<String> BOUND_SESSION_ID =
+            AttributeKey.valueOf("airplay.boundSessionId");
+
+    /**
+     * Close half-open phone TCP when SETUP finished but media is gone and RTSP is silent.
+     * Must not fire during active mirror/Music: control can be quiet for minutes while
+     * UDP video/audio continues.
+     */
+    private static final String SESSION_IDLE_HANDLER = "airplaySessionIdle";
+    private static final int SESSION_IDLE_SECONDS = 120;
+    /** After audio-only TEARDOWN, end presentation unless SETUP returns quickly (next track). */
+    private static final int AUDIO_ONLY_END_DELAY_SECONDS = 3;
 
     private final SessionManager sessionManager;
     private final HlsFcupService hlsFcupService;
@@ -36,6 +61,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     private final ControlResponses responses;
     private final AirPlayConfig airPlayConfig;
     private final Playback airPlayConsumer;
+    private final AtomicReference<ScheduledFuture<?>> audioOnlyEndFuture = new AtomicReference<>();
 
     public ControlHandler(SessionManager sessionManager,
                           HlsFcupService hlsFcupService,
@@ -66,7 +92,41 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             }
             reverse.entrySet().removeIf(entry -> entry.getValue() == ctx);
         }
+        cleanupBoundControlChannel(ctx, "control channel inactive");
         super.channelInactive(ctx);
+    }
+
+    @Override
+    public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
+        if (evt instanceof IdleStateEvent && ctx.channel().hasAttr(BOUND_SESSION_ID)) {
+            String sessionId = ctx.channel().attr(BOUND_SESSION_ID).get();
+            Session session = sessionManager.findSession(sessionId);
+            if (session != null && sessionHasLiveMedia(session)) {
+                log.debug("RTSP idle ignored — media still live session={}", sessionId);
+                return;
+            }
+            log.info("RTSP session idle {}s — closing half-open control {} session={}",
+                    SESSION_IDLE_SECONDS, ctx.channel().remoteAddress(), sessionId);
+            ctx.close();
+            return;
+        }
+        super.userEventTriggered(ctx, evt);
+    }
+
+    private static boolean sessionHasLiveMedia(Session session) {
+        try {
+            if (session.getVideoServer() != null && session.getVideoServer().isRunning()) {
+                return true;
+            }
+        } catch (Exception ignored) {
+        }
+        try {
+            if (session.getAudioServer() != null && session.getAudioServer().isRunning()) {
+                return true;
+            }
+        } catch (Exception ignored) {
+        }
+        return session.getHlsPlaylistState() != null;
     }
 
     private byte[] pendingRequestBody = new byte[0];
@@ -220,9 +280,16 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         if (mediaStreamInfo.isPresent()) {
             switch (mediaStreamInfo.get().getStreamType()) {
                 case AUDIO -> {
+                    cancelAudioOnlyPresentationEnd();
+                    // Music→Mirror (or a second phone) must not leave foreign UDP audio ports open.
+                    stopForeignAudioServers(session.getId());
                     airPlayConsumer.onAudioFormat((AudioStreamInfo) mediaStreamInfo.get());
-                    session.getAudioServer().start(airPlayConsumer);
                     session.getAudioControlServer().start();
+                    // Live low-latency: do not wire control as a resend requester
+                    // (AudioRtpBuffer.resendRequestsEnabled=false). Pass the control
+                    // server here only when experimenting with buffered resend.
+                    session.getAudioServer().start(airPlayConsumer, AudioResendRequests.NOOP);
+                    bindControlSession(ctx, session.getId());
                     log.info("SESSION mode=AUDIO session={} audioPort={} controlPort={}",
                             session.getId(),
                             session.getAudioServer().getPort(),
@@ -232,7 +299,9 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                     response.content().writeBytes(setup);
                 }
                 case VIDEO -> {
+                    cancelAudioOnlyPresentationEnd();
                     sessionManager.markScreenMirrorSeen();
+                    stopForeignAudioServers(session.getId());
                     airPlayConsumer.onVideoFormat((VideoStreamInfo) mediaStreamInfo.get());
                     // MSE: wait for Chromium /control before advertising the video port so the
                     // phone does not push into a black window. Pairing is already done.
@@ -242,6 +311,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                         Thread.currentThread().interrupt();
                     }
                     session.getVideoServer().start(airPlayConsumer);
+                    bindControlSession(ctx, session.getId());
                     log.info("SESSION mode=MIRROR session={} videoPort={}",
                             session.getId(), session.getVideoServer().getPort());
                     var setup = PropertyListUtil.prepareSetupVideoResponse(session.getVideoServer().getPort(),
@@ -251,6 +321,14 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
             }
         }
         responses.sendResponse(ctx, request, response);
+    }
+
+    private void bindControlSession(ChannelHandlerContext ctx, String sessionId) {
+        ctx.channel().attr(BOUND_SESSION_ID).set(sessionId);
+        if (ctx.pipeline().get(SESSION_IDLE_HANDLER) == null) {
+            ctx.pipeline().addFirst(SESSION_IDLE_HANDLER,
+                    new IdleStateHandler(0, 0, SESSION_IDLE_SECONDS, TimeUnit.SECONDS));
+        }
     }
 
     private void handleRtspFeedback(ChannelHandlerContext ctx, FullHttpRequest request) {
@@ -287,6 +365,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     }
 
     private void handleRtspRecord(ChannelHandlerContext ctx, FullHttpRequest request) {
+        applyAudioRtpInfoFlush(request, "RTSP RECORD");
         var response = responses.createRtspResponse(request);
         response.headers().add("Audio-Latency", "11025");
         response.headers().add("Audio-Jack-Status", "connected; type=analog");
@@ -316,8 +395,23 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
     }
 
     private void handleRtspFlush(ChannelHandlerContext ctx, FullHttpRequest request) {
+        applyAudioRtpInfoFlush(request, "RTSP FLUSH");
         var response = responses.createRtspResponse(request);
         responses.sendResponse(ctx, request, response);
+    }
+
+    private void applyAudioRtpInfoFlush(FullHttpRequest request, String reason) {
+        try {
+            Session session = resolveSession(request);
+            if (session.getAudioServer() == null || !session.getAudioServer().isRunning()) {
+                return;
+            }
+            AudioRtpInfo info = AudioRtpInfo.parse(request.headers().get("RTP-Info"));
+            session.getAudioServer().flushReorder(info);
+            log.debug("{}: audio RTP flush {} session={}", reason, info, session.getId());
+        } catch (Exception e) {
+            log.debug("{} audio flush ignored: {}", reason, e.toString());
+        }
     }
 
     private void handleRtspTeardown(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
@@ -326,9 +420,11 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
         if (mediaStreamInfo.isPresent()) {
             switch (mediaStreamInfo.get().getStreamType()) {
                 case AUDIO -> {
+                    // Music track boundaries often TEARDOWN+SETUP quickly — keep player briefly.
                     airPlayConsumer.onAudioSrcDisconnect();
                     session.getAudioServer().stop();
                     session.getAudioControlServer().stop();
+                    scheduleAudioOnlyPresentationEnd(session.getId());
                 }
                 case VIDEO -> {
                     airPlayConsumer.onVideoSrcDisconnect();
@@ -337,6 +433,7 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                             PresentationEndPolicy.afterVideoTeardown(anySessionHasHls()),
                             "RTSP TEARDOWN (video)",
                             session.getId());
+                    clearBoundIfSessionIdle(ctx, session);
                 }
             }
         } else {
@@ -354,9 +451,68 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                     PresentationEndPolicy.afterFullTeardown(anySessionHasHls()),
                     "RTSP TEARDOWN (full)",
                     session.getId());
+            ctx.channel().attr(BOUND_SESSION_ID).set(null);
+            sessionManager.removeSession(session.getId());
         }
         var response = responses.createRtspResponse(request);
         responses.sendResponse(ctx, request, response);
+    }
+
+    private void clearBoundIfSessionIdle(ChannelHandlerContext ctx, Session session) {
+        boolean audio = false;
+        boolean video = false;
+        try {
+            audio = session.getAudioServer() != null && session.getAudioServer().isRunning();
+        } catch (Exception ignored) {
+        }
+        try {
+            video = session.getVideoServer() != null && session.getVideoServer().isRunning();
+        } catch (Exception ignored) {
+        }
+        if (!audio && !video && session.getHlsPlaylistState() == null) {
+            ctx.channel().attr(BOUND_SESSION_ID).set(null);
+        }
+    }
+
+    private void cancelAudioOnlyPresentationEnd() {
+        ScheduledFuture<?> future = audioOnlyEndFuture.getAndSet(null);
+        if (future != null) {
+            future.cancel(false);
+        }
+    }
+
+    /**
+     * Phone Music often TEARDOWN+SETUP within a second. If nothing returns and there is
+     * no mirror/HLS, close the player so Chromium does not hang after disconnect.
+     */
+    private void scheduleAudioOnlyPresentationEnd(String sessionId) {
+        cancelAudioOnlyPresentationEnd();
+        if (anyVideoServerRunning() || anySessionHasHls()) {
+            return;
+        }
+        ScheduledFuture<?> future = GlobalEventExecutor.INSTANCE.schedule(() -> {
+            audioOnlyEndFuture.set(null);
+            if (anyVideoServerRunning() || anySessionHasHls() || anyAudioServerRunning()) {
+                return;
+            }
+            applyPresentationEnd(
+                    PresentationEndPolicy.Decision.END,
+                    "audio-only idle after TEARDOWN",
+                    sessionId);
+        }, AUDIO_ONLY_END_DELAY_SECONDS, TimeUnit.SECONDS);
+        audioOnlyEndFuture.set(future);
+    }
+
+    private boolean anyAudioServerRunning() {
+        for (Session s : sessionManager.allSessions()) {
+            try {
+                if (s.getAudioServer() != null && s.getAudioServer().isRunning()) {
+                    return true;
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return false;
     }
 
     private void handleRtspAudioMode(ChannelHandlerContext ctx, FullHttpRequest request) {
@@ -722,5 +878,99 @@ public class ControlHandler extends ChannelInboundHandlerAdapter {
                 log.debug("Mirror disconnect after {} ignored: {}", reason, e.toString());
             }
         }
+    }
+
+    /**
+     * Music and mirror use different RTSP session ids; without this, old Music UDP ports
+     * stay bound and ALAC keeps feeding the player under AAC-ELD.
+     */
+    private void stopForeignAudioServers(String keepSessionId) {
+        boolean any = false;
+        for (Session s : sessionManager.allSessions()) {
+            if (keepSessionId != null && keepSessionId.equals(s.getId())) {
+                continue;
+            }
+            try {
+                if (s.getAudioServer() != null && s.getAudioServer().isRunning()) {
+                    s.getAudioServer().stop();
+                    any = true;
+                    if (s.getAudioControlServer() != null) {
+                        s.getAudioControlServer().stop();
+                    }
+                }
+            } catch (Exception e) {
+                log.debug("Foreign audio stop ignored: {}", e.toString());
+            }
+        }
+        if (any) {
+            log.info("Stopped foreign audio servers (keep session={})", keepSessionId);
+            try {
+                airPlayConsumer.onAudioSrcDisconnect();
+            } catch (Exception e) {
+                log.debug("Foreign audio disconnect ignored: {}", e.toString());
+            }
+        }
+    }
+
+    /**
+     * Phone dropped the RTSP TCP that had completed SETUP (force-quit / Wi-Fi) without
+     * TEARDOWN — stop that session's A/V and free the receiver for reconnect.
+     */
+    private void cleanupBoundControlChannel(ChannelHandlerContext ctx, String reason) {
+        String sessionId = ctx.channel().attr(BOUND_SESSION_ID).getAndSet(null);
+        if (sessionId == null) {
+            return;
+        }
+        Session session = sessionManager.findSession(sessionId);
+        if (session == null) {
+            return;
+        }
+        log.info("{}: cleaning session {}", reason, sessionId);
+        boolean hadAudio = false;
+        boolean hadVideo = false;
+        try {
+            if (session.getAudioServer() != null && session.getAudioServer().isRunning()) {
+                hadAudio = true;
+                session.getAudioServer().stop();
+                session.getAudioControlServer().stop();
+            }
+        } catch (Exception e) {
+            log.debug("Audio stop on {}: {}", reason, e.toString());
+        }
+        try {
+            if (session.getVideoServer() != null && session.getVideoServer().isRunning()) {
+                hadVideo = true;
+                session.getVideoServer().stop();
+            }
+        } catch (Exception e) {
+            log.debug("Video stop on {}: {}", reason, e.toString());
+        }
+        if (session.getHlsPlaylistState() != null) {
+            try {
+                hlsSession.stopHlsPlayback(session);
+            } catch (Exception e) {
+                log.debug("HLS stop on {}: {}", reason, e.toString());
+            }
+        }
+        if (hadAudio) {
+            try {
+                airPlayConsumer.onAudioSrcDisconnect();
+            } catch (Exception e) {
+                log.debug("Audio disconnect on {}: {}", reason, e.toString());
+            }
+        }
+        if (hadVideo) {
+            try {
+                airPlayConsumer.onVideoSrcDisconnect();
+            } catch (Exception e) {
+                log.debug("Video disconnect on {}: {}", reason, e.toString());
+            }
+        }
+        sessionManager.removeSession(sessionId);
+        applyPresentationEnd(
+                PresentationEndPolicy.afterControlChannelDrop(
+                        anySessionHasHls(), anyVideoServerRunning()),
+                reason,
+                sessionId);
     }
 }

@@ -54,6 +54,25 @@ public class SessionManager {
         }
     }
 
+    /** Existing session only — does not create. */
+    public Session findSession(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return null;
+        }
+        synchronized (sessions) {
+            return sessions.get(sessionId);
+        }
+    }
+
+    public void removeSession(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return;
+        }
+        synchronized (sessions) {
+            sessions.remove(sessionId);
+        }
+    }
+
     public List<Session> allSessions() {
         synchronized (sessions) {
             return new ArrayList<>(sessions.values());

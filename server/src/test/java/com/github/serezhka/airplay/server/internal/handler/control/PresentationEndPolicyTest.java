@@ -47,4 +47,9 @@ class PresentationEndPolicyTest {
     void fullTeardownWhileOtherSessionHasHlsKeepsPresentation() {
         assertEquals(KEEP, PresentationEndPolicy.afterFullTeardown(true));
     }
+
+    @Test
+    void controlDropWithoutOtherMediaEndsPresentation() {
+        assertEquals(END, PresentationEndPolicy.afterControlChannelDrop(false, false));
+    }
 }

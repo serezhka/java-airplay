@@ -47,4 +47,15 @@ final class PresentationEndPolicy {
     static Decision afterFullTeardown(boolean anyHlsLeft) {
         return anyHlsLeft ? Decision.KEEP : Decision.END;
     }
+
+    /**
+     * Control TCP dropped without TEARDOWN (phone force-quit / Wi-Fi blip). End when
+     * nothing else is presenting; keep if another session still has HLS/video.
+     */
+    static Decision afterControlChannelDrop(boolean anyHlsLeft, boolean anyVideoRunning) {
+        if (anyHlsLeft || anyVideoRunning) {
+            return Decision.KEEP;
+        }
+        return Decision.END;
+    }
 }

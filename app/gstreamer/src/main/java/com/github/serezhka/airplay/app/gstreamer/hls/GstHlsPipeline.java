@@ -152,6 +152,14 @@ public final class GstHlsPipeline {
         pipeline.set("uri", uri);
         pipeline.set("volume", volumeLinear);
         pipeline.set("video-sink", videoSink);
+        if (headless) {
+            // Mirror already forces fakesink audio under airplay.gst.appsink; HLS must too —
+            // autoaudiosink/pulsesink on headless runners can stall preroll (POSITION stays 0).
+            Element audioSink = ElementFactory.make("fakesink", "hls-audio-sink");
+            audioSink.set("sync", true);
+            audioSink.set("async", false);
+            pipeline.set("audio-sink", audioSink);
+        }
         GstHlsAutoplug.install(pipeline);
         watchFirstPicture(videoSink);
         log.info("HLS pipeline using playbin3 headless={}", headless);
@@ -411,6 +419,7 @@ public final class GstHlsPipeline {
             double dur = durationSeconds();
             return dur > 0 ? dur : positionBaseSeconds;
         }
+        maybeTrustWallClockFallback();
         double pos = scrubClock.report(rawPositionSeconds(), wallClockSeconds());
         checkPositionAtEnd(pos);
         return ended ? durationSeconds() : pos;
@@ -447,6 +456,7 @@ public final class GstHlsPipeline {
         if (ended || uri == null || paused) {
             return;
         }
+        maybeTrustWallClockFallback();
         checkPositionAtEnd(rawPositionSeconds());
     }
 
@@ -482,11 +492,10 @@ public final class GstHlsPipeline {
         double gst = querySeconds(false);
         // Ignore GST positions past the VOD length — hlsdemux2 sometimes uses a huge media clock.
         if (gst > 0 && (playlist <= 0 || gst <= playlist + 1.0)) {
-            mediaClockTrusted = true;
+            trustMediaClock("gst-position");
             return gst;
         }
-        // Until the demux reports a real position, do not invent progress from wall-clock —
-        // that falsely advances playback-info and can trip EOS before any picture.
+        // Until trusted, do not invent progress from wall-clock (false EOS before picture).
         if (!mediaClockTrusted) {
             return 0;
         }
@@ -496,6 +505,36 @@ public final class GstHlsPipeline {
         double elapsed = (System.nanoTime() - positionAnchorNanos) / 1_000_000_000.0;
         double wall = Math.max(0, positionBaseSeconds + elapsed);
         return playlist > 0 ? Math.min(wall, playlist) : wall;
+    }
+
+    /**
+     * playbin3 on some GStreamer builds never exposes a usable POSITION (and headless
+     * fakesink may skip BUFFER probes). After first picture — or 1s PLAYING with a known
+     * VOD length — wall clock is a safe playback-info source.
+     */
+    private void maybeTrustWallClockFallback() {
+        if (mediaClockTrusted || uri == null || paused || ended) {
+            return;
+        }
+        if (presented.get()) {
+            trustMediaClock("first-picture");
+            return;
+        }
+        if (playlistDurationSeconds > 0 && startedAtNanos != 0
+                && System.nanoTime() - startedAtNanos >= 1_000_000_000L) {
+            trustMediaClock("playing-without-gst-position");
+        }
+    }
+
+    private void trustMediaClock(String reason) {
+        if (mediaClockTrusted) {
+            return;
+        }
+        mediaClockTrusted = true;
+        if (positionAnchorNanos == 0) {
+            positionAnchorNanos = System.nanoTime();
+        }
+        log.debug("HLS media clock trusted ({})", reason);
     }
 
     private void markEndedAndRefresh(String reason) {
@@ -558,6 +597,7 @@ public final class GstHlsPipeline {
         if (uri == null || !presented.compareAndSet(false, true)) {
             return;
         }
+        trustMediaClock("first-picture");
         log.info("HLS first picture");
         try {
             onPresented.run();

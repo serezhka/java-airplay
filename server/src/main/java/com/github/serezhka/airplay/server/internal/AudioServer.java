@@ -4,9 +4,12 @@ import com.github.serezhka.airplay.protocol.FairPlaySession;
 import com.github.serezhka.airplay.server.Playback;
 import com.github.serezhka.airplay.server.internal.decoder.AudioDecoder;
 import com.github.serezhka.airplay.server.internal.handler.audio.AudioHandler;
+import com.github.serezhka.airplay.server.internal.handler.audio.AudioResendRequests;
+import com.github.serezhka.airplay.server.internal.handler.audio.AudioRtpInfo;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
+import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.socket.DatagramChannel;
 import io.netty.handler.codec.DatagramPacketDecoder;
@@ -20,17 +23,27 @@ import java.net.InetSocketAddress;
 @RequiredArgsConstructor
 public class AudioServer implements Runnable {
 
+    /** WiFi ALAC bursts overrun the default ~208 KiB UDP rcvbuf (seen as socket drops). */
+    private static final int UDP_RCVBUF_BYTES = 2 * 1024 * 1024;
+
     private final FairPlaySession airPlay;
 
     private Thread thread;
     private Playback airPlayConsumer;
+    private AudioResendRequests resendRequests = AudioResendRequests.NOOP;
     private volatile Channel serverChannel;
+    private volatile AudioHandler audioHandler;
 
     @Getter
     private int port;
 
     public void start(Playback airPlayConsumer) throws InterruptedException {
+        start(airPlayConsumer, AudioResendRequests.NOOP);
+    }
+
+    public void start(Playback airPlayConsumer, AudioResendRequests resendRequests) throws InterruptedException {
         this.airPlayConsumer = airPlayConsumer;
+        this.resendRequests = resendRequests != null ? resendRequests : AudioResendRequests.NOOP;
         thread = new Thread(this);
         thread.start();
         synchronized (this) {
@@ -39,15 +52,44 @@ public class AudioServer implements Runnable {
     }
 
     public void stop() {
+        AudioResendRequests resend = resendRequests;
+        if (resend instanceof AudioControlServer control) {
+            control.setRetransmitSink(null);
+        }
         Channel ch = serverChannel;
         if (ch != null) {
             ch.close();
             serverChannel = null;
         }
+        audioHandler = null;
         if (thread != null) {
             thread.interrupt();
             thread = null;
             airPlayConsumer = null;
+            resendRequests = AudioResendRequests.NOOP;
+        }
+    }
+
+    public boolean isRunning() {
+        Channel ch = serverChannel;
+        return ch != null && ch.isActive();
+    }
+
+    public void resetReorder() {
+        flushReorder(AudioRtpInfo.empty());
+    }
+
+    public void flushReorder(AudioRtpInfo info) {
+        AudioHandler handler = audioHandler;
+        if (handler != null) {
+            handler.flush(info != null ? info : AudioRtpInfo.empty());
+        }
+    }
+
+    public void setStreamLatency(int frames, int sampleRateHz) {
+        AudioHandler handler = audioHandler;
+        if (handler != null) {
+            handler.setStreamLatency(frames, sampleRateHz);
         }
     }
 
@@ -55,17 +97,24 @@ public class AudioServer implements Runnable {
     public void run() {
         var bootstrap = new Bootstrap();
         EventLoopGroup workerGroup = NettyEventLoops.sharedWorker();
+        AudioResendRequests resend = this.resendRequests;
 
         try {
             bootstrap
                     .group(workerGroup)
                     .channel(NettyEventLoops.datagramChannelClass())
+                    .option(ChannelOption.SO_RCVBUF, UDP_RCVBUF_BYTES)
                     .localAddress(new InetSocketAddress(0))
                     .handler(new ChannelInitializer<DatagramChannel>() {
                         @Override
                         public void initChannel(final DatagramChannel ch) {
+                            AudioHandler handler = new AudioHandler(airPlay, airPlayConsumer, resend);
+                            audioHandler = handler;
+                            if (resend instanceof AudioControlServer control) {
+                                control.setRetransmitSink(handler::offer);
+                            }
                             ch.pipeline().addLast("audioDecoder", new DatagramPacketDecoder(new AudioDecoder()));
-                            ch.pipeline().addLast("audioHandler", new AudioHandler(airPlay, airPlayConsumer));
+                            ch.pipeline().addLast("audioHandler", handler);
                         }
                     });
             var channelFuture = bootstrap.bind().sync();

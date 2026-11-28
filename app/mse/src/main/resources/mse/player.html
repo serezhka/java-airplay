@@ -366,8 +366,10 @@
       closeFdk();
       closeAlac();
       audioCodec = 'none';
+      connectAudio(null);
       return;
     }
+    if (msg.audioWsUrl) connectAudio(msg.audioWsUrl);
     audioSampleRate = Number(msg.sampleRate) || 44100;
     audioChannels = Number(msg.channels) || 2;
     var asc = hexToBytes(msg.ascHex || '');
@@ -384,6 +386,7 @@
   function configureAlac(msg) {
     closeFdk();
     closeAlac();
+    if (msg.audioWsUrl) connectAudio(msg.audioWsUrl);
     audioSampleRate = Number(msg.sampleRate) || 44100;
     audioChannels = Number(msg.channels) || 2;
     var cookie = hexToBytes(msg.cookieHex || '');
